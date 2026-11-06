@@ -27,11 +27,11 @@ Run the runtime commands from a checkout with dependencies installed and on a co
 
 | Layer | Tech |
 |-------|------|
-| Shell | Electron 39 via electron-vite 5 |
+| Shell | Electron 45 via electron-vite 6 (Vite 8, Vitest 5, TypeScript 6) |
 | UI | React 19, Tailwind CSS v4 (via @tailwindcss/vite), Lucide icons |
 | State | Zustand 5 (ephemeral UI state), TanStack Query 5 (DB-backed data) |
 | DB | better-sqlite3 + Drizzle ORM (auto-migrating on startup) |
-| LLM | @anthropic-ai/sdk, openai, @google/generative-ai |
+| LLM | @anthropic-ai/sdk, openai, @google/genai |
 | MCP | @modelcontextprotocol/sdk (stdio + SSE + streamable-http, OAuth DCR) |
 | IDs | nanoid |
 | Markdown | react-markdown + remark-gfm + rehype-highlight; unified + remark-parse for the nested code fence repair |
@@ -76,7 +76,7 @@ src/
 
 7. **MCP OAuth callback uses localhost**: Temporary HTTP server on `127.0.0.1` with random port; shuts down after callback or 2-minute timeout. Redirect URI changes each auth flow — DCR handles this
 
-8. **`refetchOnWindowFocus` is inert for app switching**: TanStack Query's `focusManager` (`@tanstack/query-core@5.99.0`) registers exactly one listener — `visibilitychange`. It fires when the window is hidden, occluded, minimized or moved to another Space, and **not** when another application takes the foreground over a still-visible Electron window. Driven through the built app, a focus-refetching query was unchanged across `blur`/`focus`, `hide`/`show` and `minimize`/`restore`, with `document.visibilityState` never leaving `"visible"`. So a query whose answer changes because the user went off to *another app* — the Claude login probe is the live example — needs an explicit trigger: an interval, gated on the state that needs one, rather than the option that looks like it covers this. Keep `refetchOnWindowFocus: 'always'` alongside it for the events `visibilitychange` really does cover (`'always'`, not `true`, which defers to `staleTime` and would hold the stale answer). See [The Claude Engine (tech)](../../agents/local_agents/claude_engine_tech.md#useclaudeauth-uselocaltoolsts-and-why-it-polls)
+8. **`refetchOnWindowFocus` is inert for app switching**: TanStack Query's `focusManager` (`@tanstack/query-core@5.106.1`) registers exactly one listener — `visibilitychange`. It fires when the window is hidden, occluded, minimized or moved to another Space, and **not** when another application takes the foreground over a still-visible Electron window. Driven through the built app, a focus-refetching query was unchanged across `blur`/`focus`, `hide`/`show` and `minimize`/`restore`, with `document.visibilityState` never leaving `"visible"`. So a query whose answer changes because the user went off to *another app* — the Claude login probe is the live example — needs an explicit trigger: an interval, gated on the state that needs one, rather than the option that looks like it covers this. Keep `refetchOnWindowFocus: 'always'` alongside it for the events `visibilitychange` really does cover (`'always'`, not `true`, which defers to `staleTime` and would hold the stale answer). See [The Claude Engine (tech)](../../agents/local_agents/claude_engine_tech.md#useclaudeauth-uselocaltoolsts-and-why-it-polls)
 
 9. **Mutations run with `networkMode: 'always'`**: the `QueryClient` in `src/renderer/src/App.tsx` sets it as the default for every mutation. Each one is an IPC call to main, which does its own networking, but TanStack's default `'online'` mode pauses a mutation *before it runs* while the browser reports offline — so creating a local agent folder, which needs no network at all, sat on "Creating…" until the connection came back. A per-mutation `networkMode` would bring that back for its call. Queries keep the default mode
 

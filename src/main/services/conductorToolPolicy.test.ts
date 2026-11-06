@@ -53,7 +53,7 @@ describe('the workspace tool policy', () => {
   })
   it('drops the Antigravity conductor allowlist and keeps the sealed-folder denylist', () => {
     const original = { ...plan(), session: { mcpServers: [], meta: { agy: { enabledTools: ['view_file'], disabledTools: ['run_command'] } } } }
-    expect(applyConductorToolPolicy(original, 'antigravity', 'workspace').session.meta).toEqual({ agy: { disabledTools: ['schedule', 'start_subagent'] } })
+    expect(applyConductorToolPolicy(original, 'antigravity', 'workspace').session.meta).toEqual({ agy: { disabledTools: ['invoke_subagent', 'schedule', 'start_subagent'] } })
   })
 })
 

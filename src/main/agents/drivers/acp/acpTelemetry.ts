@@ -444,9 +444,9 @@ export function mainModel(rows: Record<string, TokenTally>, selected?: string): 
  * `quota.token_count` — on a resumed session's first turn too, whose rows
  * are that turn's only (observed 2026-09-30). Codex: `usage`, falling back to
  * `quota.token_count`; both are the whole prompt's (codex-acp 2.x), scope
- * `turn`. Antigravity: the same fields, read as the last request's.
- * OpenCode: `usage`, the whole turn's (scope `turn`); it sends no `_meta.quota`,
- * so the turn is the selected model's (`model` and its one `byModel` row).
+ * `turn`. OpenCode and Antigravity: `usage`, the whole turn's (scope `turn`);
+ * neither sends `_meta.quota`, so the turn is the selected model's (`model` and
+ * its one `byModel` row).
  */
 export function parsePromptTelemetry(
   response: unknown,
@@ -469,22 +469,23 @@ export function parsePromptTelemetry(
   const usage = tallyOfUsage(r.usage)
   const total = tallyOfQuota(quota?.token_count)
   const model = mainModel(byModel, selectedModel)
-  // Antigravity answers a prompt with its stop reason alone (no `usage`, no
-  // `_meta.quota`, observed on 1.3.0): no tokens, so no turn telemetry — its
-  // context arrives through `usage_update {used, size}` instead. Read like
-  // Codex's should a later server add `usage`: the last request's.
+  // Antigravity 1.4.5 answers with `usage`, the sum over the turn's model
+  // calls (`antigravity.telemetry.usage-update`); 1.3.0 sent its stop reason
+  // alone, which yields no turn telemetry. Its context arrives through
+  // `usage_update {used, size}` either way.
   const tokens = engine === 'claude' ? summed ?? usage ?? total : usage ?? total ?? summed
   if (!tokens) return null
-  // OpenCode names no model in its answer (no `_meta.quota`, observed on
-  // 2.0.27 against OpenAI): the turn ran on the model Cinna selected.
-  if (engine === 'opencode' && !model && selectedModel) {
+  // OpenCode and Antigravity name no model in their answer (no `_meta.quota`,
+  // observed on OpenCode 2.0.27 against OpenAI and Antigravity 1.4.5): the
+  // turn ran on the model Cinna selected.
+  if ((engine === 'opencode' || engine === 'antigravity') && !model && selectedModel) {
     return { model: selectedModel, tokens, byModel: { [selectedModel]: { ...tokens } }, tokenScope: 'turn' }
   }
   return {
     ...(model ? { model } : {}),
     tokens,
     byModel,
-    tokenScope: engine === 'antigravity' ? 'last_request' : 'turn'
+    tokenScope: 'turn'
   }
 }
 
@@ -880,13 +881,12 @@ export class TurnTelemetry {
    * The turn's prompt usage over every answer. Claude's, Codex's and
    * OpenCode's answers are each their own prompt's (the Claude adapter resets
    * its tallies when a prompt starts; codex-acp measures from the prompt's
-   * start; OpenCode keeps a turn state per prompt), so they add up. Antigravity's is read as the last request's, so the last answer's
-   * stands alone.
+   * start; OpenCode keeps a turn state per prompt; Antigravity sums the
+   * prompt's own model calls), so they add up.
    */
   private promptTelemetry(): PromptTelemetry | null {
     const engine = this.options.engine
-    const answers = engine === 'antigravity' ? this.answers.slice(-1) : this.answers
-    const parsed = answers
+    const parsed = this.answers
       .map((answer) => parsePromptTelemetry(answer, engine, this.selected))
       .filter((p): p is PromptTelemetry => p !== null)
     if (parsed.length <= 1) return parsed[0] ?? null

@@ -13,10 +13,13 @@ const resources = process.argv[2]
 if (!resources) throw new Error('Usage: npm run test:packaged:main -- <resources directory>')
 const scratch = mkdtempSync(join(tmpdir(), 'cinna-packaged-main-'))
 app.setPath('userData', scratch)
+// The launcher passes its own deadline; this one ends 5 s before it so the
+// probe reports and cleans up (an x64 package under Rosetta needs ~80 s).
+const launcherDeadline = Number(process.argv[3])
 const deadline = setTimeout(() => {
   console.error('Packaged main-process checks timed out')
   finish(1)
-}, 30_000)
+}, Number.isInteger(launcherDeadline) && launcherDeadline > 10_000 ? launcherDeadline - 5_000 : 30_000)
 
 function finish(code) {
   clearTimeout(deadline)
@@ -73,9 +76,15 @@ app.whenReady().then(async () => {
 
     const { parseOffice } = await import('officeparser')
     const text = 'Packaged attachment check'
-    assert.ok((await parseOffice(Buffer.from(`{\\rtf1\\ansi ${text}}`))).toText().includes(text))
-    assert.ok((await parseOffice(pdfFixture(text))).toText().includes(text))
-    console.log('Packaged RTF and PDF extraction (including PDF.js worker) passed')
+    const rtf = await parseOffice(Buffer.from(`{\\rtf1\\ansi ${text}}`))
+    assert.ok((await rtf.to('text')).value.includes(text))
+    // The same pdf.js setting as textExtractor.ts: its own process, this
+    // executable run as Node. A fallback to this process is a warning, not an
+    // error, so the check reads the warnings.
+    const pdf = await parseOffice(pdfFixture(text), { pdfParserConfig: { separateProcess: true } })
+    assert.ok((await pdf.to('text')).value.includes(text))
+    assert.deepEqual(pdf.warnings.map((warning) => warning.code), [], 'PDF extraction warnings')
+    console.log('Packaged RTF and PDF extraction (PDF.js in its own process) passed')
     finish(0)
   } catch (error) {
     console.error(error)

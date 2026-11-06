@@ -271,7 +271,7 @@ Build-only runtime, credential and complexity keys are listed in [Build Sessions
 | Setting / constant | Where | Meaning |
 |---|---|---|
 | `localDevConsent` | `app_settings`, default scope | `{"<host>": boolean}` JSON. Absent host = never asked |
-| `PINNED_UV_VERSION` | `toolchain.ts` | `'0.12.10'`. Bumping it means recomputing all four digests |
+| `PINNED_UV_VERSION` | `toolchain.ts` | `'0.13.7'`. Bumping it means recomputing all four digests |
 | `UV_ASSETS` | `toolchain.ts` | `${platform}-${arch}` → `{file, sha256}`. Four rows: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64` |
 | `MUTAGEN_ASSETS` | `toolchain.ts` | version → platform → `{file, sha256}`. Today `'0.18.1'`. **Adding a version means adding a whole platform row**, not one entry |
 | `local_dev.cinna_cli_version` | server discovery | The cinna-cli version `uv tool install` pins to |

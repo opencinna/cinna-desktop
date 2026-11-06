@@ -115,12 +115,16 @@ export async function probeFolderHandovers(engine: 'claude' | 'codex', binary: s
       const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [sessions[index].descriptor], ...(meta ? { _meta: meta } : {}) }, 60_000)
       const id = String(created.result?.sessionId ?? '')
       ids.push(id)
+      // Claude: the mode the launcher sets after every `new` and `load`. From adapter
+      // 0.101.0 a session left alone starts in `auto`, whose reviewer the fake cannot answer.
+      if (id && claude) await connection.rpc('session/set_mode', { sessionId: id, modeId: 'default' })
       if (id) await call(id, index === 0 ? 'first' : 'second')
     }
     result.mcp.first = result.mcp.calls.includes('first')
     result.mcp.second = result.mcp.calls.includes('second')
     const beforeLoad = result.mcp.calls.length
     const loaded = await connection.rpc('session/load', { sessionId: ids[0], cwd: scratch.cwd, mcpServers: [sessions[0].descriptor], ...(meta ? { _meta: meta } : {}) }, 60_000)
+    if (!loaded.error && claude) await connection.rpc('session/set_mode', { sessionId: ids[0], modeId: 'default' })
     if (!loaded.error) await call(ids[0], 'loaded first')
     result.mcp.loaded = !loaded.error && result.mcp.calls.slice(beforeLoad).includes('first')
     if (codex) {

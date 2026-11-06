@@ -276,13 +276,16 @@ export function useSetChatRouter() {
       await queryClient.cancelQueries({ queryKey: ['chat', chatId] })
       const prev = queryClient.getQueryData<CachedChat>(['chat', chatId])
       if (prev) {
-        queryClient.setQueryData<CachedChat>(['chat', chatId], {
+        // Typed first: TanStack 5.106's setQueryData rejects an object
+        // literal for a nullable data type (it checks it against the wrong arm).
+        const next: CachedChat = {
           ...prev,
           router,
           // Human routing detaches its root. Coordination keeps the current
           // root until main returns the eligible or synthetic conductor.
           agentId: router === 'human' ? null : prev.agentId
-        })
+        }
+        queryClient.setQueryData<CachedChat>(['chat', chatId], next)
       }
       return { prev }
     },
@@ -321,7 +324,10 @@ export function useSetChatCoordinator() {
       const prev = queryClient.getQueryData<CachedChat>(['chat', chatId])
       const prevAttached = queryClient.getQueryData<Attached>(['chat-on-demand-agent', chatId])
       const oldRoot = prev?.agentId ?? null
-      if (prev) queryClient.setQueryData<CachedChat>(['chat', chatId], { ...prev, router: 'coordinator', agentId })
+      if (prev) {
+        const next: CachedChat = { ...prev, router: 'coordinator', agentId }
+        queryClient.setQueryData<CachedChat>(['chat', chatId], next)
+      }
       if (prevAttached) {
         // The old root rejoins as a participant only when it is known to be an
         // agent the user picked. The hidden runtime never does, and an agent

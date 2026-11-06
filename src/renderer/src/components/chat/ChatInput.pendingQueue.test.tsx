@@ -31,7 +31,7 @@ const others = vi.hoisted(() => ({
   },
   notes: { attachAsFiles: vi.fn(async (): Promise<unknown> => ({ success: true, files: [] })) },
   files: {
-    clipboardHasFileRefs: vi.fn(() => false),
+    clipboardHasFileRefs: vi.fn(async () => false),
     pasteFromClipboard: vi.fn(async (): Promise<unknown> => ({ success: true, paths: [] })),
     getPathForFile: vi.fn((): string => ''),
     readThumbnail: vi.fn(async () => ({ success: false, error: 'no' }))

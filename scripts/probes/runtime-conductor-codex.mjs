@@ -28,7 +28,7 @@ const featuresDisabled = [
   'browser_use_external', 'computer_use', 'in_app_browser', 'code_mode',
   'code_mode_only', 'code_mode_host', 'goals', 'sleep_tool', 'skill_search',
   'tool_suggest', 'workspace_dependencies', 'hooks', 'shell_snapshot',
-  'default_mode_request_user_input'
+  'default_mode_request_user_input', 'cli_daybreak', 'plugin_discovery_prefetch'
 ]
 const catalogTransforms = {
   apply_patch_tool_type: null, experimental_supported_tools: [],
@@ -36,8 +36,8 @@ const catalogTransforms = {
   use_responses_lite: false, multi_agent_version: null, multi_agent_reasoning_effort: null
 }
 const quoteShell = value => `'${value.replaceAll("'", "'\\''")}'`
-const adapterPatchAnchor = '"mcp_servers": Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, this.createMcpSeverConfig(mcp.server)]))'
-const adapterPatch = '"mcp_servers": { ...configWithWorkspaceRoots.mcp_servers, ...Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, { enabled: true, ...this.createMcpSeverConfig(mcp.server) }])) }'
+const adapterPatchAnchor = '"mcp_servers": Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, toCodexMcpServerConfig(mcp.server)]))'
+const adapterPatch = '"mcp_servers": { ...configWithWorkspaceRoots.mcp_servers, ...Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, { enabled: true, ...toCodexMcpServerConfig(mcp.server) }])) }'
 const promptPatchInsertion = '\n      ...(typeof request._meta?.cinna?.systemPrompt === "string" ? { developerInstructions: request._meta.cinna.systemPrompt } : {}),'
 // The repository may already have applied its maintained patch. Both variants
 // run from scratch copies so the comparison remains reproducible either way.
@@ -157,7 +157,7 @@ async function runCase(spec) {
     if (spec.promptMeta) {
       // The same anchors as scripts/patch-codex-acp.cjs: thread start, and the
       // resume helper `session/load` and `session/resume` share (codex-acp 2.x).
-      for (const anchor of ['const response = await this.codexClient.threadStart({', 'const response = await this.resumeThread({']) {
+      for (const anchor of ['const response = await this.codexClient.threadStart({', 'const response = await this.resumeThreadWithInstructions({']) {
         assert(adapterSource.includes(anchor), 'Session instruction patch anchor changed')
         adapterSource = adapterSource.replaceAll(anchor, anchor + promptPatchInsertion)
       }

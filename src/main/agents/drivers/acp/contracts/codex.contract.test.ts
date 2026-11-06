@@ -103,6 +103,8 @@ const seen = {
   handover: null as HandoverProbe | null,
   versionOutput: '', versionStatus: null as number | null,
   login: { status: null as number | null, output: '' },
+  /** `login status` under a home holding an API-key login (a dummy key). */
+  apiKeyLogin: { status: null as number | null, output: '' },
   features: [] as string[],
   catalog: null as { models: Json[] } | null,
   appServer: [] as AdapterMessage[],
@@ -702,6 +704,7 @@ function snapshot(): Json {
     tool: 'codex', version: seen.versionOutput, adapter: RUNTIME_PINS.codex.adapter,
     cli: {
       loginStatusLoggedOut: { exitCode: seen.login.status, verdict: parseCodexAuthStatus(seen.login.output).state },
+      loginStatusApiKey: { exitCode: seen.apiKeyLogin.status, verdict: parseCodexAuthStatus(seen.apiKeyLogin.output) },
       featureFlags: [...seen.features].sort(),
       catalogModelFields: [...new Set(catalogModels.flatMap((model) => keys(model)))].sort(),
       catalogSlugs: catalogModels.map((model) => String(model.slug)).sort()
@@ -856,6 +859,10 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
         { method: 'config/read', params: { includeLayers: false, cwd: scratch.cwd } },
         { method: 'model/list', params: { includeHidden: true } }
       ])
+      // Last, so nothing above runs logged in: the same home with an API-key login.
+      writeFileSync(join(scratch.codexHome, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'sk-cinna-contract-dummy-not-a-real-key' }))
+      const apiKey = runCli(binary, ['login', 'status'], scratch.env, scratch.cwd)
+      seen.apiKeyLogin = { status: apiKey.status, output: `${apiKey.stdout}\n${apiKey.stderr}` }
     } finally { scratch.dispose() }
     await folderScenario(binary)
     await policyScenario(binary, seen.versionOutput)
@@ -921,6 +928,10 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     expect(seen.login.output).toMatch(/^Not logged in\s*$/m)
     // The owner's own parser must reach the verdict readiness refuses on.
     expect(parseCodexAuthStatus(seen.login.output)).toEqual({ state: 'logged_out' })
+    // An API-key login: 0.162.1 said "Logged in using an API key - sk-…", 0.167.0 says "API key configured - sk-…".
+    expect(seen.apiKeyLogin.status).toBe(0)
+    expect(parseCodexAuthStatus(seen.apiKeyLogin.output)).toEqual({ state: 'logged_in', method: 'api_key' })
+    expect(JSON.stringify(parseCodexAuthStatus(seen.apiKeyLogin.output))).not.toContain('sk-cinna')
   })
 
   it(entry('codex.session.initialize'), () => {
@@ -1064,12 +1075,11 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     const compaction = updates.find((update) => update.sessionUpdate === 'tool_call' && update.kind === 'think')
     expect(compaction).toMatchObject({ title: 'Compact conversation', status: 'in_progress' })
     expect(updates.some((update) => update.sessionUpdate === 'tool_call_update' && update.toolCallId === compaction?.toolCallId && update.status === 'completed')).toBe(true)
-    // Folded the way the driver folds them: the step, then the warning and the answer as text.
+    // Folded the way the driver folds them: the step, then the answer as the only text (0.162.1 put its long-thread warning first).
     const parts = foldParts(updates)
     expect(parts.filter((part) => part.metadata?.[KIND_METADATA_KEY] === 'tool').map((part) => part.text)).toEqual(['Compact conversation'])
     const text = parts.filter((part) => !['tool', 'tool_result', 'thinking'].includes(String(part.metadata?.[KIND_METADATA_KEY]))).map((part) => part.text).join('')
-    expect(text).toMatch(/^Warning: /)
-    expect(text.endsWith('OK')).toBe(true)
+    expect(text).toBe('OK')
   })
 
   it(entry('codex.session.info-title'), () => {
@@ -1173,6 +1183,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     const block = /const FEATURES_DISABLED = \[([\s\S]*?)\]/.exec(source)?.[1] ?? ''
     const disabled = [...block.matchAll(/'([a-z0-9_]+)'/g)].map((match) => match[1])
     expect(disabled.length).toBeGreaterThanOrEqual(20)
+    expect(disabled).toEqual(expect.arrayContaining(['cli_daybreak', 'plugin_discovery_prefetch']))
     expect(disabled.filter((name) => !seen.features.includes(name))).toEqual([])
   })
 

@@ -88,7 +88,8 @@ function applyWorkspacePolicy(plan: AcpLaunchPlan, engine: AgentEngine): AcpLaun
   if (engine === 'antigravity') {
     // The built-ins are on: the conductor filter (`enabledTools` and its
     // denylist) is dropped, and what remains is the launcher's own isolated
-    // denylist — `schedule` and `start_subagent`, work Cinna cannot show.
+    // denylist — `schedule` and the subagents (`invoke_subagent`, alias
+    // `start_subagent`), work Cinna cannot show.
     const meta = plan.session.meta ?? {}
     const { enabledTools: _enabled, ...agy } = (meta.agy as Record<string, unknown> | undefined) ?? {}
     void _enabled

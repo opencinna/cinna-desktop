@@ -103,7 +103,19 @@ export function makeClaudeScratch(prefix: string, input: { providerPort: number;
       ANTHROPIC_API_KEY: 'sk-ant-contract-dummy-not-a-real-key',
       HTTPS_PROXY: proxy, HTTP_PROXY: proxy, https_proxy: proxy, http_proxy: proxy,
       NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost',
-      DISABLE_AUTOUPDATER: '1'
+      DISABLE_AUTOUPDATER: '1',
+      // Tool search off, as it was behind a custom base URL until CLI 2.1.304.
+      // From 2.1.304 it is on there too, as it already was on the first-party
+      // API the desktop's sessions use: MCP and most native tools are offered
+      // only through `ToolSearch` (plus a `DeferredToolPlaceholder`), and the
+      // fake provider, which calls a tool by name, would be refused. The
+      // contract observes the plain tool list; tool search itself is not covered.
+      ENABLE_TOOL_SEARCH: 'false',
+      // A prompt-suggestion request after a turn (on in every session from
+      // adapter 0.101.0) would take the next scripted reply. The desktop turns
+      // them off with the session option; `claude.session.prompt-suggestions-off`
+      // removes this variable to check that option alone.
+      CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false'
     },
     dispose: () => rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
   }

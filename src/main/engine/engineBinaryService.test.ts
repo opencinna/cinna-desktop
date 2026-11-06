@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { EngineBinaryError, type ResolvedEngineBinary } from './binaryResolver'
 import { createEngineBinaryService } from './engineBinaryService'
 
@@ -28,7 +28,7 @@ describe('createEngineBinaryService', () => {
   })
 
   let configured: string | null
-  let resolve: ReturnType<typeof vi.fn>
+  let resolve: Mock<(...args: any[]) => any>
 
   beforeEach(() => {
     configured = '/opt/one/opencode'

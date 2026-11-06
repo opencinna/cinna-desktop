@@ -51,6 +51,7 @@ import {
   PASTE_NOT_ACCEPTED,
   PASTE_TOO_LONG,
   PASTE_WHILE_STREAMING,
+  insertPastedText,
   pasteIntent
 } from '../../utils/composerPaste'
 import { NoteBadgeList } from './NoteBadge'
@@ -76,6 +77,7 @@ import type { NoteData } from '../../../../shared/notes'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
 import { useComposerAttachTargetStore } from '../../stores/composerAttachTarget.store'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
+import { createLogger } from '../../stores/logger.store'
 import { useRunQueue } from '../../hooks/useRunQueue'
 import { VoiceInputButton } from './voice/VoiceInputButton'
 import { useVoiceErrorToast } from './voice/useVoiceErrorToast'
@@ -94,6 +96,8 @@ export interface NewChatRouterInfo extends RouterBadgeInfo {
   /** A pending chip's "Set as Coordinator": coordinate, with that agent conducting. */
   onSetCoordinator?: (agentId: string) => void
 }
+
+const logger = createLogger('composer')
 
 /** Why "Set as Coordinator" waits — main's own refusals, word for word. */
 const COORDINATOR_RUN_REASON = 'Interrupt the session before changing who answers.'
@@ -560,6 +564,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const vanishedEditRef = useRef<{ chatId: string; id: string; gone: boolean } | null>(null)
   const draftKeyRef = useRef(draftKey)
   draftKeyRef.current = draftKey
+  // Bumped when a send (or a queued-edit save) takes the composer's contents:
+  // a paste still waiting on main's answer then lands in nothing, not in the
+  // emptied composer after the message has gone. See `takeAmbiguousPaste`.
+  const pasteGenRef = useRef(0)
   useEffect(() => {
     if (!chatId || !heldQueueCount || restoringQueueRef.current) return
     restoringQueueRef.current = true
@@ -700,6 +708,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const saveQueuedEdit = useCallback(async (targetChatId: string, id: string): Promise<void> => {
     const text = input
     if ((!text.trim() && pastes.length === 0) || !useComposerDraftStore.getState().beginSend(draftKey)) return
+    pasteGenRef.current += 1
     // By id, as a send consumes them: a chip pasted during the save survives it.
     const savedPastes = new Set(pastes.map((paste) => paste.id))
     try {
@@ -1251,23 +1260,22 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     if (attachError === PASTE_TOO_LONG) setAttachError(null)
   }, [attachError, setAttachError])
 
-  // A text paste: long plain text becomes a chip, anything else pastes natively. `isText` is asked last, only for a paste
-  // that would chip: whether a clipboard that also carries files is text.
-  const takeTextPaste = useCallback(
-    (e: React.ClipboardEvent<HTMLTextAreaElement>, isText: () => boolean = () => true) => {
-      // Cmd/Ctrl+Shift+V always pastes inline.
-      const plain = Date.now() - plainPasteAtRef.current < PLAIN_PASTE_WINDOW_MS
-      plainPasteAtRef.current = 0
-      if (plain) return
-      const el = e.currentTarget
-      // A selection means "replace this"; a trigger token being typed (`@`,
-      // `#`, `/`, `?`) means the paste is its filter.
-      if (el.selectionStart !== el.selectionEnd) return
-      if (findTriggerToken(el.value, el.selectionStart)) return
-      // text/plain only: a Mail or Gmail copy also carries text/html.
-      const text = normalizePaste(e.clipboardData?.getData('text/plain') ?? '')
-      if (!shouldChipPaste(text) || !isText()) return
-      e.preventDefault()
+  // Whether a text paste chips, decided at the event. Long plain text becomes a
+  // chip; anything else pastes natively.
+  const textPasteChips = useCallback((el: HTMLTextAreaElement, text: string): boolean => {
+    // Cmd/Ctrl+Shift+V always pastes inline.
+    const plain = Date.now() - plainPasteAtRef.current < PLAIN_PASTE_WINDOW_MS
+    plainPasteAtRef.current = 0
+    if (plain) return false
+    // A selection means "replace this"; a trigger token being typed (`@`,
+    // `#`, `/`, `?`) means the paste is its filter.
+    if (el.selectionStart !== el.selectionEnd) return false
+    if (findTriggerToken(el.value, el.selectionStart)) return false
+    return shouldChipPaste(text)
+  }, [])
+
+  const chipPaste = useCallback(
+    (el: HTMLTextAreaElement, text: string) => {
       if (text.length > PASTE_MAX_CHARS) {
         setAttachError(PASTE_TOO_LONG)
         return
@@ -1280,6 +1288,68 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [setAttachError, setPastes, clearPasteTooLong]
   )
 
+  // A text paste: a chip when long, else the native paste.
+  const takeTextPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const el = e.currentTarget
+      // text/plain only: a Mail or Gmail copy also carries text/html.
+      const text = normalizePaste(e.clipboardData?.getData('text/plain') ?? '')
+      if (!textPasteChips(el, text)) return
+      e.preventDefault()
+      chipPaste(el, text)
+    },
+    [textPasteChips, chipPaste]
+  )
+
+  const attachClipboardFiles = useCallback(() => {
+    void window.api.files
+      .pasteFromClipboard()
+      .then(async (result) => {
+        if (!result.success) setAttachError(result.error)
+        else if (result.paths.length === 0) setAttachError(PASTE_NOTHING_USABLE)
+        else await pickAttachmentsFromPaths(result.paths)
+      })
+      .catch((err: unknown) => setAttachError(unwrapIpcError(err)))
+      .finally(focusComposer)
+  }, [pickAttachmentsFromPaths, setAttachError, focusComposer])
+
+  /**
+   * A paste carrying both files and text (`pasteIntent` 'ask'). Whether the
+   * clipboard references files is an asynchronous question to main, so the
+   * native paste is prevented now and the event's own text held; the answer
+   * then attaches (`onFiles`) or puts that text in as a native paste would:
+   * a chip when long, else at the caret through `insertPastedText`. Nothing is
+   * shown while waiting. `onFiles` null: files cannot be taken here, so main
+   * is asked only when the text would chip (a Finder copy's names never chip),
+   * and file references paste as their names. The answer is dropped when the
+   * composer moved on meanwhile: another chat, a send, or focus elsewhere.
+   */
+  const takeAmbiguousPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>, onFiles: (() => void) | null) => {
+      const el = e.currentTarget
+      const raw = e.clipboardData?.getData('text/plain') ?? ''
+      const text = normalizePaste(raw)
+      const chips = textPasteChips(el, text)
+      if (!onFiles && !chips) return
+      e.preventDefault()
+      const key = draftKeyRef.current
+      const gen = pasteGenRef.current
+      void window.api.files
+        .clipboardHasFileRefs()
+        .catch(() => false)
+        .then((hasFileRefs) => {
+          if (!el.isConnected || draftKeyRef.current !== key || pasteGenRef.current !== gen) return
+          if (hasFileRefs && onFiles) onFiles()
+          else if (chips && !hasFileRefs) chipPaste(el, text)
+          else insertPastedText(el, raw)
+        })
+        .catch((err: unknown) => {
+          logger.warn('held paste failed', { error: err instanceof Error ? err.message : String(err) })
+        })
+    },
+    [textPasteChips, chipPaste]
+  )
+
   // Paste: files and images attach as a drop does; text pastes natively, or as
   // a chip when long. See `pasteIntent` for how an Excel copy and a Finder copy
   // are told apart. A paste of files the composer cannot take says why, rather
@@ -1288,7 +1358,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
       const types = Array.from(e.clipboardData?.types ?? [])
-      const hasFileRefs = (): boolean => window.api.files.clipboardHasFileRefs()
       // A paste that is exactly one skill link is taken as the offer, not
       // inserted (L3: the paste event's own text, never a clipboard read).
       // Cmd/Ctrl+Shift+V still pastes it as text; a link inside prose is text.
@@ -1301,38 +1370,30 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           return
         }
       }
-      if (!types.includes('Files')) {
+      const intent = pasteIntent(types)
+      if (intent === 'text') {
         if (types.includes('text/plain')) takeTextPaste(e)
         return
       }
       // Files cannot be taken now: whatever text came with them pastes as
-      // usual; only a paste with no text to fall back on says why. A Finder
-      // copy's names never chip — main is asked only when the text would.
+      // usual; only a paste with no text to fall back on says why.
       if (!canShowAttachButton || attachBlockedByStream) {
-        if (types.includes('text/plain')) {
-          takeTextPaste(e, () => pasteIntent(types, hasFileRefs) === 'text')
+        if (intent === 'ask') {
+          takeAmbiguousPaste(e, null)
           return
         }
         e.preventDefault()
         setAttachError(attachBlockedByStream ? PASTE_WHILE_STREAMING : chatId ? PASTE_NOT_ACCEPTED : PASTE_NEEDS_DESTINATION)
         return
       }
-      if (pasteIntent(types, hasFileRefs) === 'text') {
-        takeTextPaste(e)
+      if (intent === 'ask') {
+        takeAmbiguousPaste(e, attachClipboardFiles)
         return
       }
       e.preventDefault()
-      void window.api.files
-        .pasteFromClipboard()
-        .then(async (result) => {
-          if (!result.success) setAttachError(result.error)
-          else if (result.paths.length === 0) setAttachError(PASTE_NOTHING_USABLE)
-          else await pickAttachmentsFromPaths(result.paths)
-        })
-        .catch((err: unknown) => setAttachError(unwrapIpcError(err)))
-        .finally(focusComposer)
+      attachClipboardFiles()
     },
-    [canShowAttachButton, attachBlockedByStream, chatId, pickAttachmentsFromPaths, setAttachError, focusComposer, takeTextPaste, skillLinkKey]
+    [canShowAttachButton, attachBlockedByStream, chatId, setAttachError, takeTextPaste, takeAmbiguousPaste, attachClipboardFiles, skillLinkKey]
   )
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
@@ -1719,6 +1780,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // materialize each into a `.md` attachment once the scope is known.
     if (!chatId) {
       if (!onNewChat || !useComposerDraftStore.getState().beginSend(draftKey)) return
+      pasteGenRef.current += 1
       const noteIds = pendingNotes.map((n) => n.id)
       try {
         const sent = await onNewChat(outgoing, attachmentsToSend, noteIds.length > 0 ? noteIds : undefined)
@@ -1735,6 +1797,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // (which would double-send the same turn) — `isStreaming` can't yet, since
     // it only flips once the stream's `request-id` arrives.
     if (!useComposerDraftStore.getState().beginSend(draftKey)) return
+    pasteGenRef.current += 1
     try {
       // Convert any pending notes into real .md attachments via the IPC
       // ingest path so they ride the same code-path as user-attached files

@@ -2,11 +2,11 @@
 
 <!-- GENERATED from src/main/agents/drivers/acp/contracts/opencode.contract.ts by scripts/generate-contract-docs.mjs — do not edit. Run `npm run contract:docs`. -->
 
-Every external interface of OpenCode that Cinna relies on, one entry each: what the tool must do, which Cinna code depends on it, and what the user loses when it stops. **Verified against OpenCode CLI 2.0.27** — the version pinned in `src/shared/runtimePins.ts`.
+Every external interface of OpenCode that Cinna relies on, one entry each: what the tool must do, which Cinna code depends on it, and what the user loses when it stops. **Verified against OpenCode CLI 2.2.5** — the version pinned in `src/shared/runtimePins.ts`.
 
 Each entry has exactly one test, titled with its id, in [`opencode.contract.test.ts`](../../../../src/main/agents/drivers/acp/contracts/opencode.contract.test.ts). They run the real pinned binary over stdio against a loopback fake provider — no login, no provider request — with `npm run test:contract` (`make contract ENGINE=opencode` installs the binary first). They are not part of `npm test`.
 
-The raw shapes a run observes are compared with the committed [`opencode-2.0.27.json`](../../../../src/main/agents/drivers/acp/contracts/snapshots/opencode-2.0.27.json), and a difference fails the run; `make contract-snapshot ENGINE=opencode` rewrites it once a change is understood. To evaluate a new release, `make contract-next ENGINE=opencode VERSION=<x.y.z>` runs the same tests against that version without changing the pin; red entries name their owners below, and the run prints the diff between the pinned snapshot and the candidate's (written to a temp path, never into the tree) — that diff is what changed.
+The raw shapes a run observes are compared with the committed [`opencode-2.2.5.json`](../../../../src/main/agents/drivers/acp/contracts/snapshots/opencode-2.2.5.json), and a difference fails the run; `make contract-snapshot ENGINE=opencode` rewrites it once a change is understood. To evaluate a new release, `make contract-next ENGINE=opencode VERSION=<x.y.z>` runs the same tests against that version without changing the pin; red entries name their owners below, and the run prints the diff between the pinned snapshot and the candidate's (written to a temp path, never into the tree) — that diff is what changed.
 
 Hand-written evidence and reasoning stay in [The ACP Engine Contract](../acp_contract.md) and [The OpenCode Engine Contract](../opencode_contract.md); this file is only the index of what is checked.
 

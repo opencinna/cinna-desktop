@@ -181,6 +181,21 @@ describe('a Managed turn that ended while the app was closed', () => {
     expect(posts(p)).toEqual([])
     expect(chatRunResultRepo.get(USER, chatId)?.status).toBe('completed')
   })
+
+  it('shows a refusal that streamed nothing with its reason, not as interrupted', async () => {
+    // Mutation: drop the `refused` exception in `resultOf` → the interrupted notice.
+    const p = await remote(history(user(), running('run'), { type: 'session.status_idle', id: 'refused', processed_at: '2026-09-12T10:00:00Z',
+      stop_reason: { type: 'refusal' }, stop_details: { type: 'refusal', category: 'general_harms', explanation: 'The request was declined.' } }))
+    killedTurn()
+
+    await remoteTurnRecoveryService.resume(USER)
+
+    const reason = 'Claude refused to answer this message (policy: general harms). The request was declined.'
+    expect(transcript()).toEqual([['user', 'Fix the build'], ['error', reason]])
+    expect(posts(p)).toEqual([])
+    expect(chatRunResultRepo.get(USER, chatId)?.status).toBe('failed')
+    expect(checkpoint()).toEqual({ sessionId: SESSION, state: 'ready' })
+  })
 })
 
 describe('a Managed turn parked on a permission', () => {

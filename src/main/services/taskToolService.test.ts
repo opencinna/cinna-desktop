@@ -23,8 +23,8 @@ const holder = vi.hoisted(() => ({
   adapters: [] as RemoteTaskAdapter[],
   agentPath: '',
   live: new Set<string>(),
-  delegate: null as unknown as ReturnType<typeof import('vitest')['vi']['fn']>,
-  report: null as unknown as ReturnType<typeof import('vitest')['vi']['fn']>
+  delegate: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
+  report: null as unknown as import('vitest').Mock<(...args: any[]) => any>
 }))
 
 vi.mock('electron', () => ({ app: { getPath: () => holder.userData } }))

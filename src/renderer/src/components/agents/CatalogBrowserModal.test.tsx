@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { CatalogCredentialSpec } from '../../../../shared/catalog'
 import type { CatalogItem, CatalogItemDetail, CatalogItemsListing } from '../../../../shared/catalogItems'
 import type { LibraryAgentDto, LibraryListingDto } from '../../../../shared/agentSharing'
@@ -163,9 +163,9 @@ function cloudActions(overrides: Partial<CloudUpdateActions> = {}): CloudUpdateA
   return { updatingInstallId: null, error: null, onUpdate: vi.fn(), ...overrides }
 }
 
-let itemsMock: ReturnType<typeof vi.fn>
-let itemMock: ReturnType<typeof vi.fn>
-let libraryMock: ReturnType<typeof vi.fn>
+let itemsMock: Mock<(...args: any[]) => any>
+let itemMock: Mock<(...args: any[]) => any>
+let libraryMock: Mock<(...args: any[]) => any>
 const onClose = vi.fn()
 const onInstall = vi.fn()
 const onOpen = vi.fn()
@@ -338,7 +338,7 @@ describe('CatalogBrowserModal — the action by kind', () => {
   })
 
   it('a cloud agent installed but not synced yet: Installed, since there is nothing to Open', async () => {
-    ;(window.api.agents.list as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    ;(window.api.agents.list as Mock<(...args: any[]) => any>).mockResolvedValue([])
     mount()
     await loaded()
     const helpdesk = tile('Helpdesk')
@@ -379,7 +379,7 @@ describe('CatalogBrowserModal — the action by kind', () => {
   })
 
   it('a cloud agent’s synced row has the last word on whether it is behind', async () => {
-    ;(window.api.agents.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+    ;(window.api.agents.list as Mock<(...args: any[]) => any>).mockResolvedValue([
       {
         id: 'remote:rates',
         name: 'Exchange Rates',
@@ -435,7 +435,7 @@ describe('CatalogBrowserModal — the action by kind', () => {
 
 describe('CatalogBrowserModal — a skill none of the user’s agents has', () => {
   it('has Add to agent… and no pill', async () => {
-    ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({ roots: [], agents: [] })
+    ;(window.api.localAgents.list as Mock<(...args: any[]) => any>).mockResolvedValue({ roots: [], agents: [] })
     mount()
     await loaded()
     const erp = tile('erp-lookup')
@@ -446,7 +446,7 @@ describe('CatalogBrowserModal — a skill none of the user’s agents has', () =
 
 describe('CatalogBrowserModal — In N agents', () => {
   it('counts this computer’s kit agents by their own pins, not by an install core still lists', async () => {
-    ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+    ;(window.api.localAgents.list as Mock<(...args: any[]) => any>).mockResolvedValue({
       roots: [],
       agents: [
         // Core still lists Alpha (AAAA-1) as having it, but its pin was removed here.
@@ -471,11 +471,11 @@ describe('CatalogBrowserModal — Add to agent…', () => {
     // A bare folder cannot hold a pin: not listed at all.
     { id: 'folder:bare', name: 'Bare', manifestId: '', kind: 'bare' }
   ]
-  let add: ReturnType<typeof vi.fn>
+  let add: Mock<(...args: any[]) => any>
 
   beforeEach(() => {
     add = vi.fn()
-    ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({ roots: [], agents: AGENTS })
+    ;(window.api.localAgents.list as Mock<(...args: any[]) => any>).mockResolvedValue({ roots: [], agents: AGENTS })
     Object.assign(window.api, {
       catalogSkills: { add },
       sharing: {
@@ -520,7 +520,7 @@ describe('CatalogBrowserModal — Add to agent…', () => {
     await waitFor(() => expect(add).toHaveBeenCalledWith('folder:gamma', 'u-erp'))
     expect(item(menu, 'Gamma').textContent).toBe(`Gamma${CATALOG_SKILL_TEXT.adding}`)
     expect(item(menu, 'Gamma').getAttribute('aria-busy')).toBe('true')
-    ;(window.api.localAgents.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+    ;(window.api.localAgents.list as Mock<(...args: any[]) => any>).mockResolvedValue({
       roots: [],
       agents: AGENTS.map((agent) => (agent.id === 'folder:gamma' ? { ...agent, skills: [pinned] } : agent))
     })

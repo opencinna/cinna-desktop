@@ -1,7 +1,8 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { readdirSync } from 'node:fs'
+import { readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { installFakeAcpEngine, type FakeAcpEngine } from '../fixtures/fakeAcpEngine'
@@ -9,10 +10,10 @@ import { installFakeAcpEngine, type FakeAcpEngine } from '../fixtures/fakeAcpEng
 /**
  * Paste an image into the chat composer, preview it, and send it.
  *
- * **The host clipboard is never read or written.** Main's `clipboard.read` and
- * `clipboard.readImage` are replaced inside the sandboxed app, so
- * `files:paste-from-clipboard` sees an image and no file references whatever
- * the developer has copied. The paste itself is a synthetic `paste` event on
+ * **The host clipboard is never read or written.** Main's `clipboard.read` is
+ * replaced inside the sandboxed app, so `files:clipboard-has-file-refs` and
+ * `files:paste-from-clipboard` see an image and only the file references the
+ * spec sets, whatever the developer has copied. The paste itself is a synthetic `paste` event on
  * the composer whose `clipboardData` carries the same types a screenshot paste
  * does (`Files`, no `text/plain`) — a real ⌘V would make Chromium read the
  * machine's clipboard.
@@ -103,8 +104,11 @@ async function arrange(cinna: CinnaApp): Promise<FakeAcpEngine> {
 }
 
 /**
- * Main's clipboard answers with a 40×30 red image and no file references. In
- * the app process only, so it is re-installed after any relaunch.
+ * Main's clipboard answers with a 40×30 red image and no file references
+ * (Electron 44+'s W3C-shaped `clipboard.read()`: items with `types` and
+ * `getType`). `setClipboardUriList` adds file references, as a Finder copy
+ * carries them. In the app process only, so it is re-installed after any
+ * relaunch.
  */
 async function stubClipboardImage(cinna: CinnaApp): Promise<void> {
   await cinna.electronApp.evaluate(({ clipboard, nativeImage }) => {
@@ -117,16 +121,33 @@ async function stubClipboardImage(cinna: CinnaApp): Promise<void> {
       bgra[i + 2] = 0xe0
       bgra[i + 3] = 0xff
     }
-    const image = nativeImage.createFromBitmap(bgra, { width, height })
-    const g = globalThis as typeof globalThis & { __cinnaClipboardReads?: number }
+    const png = nativeImage.createFromBitmap(bgra, { width, height }).toPNG()
+    const g = globalThis as typeof globalThis & { __cinnaClipboardReads?: number; __cinnaClipboardUriList?: string }
     g.__cinnaClipboardReads = 0
-    clipboard.read = () => ''
-    clipboard.readBuffer = () => Buffer.alloc(0)
-    clipboard.readImage = () => {
-      g.__cinnaClipboardReads = (g.__cinnaClipboardReads ?? 0) + 1
-      return image
+    g.__cinnaClipboardUriList = undefined
+    clipboard.read = async () => {
+      const uriList = g.__cinnaClipboardUriList
+      const types = uriList ? ['text/uri-list', 'image/png'] : ['image/png']
+      const item = {
+        types,
+        getType: async (type: string) => {
+          if (type === 'image/png') {
+            g.__cinnaClipboardReads = (g.__cinnaClipboardReads ?? 0) + 1
+            return new Blob([new Uint8Array(png)], { type })
+          }
+          if (type === 'text/uri-list' && uriList) return new Blob([uriList], { type })
+          throw new Error(`no ${type} on the clipboard`)
+        }
+      }
+      return [item] as unknown as Electron.ClipboardItem[]
     }
   })
+}
+
+async function setClipboardUriList(cinna: CinnaApp, uriList: string | undefined): Promise<void> {
+  await cinna.electronApp.evaluate((_electron, uriList) => {
+    ;(globalThis as typeof globalThis & { __cinnaClipboardUriList?: string }).__cinnaClipboardUriList = uriList
+  }, uriList)
 }
 
 async function clipboardImageReads(cinna: CinnaApp): Promise<number> {
@@ -136,25 +157,26 @@ async function clipboardImageReads(cinna: CinnaApp): Promise<number> {
 }
 
 /**
- * A paste event on the focused composer, carrying `kind`'s clipboard types.
- * Answers whether the composer prevented the browser's default action.
+ * A paste event on the focused composer, carrying `kind`'s clipboard types:
+ * a screenshot (`Files` only), plain text, or files and text together (an
+ * Excel copy's text and picture, a Finder copy's file and name). Answers
+ * whether the composer prevented the browser's default action.
  */
-async function dispatchPaste(page: Page, kind: 'image' | 'text'): Promise<boolean> {
+async function dispatchPaste(page: Page, kind: 'image' | 'text' | 'files-and-text', text = PASTED_TEXT): Promise<boolean> {
   return page.evaluate(
     ({ kind, text }) => {
       const target = document.activeElement
       if (!(target instanceof HTMLTextAreaElement)) throw new Error('the composer is not focused')
       const data = new DataTransfer()
-      if (kind === 'image') {
+      if (kind !== 'text') {
         data.items.add(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'image.png', { type: 'image/png' }))
-      } else {
-        data.setData('text/plain', text)
       }
+      if (kind !== 'image') data.setData('text/plain', text)
       const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })
       target.dispatchEvent(event)
       return event.defaultPrevented
     },
-    { kind, text: PASTED_TEXT }
+    { kind, text }
   )
 }
 
@@ -222,6 +244,23 @@ test('a pasted image becomes a composer thumbnail that previews, text pastes as 
     expect(await clipboardImageReads(cinna)).toBe(1)
   })
 
+  await test.step('files and text with no file reference behind them (an Excel copy) paste the text at the caret, undoably', async () => {
+    await input.focus()
+    await page.evaluate(() => {
+      const el = document.activeElement as HTMLTextAreaElement
+      el.setSelectionRange(el.value.length, el.value.length)
+    })
+    // Main is asked, so the composer holds the paste and inserts its own text.
+    expect(await dispatchPaste(page, 'files-and-text', ' and cells')).toBe(true)
+    await expect(input).toHaveValue(`${PASTED_TEXT} and cells`)
+    await expect(page.getByRole('button', { name: /^Remove / })).toHaveCount(1)
+    expect(pastedFiles(cinna)).toEqual([filename])
+    expect(await clipboardImageReads(cinna)).toBe(1)
+    // The textarea's own undo takes the inserted text back.
+    await input.press('ControlOrMeta+z')
+    await expect(input).toHaveValue(PASTED_TEXT)
+  })
+
   await test.step('sent, the image shows under the user bubble and previews with Download', async () => {
     await input.fill(PROMPT)
     await input.press('Enter')
@@ -246,5 +285,17 @@ test('a pasted image becomes a composer thumbnail that previews, text pastes as 
     await expect(card.getByRole('button', { name: `Download ${filename}`, exact: true })).toBeVisible()
     await card.getByRole('button', { name: 'Close preview', exact: true }).click()
     await expect(previewCard(page)).toHaveCount(0)
+  })
+
+  await test.step('files and text that reference files (a Finder copy) attach the files, not their names', async () => {
+    const copied = join(cinna.sandbox.home, 'Q3 report.txt')
+    writeFileSync(copied, 'quarterly numbers\n')
+    await setClipboardUriList(cinna, pathToFileURL(copied).href)
+    await input.focus()
+    expect(await dispatchPaste(page, 'files-and-text', 'Q3 report.txt')).toBe(true)
+    await expect(page.getByRole('button', { name: 'Remove Q3 report.txt', exact: true })).toBeVisible()
+    await expect(input).toHaveValue('')
+    // File references win over the image a Finder copy also carries.
+    expect(await clipboardImageReads(cinna)).toBe(1)
   })
 })

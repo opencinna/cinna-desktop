@@ -195,12 +195,34 @@ function walk(node: unknown, ctx: Ctx, refStack: string[], isRoot = false): unkn
     }
   }
 
+  // A `{ type: 'null' }` alternative — Gemini takes `nullable` on the node.
+  // Done before the alternatives are walked, where it would turn into a
+  // nullable string of its own (see normalizeNullType).
+  if (Array.isArray(src.anyOf)) {
+    const members = src.anyOf.filter((m) => !(isObj(m) && m.type === 'null'))
+    if (members.length !== src.anyOf.length) {
+      src.nullable = true
+      note(ctx.report.translated, 'anyOf:null')
+      if (members.length) src.anyOf = members
+      else delete src.anyOf
+    }
+  }
+
   // `type: ['string', 'null']` — Gemini takes a single type plus `nullable`.
   if (Array.isArray(src.type)) {
     const types = src.type.filter((t) => t !== 'null')
     if (src.type.length !== types.length) src.nullable = true
     src.type = types[0] ?? 'string'
     note(ctx.report.translated, 'type[]')
+  }
+
+  // A scalar's `type` binds every alternative; one without its own inherits it
+  // here, before the walk would default it to a string and
+  // `separateTypeAndAnyOf` drops the outer one. (A container's alternatives are
+  // dropped there, read for a required-field hint.)
+  if (typeof src.type === 'string' && !['null', 'object', 'array'].includes(src.type) && Array.isArray(src.anyOf)) {
+    const type = src.type
+    src.anyOf = src.anyOf.map((m) => (isObj(m) && m.type === undefined ? { ...m, type } : m))
   }
 
   normalizeItems(src, ctx.report)
@@ -232,7 +254,9 @@ function walk(node: unknown, ctx: Ctx, refStack: string[], isRoot = false): unkn
   }
 
   normalizeEnum(out, ctx.report)
+  normalizeNullType(out, ctx.report)
   inferType(out)
+  separateTypeAndAnyOf(out, ctx.report)
   // The root keeps its OBJECT shape even when empty — `toGeminiParameters()`
   // turns that case into an omitted `parameters` field instead.
   if (!isRoot) degradeEmptyContainers(out, ctx.report)
@@ -299,6 +323,62 @@ function normalizeEnum(out: Obj, report: SanitizeReport): void {
   delete out.enum
   note(report.translated, 'enum')
   out.description = withHint(out.description, `Allowed values: ${values.map((v) => JSON.stringify(v)).join(', ')}.`)
+}
+
+/**
+ * `null` is not a type of its own here: a node that can only be null is a
+ * nullable string (a `{ type: 'null' }` alternative was already folded into
+ * its parent's `nullable` in `walk`). The `@google/genai` request builder throws on a lone
+ * `type: 'null'` before anything is sent.
+ */
+function normalizeNullType(out: Obj, report: SanitizeReport): void {
+  if (out.type === 'null') {
+    out.type = 'string'
+    out.nullable = true
+    note(report.translated, 'type:null')
+  }
+}
+
+/**
+ * A node may carry `type` or `anyOf`, not both — the `@google/genai` request
+ * builder throws "type and anyOf cannot be both populated" and the whole turn
+ * fails. On a container (`properties` / `items`) the alternatives only add
+ * constraints such as "one of these is required", so they go — a choice of
+ * required fields survives as a hint in the description. A scalar with an
+ * `enum` keeps its type: the enum already names every value it may take, and
+ * alternatives beside it (`const`s, typically) can only narrow it. Otherwise
+ * each alternative carries its own type (see `inferType`), so the outer one goes.
+ */
+function separateTypeAndAnyOf(out: Obj, report: SanitizeReport): void {
+  if (out.type === undefined || !Array.isArray(out.anyOf)) return
+  if (out.properties !== undefined || out.items !== undefined) {
+    const hint = requiredChoiceHint(out.anyOf)
+    delete out.anyOf
+    if (hint) out.description = withHint(out.description, hint)
+    note(report.dropped, 'anyOf:with-type')
+  } else if (Array.isArray(out.enum)) {
+    delete out.anyOf
+    note(report.dropped, 'anyOf:with-enum')
+  } else {
+    delete out.type
+    note(report.dropped, 'type:with-anyOf')
+  }
+}
+
+/**
+ * "Provide one of: url, path." for alternatives that each name the fields
+ * they require (`anyOf: [{ required: ['url'] }, { required: ['path'] }]`),
+ * so the model still learns the rule the dropped `anyOf` stated. Null when
+ * any alternative says something else.
+ */
+function requiredChoiceHint(alternatives: unknown[]): string | null {
+  const choices: string[] = []
+  for (const alternative of alternatives) {
+    const required = isObj(alternative) ? alternative.required : undefined
+    if (!Array.isArray(required) || required.length === 0 || !required.every((name) => typeof name === 'string')) return null
+    choices.push(required.join(' and '))
+  }
+  return choices.length ? `Provide one of: ${[...new Set(choices)].join(', ')}.` : null
 }
 
 /** Gemini rejects a node with no `type`; recover it from the node's shape. */

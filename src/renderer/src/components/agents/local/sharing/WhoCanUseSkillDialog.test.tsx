@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { AgentPeopleDto, SetPeopleResult } from '../../../../../../shared/agentSharing'
 
 /**
@@ -60,8 +60,8 @@ function skillItem(visibility = 'users', maintainers = [{ user_id: 'u1', display
   }
 }
 
-let sharing: Record<string, ReturnType<typeof vi.fn>>
-let onClose: ReturnType<typeof vi.fn>
+let sharing: Record<string, Mock<(...args: any[]) => any>>
+let onClose: Mock<(...args: any[]) => any>
 
 beforeEach(() => {
   act(() =>
@@ -113,7 +113,7 @@ describe('Who can use a skill', () => {
 
   it('names the maintainers on a line above the list, and never says no one else has access while a co-maintainer does', async () => {
     sharing.itemPeople.mockResolvedValue(ok({ ...PEOPLE, people: [ANN] }))
-    ;(window as unknown as { api: { catalog: { items: ReturnType<typeof vi.fn> } } }).api.catalog.items.mockResolvedValue(
+    ;(window as unknown as { api: { catalog: { items: Mock<(...args: any[]) => any> } } }).api.catalog.items.mockResolvedValue(
       ok({
         host: 'https://core.test',
         items: [skillItem('users', [{ user_id: 'u1', display_name: 'Ann' }, { user_id: 'u9', display_name: 'Dan' }])],
@@ -277,7 +277,7 @@ describe('Who can use a skill', () => {
     sharing.itemPeople.mockResolvedValue(
       ok({ ...PEOPLE, people: [...PEOPLE.people, { principal: { kind: 'everyone' }, access: 'use', displayName: '' }] })
     )
-    ;(window as unknown as { api: { catalog: { items: ReturnType<typeof vi.fn> } } }).api.catalog.items.mockResolvedValue(
+    ;(window as unknown as { api: { catalog: { items: Mock<(...args: any[]) => any> } } }).api.catalog.items.mockResolvedValue(
       ok({ host: 'https://core.test', items: [skillItem('public')], fetchedAt: '', available: true })
     )
     const dialog = mount()

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -53,7 +53,7 @@ const ok = (value: unknown): EndpointOutcome => ({ ok: true, value, durationMs: 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 let runner: ReturnType<typeof scriptedRunner>
-let runCommand: ReturnType<typeof vi.fn>
+let runCommand: Mock<(...args: any[]) => any>
 let published: string[]
 let dashboards: ReturnType<typeof createDashboardService>
 let refresh: ReturnType<typeof createDashboardRefreshService>

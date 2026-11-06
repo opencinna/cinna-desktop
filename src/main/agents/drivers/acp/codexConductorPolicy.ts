@@ -22,7 +22,7 @@ const FEATURES_DISABLED = [
   'browser_use_external', 'computer_use', 'in_app_browser', 'code_mode',
   'code_mode_only', 'code_mode_host', 'goals', 'sleep_tool', 'skill_search',
   'tool_suggest', 'workspace_dependencies', 'hooks', 'shell_snapshot',
-  'default_mode_request_user_input'
+  'default_mode_request_user_input', 'cli_daybreak', 'plugin_discovery_prefetch'
 ]
 const CATALOG_POLICY = {
   apply_patch_tool_type: null, experimental_supported_tools: [], node_repl_disabled: true,

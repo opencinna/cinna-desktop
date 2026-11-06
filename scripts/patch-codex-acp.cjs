@@ -11,10 +11,13 @@ const policy = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 //    explicit session descriptor win (and enable it).
 // 2. Session instructions. `_meta.cinna.systemPrompt` becomes the thread's
 //    `developerInstructions` on start and on both resume paths (`session/load`
-//    and `session/resume` share `this.resumeThread`), so fresh utility sessions
-//    share a process without inheriting a chat's prompt. Upstream sets
-//    `developerInstructions` itself only from AIR's `customInstructions`, which
-//    Cinna never sends; on thread start its spread comes after ours.
+//    and `session/resume` share `this.resumeThreadWithInstructions`, which hands
+//    its params to `this.resumeThread` as they are when no ACP `systemPrompt`
+//    changes), so fresh utility sessions share a process without inheriting a
+//    chat's prompt. Upstream sets `developerInstructions` itself only from an
+//    ACP `systemPrompt` (2.3+, appended to the configured instructions) or AIR's
+//    `customInstructions`, neither of which Cinna sends; its spread comes after
+//    ours on all three paths.
 // 3. AIR client off. Cinna declares `_meta.jetbrains.air` (acpActivity.ts
 //    `airClientMeta`) only to negotiate the `asyncTasks` capability. From 2.0
 //    the adapter also reads that declaration as "this client is the JetBrains
@@ -28,7 +31,8 @@ const policy = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 //    `ClientCapabilities.airClient`); the negotiated AIR capabilities
 //    (`asyncTasks`, `nativeSubagentSessions`, …) are read by
 //    `clientSupportsAirCapability` from the raw `clientCapabilities`, so they
-//    stay as negotiated.
+//    stay as negotiated. It also keeps 2.5's prompt suggestions off: they are
+//    generated (an extra model request after a turn) only for an AIR client.
 // 4. Whole command output at the end. 2.x streams a command's output as
 //    `_meta.terminal_output_delta` fragments only, and the CLI never streams
 //    what a command prints before its first output poll; once anything
@@ -46,13 +50,16 @@ const policy = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 //    child's `turn/started` can reach the client before it subscribes — and
 //    terminates the thread's background terminals: an interrupted turn leaves
 //    its running commands alive as such (the root's are reported as async
-//    tasks the user can stop; a subagent's are not reported at all).
-const original = '"mcp_servers": Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, this.createMcpSeverConfig(mcp.server)]))'
-const replacement = '"mcp_servers": { ...configWithWorkspaceRoots.mcp_servers, ...Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, { enabled: true, ...this.createMcpSeverConfig(mcp.server) }])) }'
+//    tasks the user can stop; a subagent's are not reported at all). 2.4's own
+//    `interruptStandardChildren` covers only the standard subagent protocol;
+//    Cinna declares neither `subagents` nor `nativeSubagentSessions`, so
+//    `subagentProtocol` answers "hidden" and that path does nothing.
+const original = '"mcp_servers": Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, toCodexMcpServerConfig(mcp.server)]))'
+const replacement = '"mcp_servers": { ...configWithWorkspaceRoots.mcp_servers, ...Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, { enabled: true, ...toCodexMcpServerConfig(mcp.server) }])) }'
 const instructions = '\n      ...(typeof request._meta?.cinna?.systemPrompt === "string" ? { developerInstructions: request._meta.cinna.systemPrompt } : {}),'
 const instructionAnchors = [
   ['const response = await this.codexClient.threadStart({', 1],
-  ['const response = await this.resumeThread({', 2]
+  ['const response = await this.resumeThreadWithInstructions({', 2]
 ]
 const airClientAnchor = `function isAirClient(capabilities) {
   const meta3 = asRecord(capabilities?._meta);
@@ -112,51 +119,17 @@ const cancelChildren = `    await this.interruptSessionTurn(sessionState, "Cance
   }
 };
 `
-// Edit 5 as first reviewed: the turn interrupt and the terminal kill in one `try`. Kept to reverse it.
-const sharedTryInterruptChildren = `  // Cinna Desktop (scripts/patch-codex-acp.cjs): a cancel stops the session's subagents too, at any depth.
-  async interruptChildren(rootSessionId) {
-    const children = [...(this.sessions.get(rootSessionId)?.children ?? [])];
-    await Promise.all(children.map(async (threadId) => {
-      try {
-        const turn = (await this.client.threadTurnsList({ threadId, cursor: null, limit: 1, sortDirection: "desc", itemsView: "notLoaded" })).data[0];
-        if (turn?.status === "inProgress") await this.client.turnInterrupt({ threadId, turnId: turn.id });
-        let cursor = null;
-        do {
-          const listed = await this.client.threadBackgroundTerminalsList({ threadId, cursor });
-          await Promise.all(listed.data.map((terminal) => this.client.threadBackgroundTerminalsTerminate({ threadId, processId: terminal.processId })));
-          cursor = listed.nextCursor;
-        } while (cursor);
-      } catch (err) {
-        logger.error("Cancel - subagent turnInterrupt failed", err);
-      }
-    }));
-  }
-`
 const digest = (content) => createHash('sha256').update(content).digest('hex')
 
 /**
  * Earlier reviewed patches of the same pinned adapter, by the digest of the
  * file they produced, each with the exact reversal of its replacements. An
  * existing checkout carrying one is restored to the original (verified by
- * digest) and patched again; anything else is still refused.
+ * digest) and patched again; anything else is still refused. None at 2.5.0:
+ * the earlier patches were reviewed on 2.2.2 only, and a version bump installs
+ * the pristine file.
  */
-const earlierPatches = {
-  // Edits 1-4, before cancel stopped the subagents.
-  ca1f79d5ea308f092753a24140ac182dac5af0c8f52e43132ca265f8fa5922fa: (content) => {
-    if (content.split(instructions).length !== 4 || content.split(replacement).length !== 2 ||
-      content.split(airClientOff).length !== 2 || content.split(commandEndWhole).length !== 2) return null
-    return content.replaceAll(instructions, '').replace(replacement, () => original)
-      .replace(airClientOff, () => airClientAnchor).replace(commandEndWhole, () => commandEndAnchor)
-  },
-  // Edits 1-5, when one failing step of a subagent's cancel skipped the kill of its background terminals.
-  e37c968c758bad2e3b0e8c6d4762dd04824b941deca2a2d871b1e2a2854f63fd: (content) => {
-    if (content.split(instructions).length !== 4 || content.split(replacement).length !== 2 || content.split(airClientOff).length !== 2 ||
-      content.split(commandEndWhole).length !== 2 || content.split(sharedTryInterruptChildren).length !== 2 || content.split(cancelChildren).length !== 2) return null
-    return content.replaceAll(instructions, '').replace(replacement, () => original)
-      .replace(airClientOff, () => airClientAnchor).replace(commandEndWhole, () => commandEndAnchor)
-      .replace(sharedTryInterruptChildren, () => '').replace(cancelChildren, () => cancelAnchor)
-  }
-}
+const earlierPatches = {}
 
 function adapter(root) {
   const directory = join(root, 'node_modules/@agentclientprotocol/codex-acp')
@@ -206,6 +179,6 @@ function patchCodexAcp(root) {
 
 module.exports = {
   patchCodexAcp, verifyCodexAcpPatch, original, replacement, instructions, instructionAnchors, airClientAnchor, airClientOff, commandEndAnchor, commandEndWhole,
-  childrenAnchor, interruptChildren, cancelAnchor, cancelChildren, sharedTryInterruptChildren
+  childrenAnchor, interruptChildren, cancelAnchor, cancelChildren
 }
 if (require.main === module) patchCodexAcp(resolve(__dirname, '..'))

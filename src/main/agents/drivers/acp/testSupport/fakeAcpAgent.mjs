@@ -252,6 +252,8 @@ async function emit(client, steps, sessionId) {
 /** How many times each script key has been handled: picks a `sequence` entry. */
 const handled = {}
 
+const steerHandler = handler('steer', '_session/steering', () => ({ outcome: 'injected' }))
+
 function handler(name, method, respond) {
   return async (ctx) => {
     // Logged under the *wire* method, not the script key: a test asserting what
@@ -326,13 +328,15 @@ const app = agent({ name: 'fake-acp' })
   )
   // The steering extension. Always answers `injected` unless the script says
   // otherwise — whether a turn is running is the client's business to know.
+  // `awaitSteer` hears a request when it arrives, not when it is answered: a
+  // scripted `delayMs` answer would otherwise hold the prompt open past it.
   .onRequest(
     '_session/steering',
     (params) => params,
-    handler('steer', '_session/steering', () => {
+    (ctx) => {
       noteSteer()
-      return { outcome: 'injected' }
-    })
+      return steerHandler(ctx)
+    }
   )
   // The AIR extension's stop. Answers `stopped: false` (an unknown task) unless
   // the script says otherwise; `emit` carries the state update that precedes it.

@@ -303,7 +303,7 @@ test('S1 a pasted https link on the start screen offers the skill, and Add puts 
     await cinna.electronApp.evaluate(({ clipboard }) => {
       const copied: string[] = []
       ;(globalThis as unknown as { __skillLinkCopied: string[] }).__skillLinkCopied = copied
-      clipboard.writeText = (text: string) => {
+      clipboard.writeText = async (text: string) => {
         copied.push(text)
       }
     })
@@ -479,8 +479,7 @@ test('S5 a link inside a sentence pastes as text and offers nothing', async ({ c
   await startChatWith(cinna, AGENT)
   // Nothing on the host clipboard may decide this paste (a Finder file copy would).
   await cinna.electronApp.evaluate(({ clipboard }) => {
-    clipboard.read = () => ''
-    clipboard.readBuffer = () => Buffer.alloc(0)
+    clipboard.read = async () => []
   })
   const sentence = `Try this skill: ${httpsLink(core)} — it reads invoices.`
   const reads = core.listingReads()

@@ -446,9 +446,12 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
       // `.agents` skills) into every session; the `-` entry turns that plugin
       // off. Probed on 2.0.27: both personal folders gone, the kit's skill
       // (`skills.paths`) still listed, no warning. The project folders go too,
-      // which is accepted. 2.x has no narrower switch, and `OPENCODE_TEST_HOME`
-      // would also move `~/…` for read/edit and the shell, and the cloud
-      // credential lookups.
+      // which is accepted. 2.0.30 brought back `OPENCODE_DISABLE_CLAUDE_CODE`
+      // and `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`; they stay unset, since the
+      // plugin entry alone still keeps both folders out on 2.2.5
+      // (`opencode.launch.personal-skills`). `OPENCODE_TEST_HOME` would also
+      // move `~/…` for read/edit and the shell, and the cloud credential
+      // lookups.
       const config = { ...built.config, model: modelRef, plugins: [OPENCODE_NO_COMPATIBILITY_PLUGIN] }
       const dir = join(deps.configRoot(), 'opencode', configDirName(ctx.agentId))
       const configPath = join(dir, 'opencode.json')
@@ -961,7 +964,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
       const agents = native ? {} : safely(() => deps.folderAgents(ctx.folder.path), {})
       // Default `argv` delivery (one `--plugin-dir`), the delivery the
       // contract checks; `pluginDelivery: 'initialize'` (SDK 0.3.261+, the
-      // adapter runs 0.3.293 under 0.89.1) is not used.
+      // adapter runs 0.3.318 under 0.101.0) is not used.
       const pluginPath = safely(() => deps.tasksSkillPlugin?.() ?? null, null)
       // The agent's own skills, beside cinna-tasks in the same array (two
       // local plugins load together, proven on 2.1.276 / adapter 0.76.0).
@@ -1034,6 +1037,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
                     },
                     ...(model ? { model } : {}),
                     settingSources: ['user', 'project', 'local'],
+                    promptSuggestions: false,
                     ...plugins,
                     ...readRules
                   }
@@ -1052,6 +1056,13 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
                     settingSources: [],
                     strictMcpConfig: true,
                     mcpServers: {},
+                    // **Off, on both branches.** From adapter 0.101.0 every session
+                    // asks the CLI for a predicted next prompt after each turn —
+                    // one more Messages request — and publishes it only to the
+                    // AIR UI, which the adapter patch says Cinna is not. Nobody
+                    // would see it; the user would pay for it
+                    // (`claude.session.prompt-suggestions-off`).
+                    promptSuggestions: false,
                     // The folder's own subagents, omitted rather than passed empty
                     // so a folder without them hands the adapter exactly what it
                     // was handed before this option existed.

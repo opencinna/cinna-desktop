@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { RunWatchMessage } from '../../../shared/runWatch'
 import type { RunEvent } from '../../../shared/runEvents'
 ;(window as unknown as { api: unknown }).api = { app: { setTheme: async () => {} } }
@@ -18,9 +18,9 @@ const snapshot = (runId = 'r', events: RunEvent[] = [], sequence = 0): RunWatchM
 })
 let client: QueryClient
 let callbacks: Array<(message: RunWatchMessage) => void>
-let detach: ReturnType<typeof vi.fn>
-let get: ReturnType<typeof vi.fn>
-let cancel: ReturnType<typeof vi.fn>
+let detach: Mock<(...args: any[]) => any>
+let get: Mock<(...args: any[]) => any>
+let cancel: Mock<(...args: any[]) => any>
 function mount() {
   const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
   return renderHook(() => useLiveRunWatch(), { wrapper })

@@ -10,7 +10,7 @@ import {
 } from '../services/fileService'
 import { pastedRoot, resolvePastedFiles } from '../services/pastedFiles'
 import { runtimeHost } from '../host/runtimeHost'
-import { clipboardHasFileRefs, readClipboardFileSources, readClipboardImagePng } from '../host/desktop/clipboard'
+import { clipboardHasFileRefs, readClipboardImagePng, readClipboardUriList } from '../host/desktop/clipboard'
 import { cinnaFileService } from '../services/cinnaFileService'
 import { pathGuard } from '../services/pathGuard'
 import { userActivation } from '../auth/activation'
@@ -70,16 +70,17 @@ export function registerFilesHandlers(): void {
     }
   })
 
-  // Asked synchronously from inside the composer's paste event, and only when
-  // the clipboard carries both files and text: a Finder copy (file references,
-  // attach them) and an Excel or Word copy (a picture of the text, paste the
-  // text) look the same to the renderer. Answering in the event is what lets a
-  // text paste stay the native one. A boolean only; no activation, no paths.
-  ipcMain.on('files:clipboard-has-file-refs', (event) => {
+  // Asked by the composer's paste only when the clipboard carries both files
+  // and text: a Finder copy (file references, attach them) and an Excel or Word
+  // copy (a picture of the text, paste the text) look the same to the
+  // renderer. Electron 44+ reads the clipboard asynchronously, so the renderer
+  // holds the paste's own text and awaits this. A boolean only; no activation,
+  // no paths.
+  ipcHandle('files:clipboard-has-file-refs', async (): Promise<boolean> => {
     try {
-      event.returnValue = clipboardHasFileRefs()
+      return await clipboardHasFileRefs()
     } catch {
-      event.returnValue = false
+      return false
     }
   })
 
@@ -93,7 +94,7 @@ export function registerFilesHandlers(): void {
     userActivation.requireActivated()
     try {
       const paths = await resolvePastedFiles({
-        sources: readClipboardFileSources(),
+        uriList: await readClipboardUriList(),
         readImagePng: () => readClipboardImagePng(),
         dir: pastedRoot(runtimeHost.getPath('userData')),
         now: new Date()

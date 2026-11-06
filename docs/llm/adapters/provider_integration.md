@@ -28,8 +28,8 @@ For the higher-level abstraction and configuration story see [Adapters](./adapte
 
 | Axis | Anthropic | OpenAI | Gemini | Ollama |
 |------|-----------|--------|--------|--------|
-| **SDK call** | `client.messages.stream()` | `client.chat.completions.create({ stream: true })` | `chat.sendMessageStream()` (built from `getGenerativeModel().startChat({ history })`) | `OpenAIAdapter.stream()` verbatim, against `<host>/v1` |
-| **System prompt** | Top-level `system` field | First message with `role: 'system'` | `systemInstruction` on `getGenerativeModel()` | OpenAI's |
+| **SDK call** | `client.messages.stream()` | `client.chat.completions.create({ stream: true })` | `models.generateContentStream({ contents: [...history, lastMessage] })` | `OpenAIAdapter.stream()` verbatim, against `<host>/v1` |
+| **System prompt** | Top-level `system` field | First message with `role: 'system'` | `config.systemInstruction` | OpenAI's |
 | **Tool definition** | `input_schema` accepts JSON Schema verbatim | `parameters` accepts JSON Schema verbatim | `parameters` is a proto `Schema` (OpenAPI-3 subset) — JSON Schema must be translated, see [Tool Schema Translation](./tool_schema_translation.md) | OpenAI's |
 | **Tool-call extraction** | `contentBlock` event of type `tool_use` | Accumulate streamed `delta.tool_calls[i].function.arguments` JSON across chunks | `chunk.candidates[0].content.parts` of type `functionCall` | OpenAI's |
 | **Tool-call ID** | Provider-supplied `block.id` | Provider-supplied `tool_call.id` | Provider does **not** emit IDs — adapter generates `gemini-<nanoid>` | OpenAI's |
@@ -56,7 +56,11 @@ Full rules, the translation table, known limitations, and how to re-derive the f
 
 ### Gemini: `function` role for tool responses
 
-The SDK's `VALID_PARTS_PER_ROLE` table maps `functionResponse` to `role: 'function'` only — `role: 'user'` is rejected with `"Content with role 'user' can't contain 'functionResponse' part"`. History entries for `tool_call` messages must be pushed as `role: 'function'`. The `sendMessageStream` last-message path auto-assigns the role via the SDK's `assignRoleToPartsAndValidateSendMessageRequest`, so only history insertion needs explicit handling.
+Gemini wants a `functionResponse` in a `role: 'function'` content; `role: 'user'` is rejected with `"Content with role 'user' can't contain 'functionResponse' part"`. The adapter sends the whole conversation through `models.generateContentStream` rather than `chats.create`, because the Gen AI SDK's chat session throws on a `function` role in history and rewrites the history it is given. So the adapter assigns the role itself, for history entries and for the newest message alike (a tool result goes as `function`, anything else as `user`).
+
+### Gemini: the client is pinned against the shell environment
+
+The Gen AI client fills whatever the caller leaves unset from the process environment (`GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GEMINI_BASE_URL`, `GOOGLE_GENAI_API_VERSION`, key variables), which would send a turn to a Google Cloud project or another host. The adapter therefore sets `vertexai: false`, `apiVersion: 'v1beta'` and the base URL explicitly: the credential row alone decides what is sent and where. Its errors arrive as the response body in JSON; `describeApiError` rebuilds the older `[<code> <STATUS>] message` shape that `parseError` and the retry-hint reading depend on, and a cancelled turn rejects rather than resolving with partial text.
 
 ### Gemini: response wrapping
 

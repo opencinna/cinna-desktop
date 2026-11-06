@@ -102,7 +102,7 @@ const UV_PROGRESS_LINE = /^(Resolved|Prepared|Installed|Downloading|Building|Upd
  * uv is *ours* to pin — unlike Mutagen, nothing on the server has an opinion
  * about it — so a single version with a single digest table is the whole story.
  */
-export const PINNED_UV_VERSION = '0.12.10'
+export const PINNED_UV_VERSION = '0.13.7'
 
 /**
  * uv release assets, keyed `${process.platform}-${process.arch}`.
@@ -111,7 +111,7 @@ export const PINNED_UV_VERSION = '0.12.10'
  * and hashing it:
  *
  * ```
- * curl -sL https://github.com/astral-sh/uv/releases/download/0.12.10/uv-aarch64-apple-darwin.tar.gz | shasum -a 256
+ * curl -sL https://github.com/astral-sh/uv/releases/download/0.13.7/uv-aarch64-apple-darwin.tar.gz | shasum -a 256
  * ```
  *
  * Each was then cross-checked against the `<asset>.sha256` file Astral publishes
@@ -132,19 +132,19 @@ export const PINNED_UV_VERSION = '0.12.10'
 export const UV_ASSETS: Readonly<Record<string, PinnedAsset>> = {
   'darwin-arm64': {
     file: 'uv-aarch64-apple-darwin.tar.gz',
-    sha256: '51c6170e8e3a01cef9f33b94f582b7b81ac65046f55d40afb35f9cff5a68c179'
+    sha256: '81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731'
   },
   'darwin-x64': {
     file: 'uv-x86_64-apple-darwin.tar.gz',
-    sha256: '5296d5aa2b9143360405eea866f8ef4d5dc8986b164eb0dc35e8f876a9304d30'
+    sha256: '20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7'
   },
   'linux-x64': {
     file: 'uv-x86_64-unknown-linux-gnu.tar.gz',
-    sha256: '173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b'
+    sha256: 'c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83'
   },
   'linux-arm64': {
     file: 'uv-aarch64-unknown-linux-gnu.tar.gz',
-    sha256: '9ff6b9d4665edcdd3a88dcc73cd1eb641754deb927f14e8c62ebfde6bf4f5f5e'
+    sha256: '71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc'
   }
 }
 

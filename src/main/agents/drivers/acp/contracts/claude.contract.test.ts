@@ -157,6 +157,8 @@ const seen = {
     turns: [] as ClaudeProviderTurn[], ran: false },
   /** Scenario F: API mode's environment as `buildClaudeEnv` builds it, with and without the subprocess scrub. */
   scrub: { on: null as ScrubRun | null, off: null as ScrubRun | null },
+  /** Scenario H: suggestion requests after two turns, with `promptSuggestions: false` and without it. */
+  suggestions: { error: null as unknown, withOption: null as number | null, without: null as number | null },
   /** Scenario G: a `workspace` chat, its options produced by the production policy helper. */
   workspace: { error: null as unknown, options: null as Json | null, turns: [] as ClaudeProviderTurn[],
     asks: [] as AdapterMessage[], written: null as string | null, pwd: '', cwd: '', model: null as string | null },
@@ -798,7 +800,7 @@ async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): 
       apiKey: { apiKey: dummyKey, baseUrl: scratch.env.ANTHROPIC_BASE_URL } })
     if (!scrub) delete built[SUBPROCESS_SCRUB_ENV]
     observed.scrubbed = built[SUBPROCESS_SCRUB_ENV] === '1'
-    const harnessOnly = ['CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy']
+    const harnessOnly = ['CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ENABLE_TOOL_SEARCH', 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION']
     const env = { ...built, ...Object.fromEntries(harnessOnly.map((key) => [key, scratch.env[key]])), CLAUDE_CODE_EXECUTABLE: binary }
     connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env,
       answer: (request) => {
@@ -856,6 +858,46 @@ async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): 
   }
 }
 
+/** The CLI's prompt-suggestion request: a fork of the conversation whose last user message opens with this. */
+const isSuggestionRequest = (turn: ClaudeProviderTurn): boolean => turn.lastUserText.includes('[SUGGESTION MODE:')
+
+/**
+ * Scenario H: prompt suggestions. The harness switches them off for every other
+ * scenario (`CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION`, since a suggestion request
+ * would take a scripted reply); here the variable is removed, so only the
+ * session option decides. None is sent after a session's first turn, so two.
+ */
+async function suggestionScenario(binary: string, trap: EgressTrap, off: boolean): Promise<number | null> {
+  let connection: AdapterConnection | undefined
+  const provider = await startFakeAnthropic((turn) => turn.kind === 'title' ? TITLE_REPLY : { kind: 'text', text: 'OK' })
+  const scratch = makeClaudeScratch(`cinna-contract-claude-suggest-${off ? 'off' : 'on'}-`, { providerPort: provider.port, trapPort: trap.port })
+  try {
+    const env: Record<string, string> = { ...scratch.env, CLAUDE_CODE_EXECUTABLE: binary }
+    delete env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION
+    connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env })
+    await connection.rpc('initialize', initParams)
+    const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [], _meta: { claudeCode: { options: {
+      systemPrompt: SYSTEM_MARKER, settingSources: [], strictMcpConfig: true, mcpServers: {}, ...(off ? { promptSuggestions: false } : {}) } } } }, 60_000)
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) { seen.suggestions.error ??= created.error ?? 'no session'; return null }
+    await connection.rpc('session/set_mode', { sessionId, modeId: 'default' })
+    for (const text of ['Say OK.', 'Say OK again.']) {
+      const answer = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, 90_000)
+      if (answer.error) seen.suggestions.error ??= answer.error
+    }
+    // The suggestion follows the second turn's result.
+    await until(() => provider.turns.some(isSuggestionRequest), 5_000)
+    return provider.turns.filter(isSuggestionRequest).length
+  } catch (error) {
+    seen.suggestions.error ??= error instanceof Error ? error.message : String(error)
+    return null
+  } finally {
+    await connection?.close()
+    await provider.close()
+    scratch.dispose()
+  }
+}
+
 /** A tool call update's output as text, from `content[]` and `rawOutput` (the two places `acpMessages.toolOutputText` reads). */
 function outputText(update: Json): string {
   const content = ((update.content as Json[] | undefined) ?? []).map((block) => {
@@ -900,7 +942,10 @@ function snapshot(): Json {
         currentModeId: (created.modes as Json | undefined)?.currentModeId ?? null,
         configOptionIds: ((created.configOptions as Json[] | undefined) ?? []).map((option) => String(option.id)).sort() },
       folderSessionOfferedTools: [...(conversation(seen.folderTurns)[0]?.tools ?? [])].sort(),
-      updateKindsFirstPrompt: [...new Set(seen.firstPromptUpdates.map((update) => String(update.sessionUpdate)))].sort(),
+      // Not `session_info_update`: that is the CLI's session title, which races the
+      // first prompt's end (seen on either side of it on 2.1.318), and Cinna ignores it on Claude.
+      updateKindsFirstPrompt: [...new Set(seen.firstPromptUpdates.map((update) => String(update.sessionUpdate)))]
+        .filter((kind) => kind !== 'session_info_update').sort(),
       toolCall: firstToolCall ? { title: firstToolCall.title ?? null, kind: firstToolCall.kind ?? null, metaKeys: keys(firstToolCall._meta),
         claudeCodeMetaKeys: keys((firstToolCall._meta as Json | undefined)?.claudeCode), updateKeys: keys(firstToolCall) } : null,
       permissionRequest: { paramKeys: keys(permission), toolCallKeys: keys(toolCall), toolCallKind: toolCall.kind ?? null, toolCallTitle: toolCall.title ?? null,
@@ -910,6 +955,7 @@ function snapshot(): Json {
       cancel: { stopReason: typeof seen.cancel.stopReason === 'string' ? seen.cancel.stopReason : 'error', mcpCallAborted: seen.mcpCalls.at(-1)?.aborted ?? null },
       load: { ok: seen.load.ok, mode: seen.load.mode, replayedKinds: [...new Set(seen.load.replayed)].sort() },
       permissionModeInMeta: { sent: 'bypassPermissions', sessionStartedIn: seen.bypassInMetaMode },
+      promptSuggestions: { withOption: seen.suggestions.withOption, without: seen.suggestions.without },
       rateLimit: { errorCode: rate.code ?? null, dataKeys: keys(rate.data), errorKind: (rate.data as Json | undefined)?.errorKind ?? null,
         stopReason: seen.rateLimit?.result?.stopReason ?? null }
     },
@@ -959,6 +1005,8 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
       await workspaceScenario(binary, trap)
       seen.scrub.off = await scrubScenario(binary, trap, false)
       seen.scrub.on = await scrubScenario(binary, trap, true)
+      seen.suggestions.withOption = await suggestionScenario(binary, trap, true)
+      seen.suggestions.without = await suggestionScenario(binary, trap, false)
       seen.handover = await probeFolderHandovers('claude', binary, adapter, trap)
       await wrapperScenario(binary, trap)
     } finally {
@@ -1118,7 +1166,14 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
 
   it(entry('claude.session.permission-mode-meta-inert'), () => {
     expect(seen.policyOptions).toMatchObject({ permissionMode: 'bypassPermissions' })
-    expect(seen.bypassInMetaMode).toBe('default')
+    // The adapter's own default from 0.101.0, never the `bypassPermissions` the options named.
+    expect(seen.bypassInMetaMode).toBe('auto')
+  })
+
+  it(entry('claude.session.prompt-suggestions-off'), () => {
+    expect(seen.suggestions.error, JSON.stringify(seen.suggestions.error)).toBeNull()
+    expect(seen.suggestions.without, 'the control session sent no suggestion request: the probe no longer sees one').toBeGreaterThan(0)
+    expect(seen.suggestions.withOption).toBe(0)
   })
 
   it(entry('claude.session.model-over-user-settings'), () => {

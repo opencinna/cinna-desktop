@@ -17,7 +17,7 @@ None. `messages.content` holds the blocks verbatim; a paste is recognised from t
 
 ## IPC Channels
 
-None added. The only IPC touched is the existing `window.api.files.clipboardHasFileRefs()`, asked only when a paste would chip and the clipboard also carries files (a Finder copy's names must not chip).
+None added. The only IPC touched is the existing async `window.api.files.clipboardHasFileRefs()`, asked only when the clipboard carries both files and text (a Finder copy's names must not chip). The composer cancels that one native paste, awaits the answer and then chips or inserts the held text; the answer is dropped if a send started, the chat changed or focus moved.
 
 ## Wire format
 
@@ -30,7 +30,7 @@ None added. The only IPC touched is the existing `window.api.files.clipboardHasF
 ## Composer behaviour
 
 - `takeTextPaste` returns without acting for Cmd/Ctrl+Shift+V (a timestamp set in `handleKeyDown`, valid 1 s), a non-collapsed selection, or `findTriggerToken` at the caret.
-- With files on the clipboard but attachments unavailable and `text/plain` present, it chips only if `pasteIntent` says the clipboard is text.
+- With files on the clipboard but attachments unavailable and `text/plain` present, `pasteIntent` returns `'ask'` and the composer asks main only when the text would chip; file references paste as their names.
 - Undo: `undoablePasteRef` holds the chip id and the textarea value at paste time. `handleKeyDown` clears it on every key except bare modifiers and the paste chord; `handleChange` clears it. Cmd/Ctrl+Z with the ref set and an unchanged textarea value removes the chip and prevents the default.
 - The oversize error is `attachError === PASTE_TOO_LONG`; `clearPasteTooLong` clears only that value, on an accepted chip paste and in `handleRemovePaste` / `handleInsertPaste`.
 - Run on its own: `autonomousRun.onStart` builds the goal with `withPastes(withPathRefs(input.trim(), pathRefs), pastes)` and records text, path and paste ids in `autonomousSourceRef`; `onStarted` removes exactly those.

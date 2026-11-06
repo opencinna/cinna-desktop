@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -54,7 +54,7 @@ const report = (summary: string) => `---\ncinna_handover: 1\nstatus: done\nsumma
 
 let dir: string
 let clock: number
-let wake: ReturnType<typeof vi.fn>
+let wake: Mock<(...args: any[]) => any>
 let rowId: string
 let chatId: string
 let lifecycle: ReturnType<typeof createDelegationLifecycle>

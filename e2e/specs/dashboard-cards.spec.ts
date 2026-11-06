@@ -162,7 +162,7 @@ test('two references become two cards, a backticked one stays text; Add to dashb
     await cinna.electronApp.evaluate(({ clipboard }) => {
       const g = globalThis as unknown as { __copied: string[] }
       g.__copied = []
-      clipboard.writeText = (text: string) => { g.__copied.push(text) }
+      clipboard.writeText = async (text: string) => { g.__copied.push(text) }
     })
     await page.getByRole('button', { name: 'Chats', exact: true }).click()
     await page.getByText(TITLE, { exact: true }).click()

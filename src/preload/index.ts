@@ -1397,10 +1397,12 @@ const api = {
     pasteFromClipboard: (): Promise<FilesPasteFromClipboardResult> =>
       ipcRenderer.invoke('files:paste-from-clipboard'),
     /**
-     * Whether the clipboard references files. Synchronous, so the composer can
-     * decide inside its paste event whether to let a text paste through.
+     * Whether the clipboard references files. Asked by the composer only when a
+     * paste carries both files and text; it holds the paste's own text while
+     * this answers (Electron 44+ reads the clipboard asynchronously).
      */
-    clipboardHasFileRefs: (): boolean => ipcRenderer.sendSync('files:clipboard-has-file-refs') === true,
+    clipboardHasFileRefs: (): Promise<boolean> =>
+      ipcRenderer.invoke('files:clipboard-has-file-refs').then((answer: unknown) => answer === true),
     /**
      * Save-as for a TaskAttachment (cinna task-scoped). Distinct from
      * `download` above because these are not FileUpload rows — their

@@ -1,16 +1,15 @@
 import { resolve } from 'path'
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+// Main and preload externalize their dependencies by default since electron-vite 6
+// (`build.externalizeDeps`, default true), so neither lists a plugin for it.
 export default defineConfig({
-  main: {
-    plugins: [externalizeDepsPlugin()]
-  },
+  main: {},
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
-      rollupOptions: {
+      rolldownOptions: {
         output: {
           format: 'cjs',
           entryFileNames: '[name].mjs'
@@ -28,7 +27,7 @@ export default defineConfig({
       }
     },
     build: {
-      rollupOptions: {
+      rolldownOptions: {
         input: {
           index: resolve('src/renderer/index.html'),
           trayPanel: resolve('src/renderer/trayPanel.html')

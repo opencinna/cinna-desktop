@@ -57,8 +57,8 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 ### Pasting files or an image
 
 1. The user pastes into the composer's text box (Cmd/Ctrl+V or the Edit menu) while it can take files — the same condition as a drop: the **Attach files** item would show and this is not the new-chat screen waiting for its first reply to start; in an active chat a running turn takes files too, and they go once it ends (see [Pending Messages](../pending_messages/pending_messages.md)).
-2. Plain text pastes natively, untouched. The composer looks at the clipboard's types first and only claims the paste when it carries files.
-3. **Files copied in Finder / Explorer attach** — every file of a multi-file copy on macOS, a `text/uri-list` on Linux, one file on Windows. The file's own icon, which the clipboard also carries as an image, is ignored: the user copied the file, not its icon.
+2. Plain text pastes natively, untouched. The composer looks at the clipboard's types first and only claims the paste when it carries files. The one paste it holds back for a moment is a clipboard with both files and text (see below).
+3. **Files copied in Finder / Explorer attach** — every file of a multi-file copy, read from the clipboard's `text/uri-list` on every platform (probed on macOS; Windows is per Electron's documentation and unprobed). The file's own icon, which the clipboard also carries as an image, is ignored: the user copied the file, not its icon.
 4. **An image with no file behind it attaches as a PNG** named like a macOS screenshot, `Pasted image 2026-09-30 at 14.05.33.png`; a second paste in the same second gets ` (2)`.
 5. **A copy from Excel, Word or a web page pastes as text.** Those put a picture of the selection on the clipboard beside its text; the text wins over a picture of itself.
 6. From there the flow matches a drop — active chats ingest immediately, the new-chat screen holds the files as pending — and focus returns to the composer.
@@ -116,12 +116,12 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 
 ### Paste
 
-- **The decision is made inside the paste event, from the clipboard's types.** Deferring it would mean cancelling the native paste and re-inserting text by hand, losing undo, the selection and the input's own handling of the paste.
+- **The decision is made inside the paste event, from the clipboard's types, wherever the types are enough.** Cancelling the native paste and re-inserting text by hand loses undo, the selection and the input's own handling of the paste, so it is done only for the one case the types cannot settle.
   - No `Files` type: text, and main is not asked.
   - `Files` and no `text/plain`: files — a screenshot, a browser image.
-  - Both: a Finder copy (the file plus its name) and an Excel or Word copy (the text plus a picture of it) look identical here, so the renderer asks main, synchronously, whether the clipboard references files. References attach; otherwise the text pastes.
+  - Both: a Finder copy (the file plus its name) and an Excel or Word copy (the text plus a picture of it) look identical here, so the composer cancels the native paste, keeps the paste event's own text, and asks main asynchronously whether the clipboard references files (Electron 44 made the clipboard asynchronous, which ended the earlier synchronous answer inside the event). References attach; otherwise the held text goes in as the native paste would have: a chip when long, else at the caret through `insertText`, so Cmd+Z still undoes it. Nothing is shown while main answers. **The answer is dropped, not applied, when the composer moved on meanwhile**: a send started, another chat opened, or focus left the box. A late paste landing in an emptied composer, or stealing focus back, is worse than a lost paste.
 - **File references win over an image.** Main reads the references first and reads the image only when there are none.
-- **Main reads the clipboard, not the renderer.** The renderer's clipboard gives it no paths; main parses the platform formats (macOS `NSFilenamesPboardType`, then `public.file-url`; Linux `text/uri-list`; Windows `FileNameW`, first file only) and returns absolute paths already in the path guard.
+- **Main reads the clipboard, not the renderer.** The renderer's clipboard gives it no paths; main parses the clipboard's `text/uri-list` (the one format Electron maps every platform's file references to; an Excel-style copy has none) and returns absolute paths already in the path guard. An image is read as `image/png`, else converted from the first other `image/*` type (JPEG decodes; TIFF does not, though a TIFF-only macOS pasteboard already reads as PNG).
 - **Only regular files attach.** Each reference is `stat`ed; folders and vanished paths are dropped, and a copy that leaves none is refused.
 - **Pasted images are temporary.** `<userData>/tmp/pasted/` is created `0700`, each PNG `0600` and never over an earlier one, and the whole folder is removed at every start (not awaited; a failure only costs disk space). Ingest copies or uploads the bytes, so a sent image does not depend on the file surviving.
 - **A paste while an upload is running waits its turn.** Paths dropped or pasted during an upload queue per draft and upload together as soon as it ends, into the same draft; two quick pastes both attach. A second `[+]` picker open during an upload is still ignored. Clearing the draft drops the queue.
@@ -225,8 +225,10 @@ Send → A2A:
     → buildSendParams(..., { metadata: { cinna_file_ids } })
 
 Paste (either screen):
-  ChatInput onPaste → pasteIntent(clipboardData.types, files:clipboard-has-file-refs [sync, only when Files + text])
+  ChatInput onPaste → pasteIntent(clipboardData.types)
     → 'text' → native paste
+    → 'ask' (Files + text) → paste cancelled, text held → files:clipboard-has-file-refs [async]
+         → refs: as 'files'; none: the held text goes in; dropped if send / chat switch / focus moved
     → 'files' → files:paste-from-clipboard
        → clipboard file references → stat, regular files only
          or clipboard image → PNG under <userData>/tmp/pasted/

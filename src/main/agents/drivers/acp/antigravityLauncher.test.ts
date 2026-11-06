@@ -101,13 +101,23 @@ describe('Antigravity launcher plan', () => {
     // A native folder keeps every built-in its user has but the subagent
     // family, whose work Cinna cannot show. Mutation: drop the native filter
     // and the model is offered `invoke_subagent` again; name `schedule` too
-    // and the user's own scheduler goes with it.
-    expect(mac.session).toEqual({ mcpServers: [], meta: { agy: { disabledTools: ['start_subagent'] } } })
+    // and the user's own scheduler goes with it. Both spellings of the
+    // subagent filter: `start_subagent` is 1.4.5's deprecated alias.
+    expect(mac.session).toEqual({ mcpServers: [], meta: { agy: { disabledTools: ['invoke_subagent', 'start_subagent'] } } })
     expect(ANTIGRAVITY_NATIVE_DISABLED_TOOLS.every((name) => ANTIGRAVITY_FILTER_TOOLS.includes(name))).toBe(true)
     expect(mac.init.clientCapabilities).toEqual({})
     const linux = await createAntigravityLauncher(deps({ platform: 'linux' })).plan(contexts(folder).native)
     if (isRefusal(linux)) throw new Error(linux.error)
     expect(linux.spec.args).toEqual(['--uid='])
+  })
+
+  it('names the subagent filter in both spellings wherever it names it', () => {
+    // 1.4.5's enum value is `invoke_subagent`; `start_subagent` is its
+    // deprecated alias. Either alone works today; a release that drops one
+    // spelling must not bring the engine's own subagents back.
+    for (const list of [ANTIGRAVITY_FILTER_TOOLS, ANTIGRAVITY_ISOLATED_DISABLED_TOOLS, ANTIGRAVITY_NATIVE_DISABLED_TOOLS]) {
+      expect(list).toEqual(expect.arrayContaining(['invoke_subagent', 'start_subagent']))
+    }
   })
 
   it('gives an isolated folder its own home inside the folder, and disables the built-ins Cinna owns', async () => {
@@ -121,7 +131,7 @@ describe('Antigravity launcher plan', () => {
     expect(readFileSync(join(home, '.gitignore'), 'utf8')).toBe('*\n')
     // Mutation: name the declared functions (`send_message`, `invoke_subagent`…)
     // and the server rejects them, so a sealed folder keeps its own subagents.
-    expect(plan.session.meta).toEqual({ agy: { disabledTools: ['schedule', 'start_subagent'] } })
+    expect(plan.session.meta).toEqual({ agy: { disabledTools: ['invoke_subagent', 'schedule', 'start_subagent'] } })
     expect(ANTIGRAVITY_ISOLATED_DISABLED_TOOLS.every((name) => ANTIGRAVITY_FILTER_TOOLS.includes(name))).toBe(true)
   })
 
@@ -300,14 +310,15 @@ describe('the Antigravity chat policy', () => {
     expect(restricted.session.meta).toEqual({ agy: {
       enabledTools: ['view_file'],
       // The server's filter names, not the declared function names, which it
-      // rejects: `start_subagent` (not `send_message`, `invoke_subagent`…),
-      // `create_file` / `edit_file` (not `write_to_file`…).
+      // rejects: `invoke_subagent` and its alias `start_subagent` (not
+      // `send_message`, `define_subagent`…), `create_file` / `edit_file` (not
+      // `write_to_file`…).
       disabledTools: [
-        'ask_question', 'create_file', 'edit_file', 'find_file', 'finish', 'generate_image', 'list_directory',
+        'ask_question', 'create_file', 'edit_file', 'find_file', 'finish', 'generate_image', 'invoke_subagent', 'list_directory',
         'read_url_content', 'run_command', 'schedule', 'search_directory', 'search_web', 'start_subagent'
       ]
     } })
-    expect(ANTIGRAVITY_BUILTIN_TOOLS).toHaveLength(14)
+    expect(ANTIGRAVITY_BUILTIN_TOOLS).toHaveLength(15)
     expect(restricted.spec).toBe(plan.spec)
   })
 })

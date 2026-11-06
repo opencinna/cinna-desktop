@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Github, Globe } from 'lucide-react'
+import { GitBranch, Globe } from 'lucide-react'
 import { isForceOnboardingArmed, setForceOnboarding } from '../../constants/onboarding'
 import { SettingsCard, SettingsRows, SettingsSection, SettingsToggleRow } from './SettingsLayout'
 
@@ -32,7 +32,7 @@ export function DevelopmentSettingsSection(): React.JSX.Element {
               rel="noreferrer noopener"
               className="flex items-center gap-2 px-3 py-2 rounded-md text-[14px] text-[var(--color-text)] bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-hover)] border border-[var(--color-border)] transition-colors"
             >
-              <Github size={14} className="text-[var(--color-text-muted)]" />
+              <GitBranch size={14} className="text-[var(--color-text-muted)]" />
               <span className="font-mono">{REPO_URL}</span>
             </a>
             <a

@@ -1,4 +1,4 @@
-import { createServer, type ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { BetaManagedAgentsStreamSessionEvents as ManagedEvent } from '@anthropic-ai/sdk/resources/beta/sessions/events'
 
@@ -20,7 +20,14 @@ interface SentEvent { type: string; [key: string]: unknown }
 export interface ManagedRequest { method: string; path: string; workspace?: string; key?: string; body?: Record<string, unknown> & { events?: SentEvent[] } }
 export interface ManagedSessionFixture { id: string; history: ManagedEvent[]; streams: Set<ServerResponse>; turns: number; uncertain: boolean; held: { res: ServerResponse; acknowledgment: unknown }[] }
 const text = (id: string, value: string): ManagedEvent => ({ type: 'agent.message', id, processed_at: STAMP, content: [{ type: 'text', text: value }] })
-const idle = (id: string, reason: 'end_turn' | 'budget_reached' = 'end_turn'): ManagedEvent => ({ type: 'session.status_idle', id, processed_at: STAMP, stop_reason: { type: reason } })
+const idle = (id: string, reason: 'end_turn' | 'budget_reached' = 'end_turn'): ManagedEvent => ({ type: 'session.status_idle', id, processed_at: STAMP, stop_reason: { type: reason }, stop_details: null })
+
+/** `@anthropic-ai/sdk` 1.x sends the key as `Authorization: Bearer`; an `X-Api-Key` override still counts. */
+function requestKey(req: IncomingMessage): string | undefined {
+  const apiKey = req.headers['x-api-key']
+  if (typeof apiKey === 'string' && apiKey) return apiKey
+  return /^Bearer (.+)$/i.exec(req.headers.authorization ?? '')?.[1]
+}
 
 /** Real account discovery + Managed session HTTP/SSE. No model inference or app IPC is replaced. */
 export async function serveManaged() {
@@ -40,7 +47,7 @@ export async function serveManaged() {
   const environment = { id: MANAGED_ENVIRONMENT, name: 'Checklist workspace' }
   const server = createServer((req, res) => {
     const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname
-    const row: ManagedRequest = { method: req.method ?? 'GET', path, key: req.headers['x-api-key'] as string | undefined,
+    const row: ManagedRequest = { method: req.method ?? 'GET', path, key: requestKey(req),
       workspace: req.headers['anthropic-workspace-id'] as string | undefined }
     requests.push(row)
     if (req.method === 'GET' && ['/v1/agents', '/v1/environments'].includes(path)) {
@@ -84,7 +91,7 @@ export async function serveManaged() {
           const toolId = `${session.id}-permission`
           emit(session, text(`${id}-before`, BEFORE_PERMISSION), { type: 'agent.tool_use', id: toolId, processed_at: STAMP,
             name: 'bash', input: { command: 'printf checklist-reviewed' }, evaluated_permission: 'ask' },
-          { type: 'session.status_idle', id: `${id}-waiting`, processed_at: STAMP, stop_reason: { type: 'requires_action', event_ids: [toolId] } })
+          { type: 'session.status_idle', id: `${id}-waiting`, processed_at: STAMP, stop_reason: { type: 'requires_action', event_ids: [toolId] }, stop_details: null })
         } else if (prompt === SECOND_PROMPT) emit(session, text(`${id}-answer`, SECOND_ANSWER), idle(`${id}-done`))
         else if (prompt === BUDGET_PROMPT) emit(session, text(`${id}-answer`, BUDGET_ANSWER), idle(`${id}-budget`, 'budget_reached'))
         else { unexpected.push(`message:${prompt}`); emit(session, idle(`${id}-unexpected`)) }

@@ -181,98 +181,118 @@ describe('checkClipboardOnce', () => {
   /** Every log entry, flattened, so a test can ask whether a string leaked. */
   const logged = (): string => JSON.stringify(getLogEntries())
 
-  it('reads the clipboard once per process', () => {
+  it('reads the clipboard once per process', async () => {
     const source = vi.fn(() => 'nothing to see')
     connectIntentService.installClipboardSource(source)
-    connectIntentService.checkClipboardOnce()
-    connectIntentService.checkClipboardOnce()
+    await connectIntentService.checkClipboardOnce()
+    await connectIntentService.checkClipboardOnce()
     expect(source).toHaveBeenCalledTimes(1)
   })
 
-  it('does not read again even after the first read found a link and it was consumed', () => {
+  it('does not read again even after the first read found a link and it was consumed', async () => {
     const source = vi.fn(() => LINK)
     connectIntentService.installClipboardSource(source)
-    expect(connectIntentService.checkClipboardOnce()?.serverUrl).toBe('https://cinna.example.com')
+    expect((await connectIntentService.checkClipboardOnce())?.serverUrl).toBe('https://cinna.example.com')
     connectIntentService.consume()
-    expect(connectIntentService.checkClipboardOnce()).toBeNull()
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
     expect(source).toHaveBeenCalledTimes(1)
   })
 
-  it('ignores text that is not a cinna:// link, and does not log it', () => {
+  it('ignores text that is not a cinna:// link, and does not log it', async () => {
     const secret = 'sk-ant-api03-my-private-clipboard-text'
     connectIntentService.installClipboardSource(() => secret)
-    expect(connectIntentService.checkClipboardOnce()).toBeNull()
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
     expect(connectIntentService.getPending()).toBeNull()
     expect(logged()).not.toContain(secret)
     expect(logged()).not.toContain('my-private')
   })
 
-  it('ignores a cinna:// text that is not a connect link, without logging its action', () => {
+  it('ignores a cinna:// text that is not a connect link, without logging its action', async () => {
     connectIntentService.installClipboardSource(() => 'cinna://my-private-token-123?x=1')
-    expect(connectIntentService.checkClipboardOnce()).toBeNull()
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
     expect(logged()).not.toContain('my-private-token')
   })
 
   it.each(['cinna:///connect?server=https://cinna.example.com', 'CINNA://Connect/?server=https://cinna.example.com'])(
     'still accepts the other spelling %s',
-    (text) => {
+    async (text) => {
       connectIntentService.installClipboardSource(() => text)
-      expect(connectIntentService.checkClipboardOnce()?.serverUrl).toBe('https://cinna.example.com')
+      expect((await connectIntentService.checkClipboardOnce())?.serverUrl).toBe('https://cinna.example.com')
     }
   )
 
-  it('ignores an oversized cinna:// text without parsing or logging it', () => {
+  it('ignores an oversized cinna:// text without parsing or logging it', async () => {
     const huge = `${LINK}&pad=${'x'.repeat(4000)}`
     connectIntentService.installClipboardSource(() => huge)
-    expect(connectIntentService.checkClipboardOnce()).toBeNull()
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
     expect(logged()).not.toContain('xxxxxxxx')
     // The pre-filter, not the parser, refused it: the parser logs a warning.
     expect(getLogEntries().filter((e) => e.level === 'warn')).toHaveLength(0)
   })
 
-  it('buffers a valid link from the clipboard, case-insensitively and trimmed, without pushing it', () => {
+  it('buffers a valid link from the clipboard, case-insensitively and trimmed, without pushing it', async () => {
     connectIntentService.installClipboardSource(() => `  CINNA://connect?server=https://cinna.example.com\n`)
-    const intent = connectIntentService.checkClipboardOnce()
+    const intent = await connectIntentService.checkClipboardOnce()
     expect(intent?.serverUrl).toBe('https://cinna.example.com')
     expect(connectIntentService.getPending()).toEqual(intent)
     expect(send).not.toHaveBeenCalled()
     expect(getLogEntries().some((e) => JSON.stringify(e.data ?? null).includes('"source":"clipboard"'))).toBe(true)
   })
 
-  it('a pushed delivery does reach the window spy, so the no-push assertion above means something', () => {
+  it('a pushed delivery does reach the window spy, so the no-push assertion above means something', async () => {
     connectIntentService.deliver(LINK, 'open-url')
     expect(send).toHaveBeenCalledWith(CONNECT_INTENT_CHANNEL, expect.objectContaining({ serverUrl: 'https://cinna.example.com' }))
   })
 
   // Null rather than the clicked link: the renderer consumes a late answer, and
   // a clicked link returned here would be consumed with it.
-  it('does not read over a pending intent, and does not return it', () => {
+  it('does not read over a pending intent, and does not return it', async () => {
     connectIntentService.deliver('cinna://connect?server=https://clicked.example', 'open-url')
     const source = vi.fn(() => LINK)
     connectIntentService.installClipboardSource(source)
-    expect(connectIntentService.checkClipboardOnce()).toBeNull()
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
     expect(source).not.toHaveBeenCalled()
     expect(connectIntentService.getPending()?.serverUrl).toBe('https://clicked.example')
   })
 
-  it('never reads without a source (the E2E sandbox without its seam)', () => {
-    expect(connectIntentService.checkClipboardOnce()).toBeNull()
-  })
-
-  it('returns null when the source throws, and logs only the failure', () => {
-    connectIntentService.installClipboardSource(() => {
-      throw new Error('pasteboard unavailable')
-    })
-    expect(connectIntentService.checkClipboardOnce()).toBeNull()
+  // Electron 44+ reads the pasteboard asynchronously.
+  it('reads an asynchronous source, and a rejected read counts as a throw', async () => {
+    connectIntentService.installClipboardSource(async () => LINK)
+    expect((await connectIntentService.checkClipboardOnce())?.serverUrl).toBe('https://cinna.example.com')
+    connectIntentService.reset()
+    connectIntentService.installClipboardSource(() => Promise.reject(new Error('pasteboard unavailable')))
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
     expect(logged()).toContain('pasteboard unavailable')
   })
 
-  it('reset forgets the source and the once flag', () => {
+  it('lets a link clicked while the read is in flight win over the clipboard', async () => {
+    let answer: (text: string) => void = () => {}
+    connectIntentService.installClipboardSource(() => new Promise<string>((resolve) => (answer = resolve)))
+    const check = connectIntentService.checkClipboardOnce()
+    connectIntentService.deliver('cinna://connect?server=https://clicked.example', 'open-url')
+    answer(LINK)
+    expect(await check).toBeNull()
+    expect(connectIntentService.getPending()?.serverUrl).toBe('https://clicked.example')
+  })
+
+  it('never reads without a source (the E2E sandbox without its seam)', async () => {
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
+  })
+
+  it('returns null when the source throws, and logs only the failure', async () => {
+    connectIntentService.installClipboardSource(() => {
+      throw new Error('pasteboard unavailable')
+    })
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
+    expect(logged()).toContain('pasteboard unavailable')
+  })
+
+  it('reset forgets the source and the once flag', async () => {
     const first = vi.fn(() => '')
     connectIntentService.installClipboardSource(first)
-    connectIntentService.checkClipboardOnce()
+    await connectIntentService.checkClipboardOnce()
     connectIntentService.reset()
-    expect(connectIntentService.checkClipboardOnce()).toBeNull()
+    expect(await connectIntentService.checkClipboardOnce()).toBeNull()
     expect(first).toHaveBeenCalledTimes(1)
   })
 })

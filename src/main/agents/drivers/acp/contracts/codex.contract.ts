@@ -172,9 +172,9 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
   /* -------------------------------------------------------------------- auth */
   {
     id: 'codex.auth.login-status', area: 'auth', surface: 'CLI', name: 'login status',
-    expectation: 'With no login under `HOME`/`CODEX_HOME` it prints a line `Not logged in` and exits non-zero; the login follows the home directory, not the binary.',
+    expectation: 'With no login under `HOME`/`CODEX_HOME` it prints a line `Not logged in` and exits non-zero; the login follows the home directory, not the binary. With an API key in that home’s `auth.json` it exits 0 and the parser reads an API-key login — 0.167.0 prints `API key configured - sk-…` where 0.162.1 printed `Logged in using an API key - sk-…`.',
     owners: ['src/main/agents/drivers/acp/codexAuth.ts#parseCodexAuthStatus', 'src/main/agents/drivers/acp/codexEnv.ts#buildCodexEnv'],
-    feature: 'Readiness cannot tell a logged-out machine, so a turn fails mid-chat instead of being refused with the `codex login` remedy.',
+    feature: 'Readiness cannot tell a logged-out machine, so a turn fails mid-chat instead of being refused with the `codex login` remedy; or an API-key login reads as unknown, and the runtime card cannot say the user is logged in.',
     flow: { steps: ['A'], note: 'the login probe before the first turn' }
   },
 
@@ -244,9 +244,9 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'codex.session.silent-updates', area: 'session lifecycle', surface: 'ACP field', name: 'notice / compaction_update',
-    expectation: 'A turn that compacts (a model change) sends neither `notice` nor `compaction_update` — the adapter sends them only to a client declaring `session.notices` / `session.compaction`, which the launcher does not. As under 1.11.0, the compaction arrives as a `tool_call` `kind: "think"`, title `Compact conversation`, completed within the turn, and the CLI’s warning as agent text `Warning: …` ahead of the answer.',
+    expectation: 'A turn that compacts (a model change) sends neither `notice` nor `compaction_update` — the adapter sends them only to a client declaring `session.notices` / `session.compaction`, which the launcher does not. As under 1.11.0, the compaction arrives as a `tool_call` `kind: "think"`, title `Compact conversation`, completed within the turn, and the answer as the only agent text: 0.162.1 put its long-thread warning (`Warning: …`) ahead of the answer as agent text; 0.167.0 no longer has that warning (its text is gone from the binary).',
     owners: ['src/main/agents/drivers/acp/acpMessages.ts#compaction_'],
-    feature: 'A Codex model switch shows a "Compact conversation" step and the CLI’s long-thread warning in the reply, as before the bump. Were `notice` or `compaction_update` sent unasked, the desktop would drop them silently (its default for an unknown update), and the step or the warning would vanish.',
+    feature: 'A Codex model switch shows a "Compact conversation" step, and the reply is the answer alone. Were `notice` or `compaction_update` sent unasked, the desktop would drop them silently (its default for an unknown update), and the step would vanish.',
     flow: { steps: ['none'], note: 'no step changes the model' }
   },
   {
@@ -345,7 +345,7 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
   /* -------------------------------------------------- restricted chat policy */
   {
     id: 'codex.policy.feature-flags', area: 'restricted chat policy', surface: 'CLI', name: 'features list',
-    expectation: 'Every feature flag the policy disables is a flag this CLI recognises.',
+    expectation: 'Every feature flag the policy disables is a flag this CLI recognises — among them two that are on by default at 0.167.0 and grant no tool of their own: `cli_daybreak` (a thread may run as Daybreak, a model and eligibility switch the policy never verified) and `plugin_discovery_prefetch` (plugin discovery fetched at app-server start, although `plugins` is off).',
     owners: [`${POLICY}#FEATURES_DISABLED`],
     feature: 'A renamed flag is silently ignored and its native tool (shell, patch, browser, sub-agents) comes back into "no tools" chats.',
     flow: { steps: ['A'] }

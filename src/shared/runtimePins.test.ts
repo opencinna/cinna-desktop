@@ -117,14 +117,14 @@ describe('runtime pins', () => {
     // The wrapper is a POSIX shell script: no Windows row may creep in.
     expect(Object.keys(RUNTIME_PINS.git.assets).sort()).toEqual(Object.keys(plats).sort())
     for (const [platform, asset] of Object.entries(RUNTIME_PINS.git.assets)) {
-      expect(asset.file, platform).toBe(`dugite-native-v${RUNTIME_PINS.git.cli}-4098283-${plats[platform]}.tar.gz`)
+      expect(asset.file, platform).toBe(`dugite-native-v${RUNTIME_PINS.git.cli}-a44aeca-${plats[platform]}.tar.gz`)
       expect(asset.url, platform).toBe(`${release}/${asset.file}`)
       // An archive holding a tree, not an executable to move into place.
       expect(asset.format, platform).toBeUndefined()
       expect(asset.size, platform).toBeGreaterThan(10 * 1024 * 1024)
     }
     expect(new Set(Object.values(RUNTIME_PINS.git.assets).map((asset) => asset.sha256)).size).toBe(4)
-    expect(RUNTIME_PINS.git.release).toBe(`v${RUNTIME_PINS.git.cli}-4`)
+    expect(RUNTIME_PINS.git.release).toBe(`v${RUNTIME_PINS.git.cli}-2`)
     expect(RUNTIME_PINS.git.versionOutput).toBe(`git version ${RUNTIME_PINS.git.cli}`)
   })
 
@@ -145,8 +145,9 @@ describe('runtime pins', () => {
       expect(asset.companions, platform).toBeUndefined()
       // The server will not start without its harness beside it, from the same zip.
       expect(asset.siblings, platform).toEqual(['localharness_external'])
-      // Set, and above the download guard's 200 MB default for Linux.
-      expect(asset.size, platform).toBeGreaterThan(100 * 1024 * 1024)
+      // Set, and a whole server: the 1.4.5 macOS zips are ~93–99 MiB, the Linux
+      // ones above the download guard's 200 MB default.
+      expect(asset.size, platform).toBeGreaterThan(64 * 1024 * 1024)
     }
     expect(new Set(Object.values(RUNTIME_PINS.antigravity.assets).map((asset) => asset.sha256)).size).toBe(4)
   })

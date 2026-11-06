@@ -100,7 +100,9 @@ function resultOf(result: ManagedRunResult, aborted: boolean): RecoveryResult {
     return rows.length ? { kind: 'collected', outcome, rows } : { kind: 'kept', outcome }
   }
   if (result.error) {
-    if (!result.parts.length) {
+    // A refusal is the turn's settled ending even with nothing streamed: its
+    // error reaches the chat as a live turn's does.
+    if (!result.parts.length && !result.refused) {
       logger.warn('a Managed turn could not be followed', { error: result.error.message })
       return { kind: 'interrupted' }
     }

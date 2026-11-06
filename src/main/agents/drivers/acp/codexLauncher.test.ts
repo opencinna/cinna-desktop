@@ -250,6 +250,9 @@ describe('Codex CLI authentication', () => {
     expect(parseCodexAuthStatus('Logged in using ChatGPT')).toEqual({ state: 'logged_in', method: 'chatgpt' })
     expect(parseCodexAuthStatus('Logged in using an API key - sk-secret')).toEqual({ state: 'logged_in', method: 'api_key' })
     expect(JSON.stringify(parseCodexAuthStatus('Logged in using an API key - sk-secret'))).not.toContain('sk-secret')
+    // 0.167.0's wording for the same login.
+    expect(parseCodexAuthStatus('API key configured - sk-secret\nAuthentication is checked when you send a request.\n')).toEqual({ state: 'logged_in', method: 'api_key' })
+    expect(JSON.stringify(parseCodexAuthStatus('API key configured - sk-secret'))).not.toContain('sk-secret')
     expect(parseCodexAuthStatus('Logged in with something new')).toEqual({ state: 'logged_in' })
     expect(parseCodexAuthStatus('Not logged in\n')).toEqual({ state: 'logged_out' })
     expect(parseCodexAuthStatus('error: failed to check')).toEqual({ state: 'unknown' })

@@ -43,6 +43,11 @@ export type ManagedRunResult = RunResult & {
    * checkpoint alone: the turn may still be running there.
    */
   unreachable?: ManagedUnreachable
+  /**
+   * Set when the session ended the turn on a refusal: `error` is the turn's
+   * own settled answer, not a failure to follow it.
+   */
+  refused?: true
 }
 export type ManagedUnreachable = 'network' | 'auth'
 /** A follow's input: a turn's, minus the message it does not send. */
@@ -203,6 +208,13 @@ async function managedSession(
     return { text, parts, notices: [], contextId: sessionId ?? undefined, taskState: reason === 'canceled' ? 'canceled' : 'completed', stopReason: reason }
   }
 
+  /** A turn the session ended on a refusal: settled like a finished one, reported as failed. */
+  const refused = (message: string): ManagedRunResult => {
+    if (reducer.budgetPaused) budget = true
+    if (workMayExist) save(budget ? 'budget' : 'ready')
+    return { text, parts, notices: [], contextId: sessionId ?? undefined, error: { message, raw: message }, refused: true }
+  }
+
   const permission = (tool: ManagedPermissionTool): Promise<void> => {
     const existing = permissionBarriers.get(tool.id)
     if (existing) return existing
@@ -272,6 +284,7 @@ async function managedSession(
         case 'tool_result': emitPart({ kind: 'tool_result', text: JSON.stringify(effect.content ?? []), toolId: effect.id, ...(effect.failed ? { toolStream: 'stderr' } : {}) }); break
         case 'permissions': await Promise.all(effect.tools.map(permission)); break
         case 'terminal': return result(effect.reason)
+        case 'refused': return refused(effect.message)
       }
     }
     return null

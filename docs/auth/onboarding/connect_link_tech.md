@@ -61,7 +61,7 @@ None. The intent is process memory in main and store state in the renderer; noth
 
 `installClipboardSource(fn | null)` — set once by `index.ts`; null means never read. `reset()` clears it.
 
-`checkClipboardOnce()` — sets its once flag **first**, so a throwing or empty read still uses the one read. Returns null without reading when an intent is pending or no source is installed. Reads, requires a string, trims, and requires `/^cinna:\/\/\/?connect([/?#]|$)/i` and length ≤ `MAX_URL_LENGTH` before anything is parsed or logged; then `deliver(text, 'clipboard', { push: false })`. `deliver`'s `push: false` option buffers and returns before the OAuth-hold and `flush()` steps.
+`checkClipboardOnce()` — async since Electron 44 made the clipboard asynchronous (the source may return a string or a Promise; `connect:check-clipboard` awaits it). Sets its once flag **first**, so a throwing or empty read still uses the one read. Returns null without reading when an intent is pending or no source is installed, and null after the read if a link arrived while it was in flight (the clicked link wins). Reads, requires a string, trims, and requires `/^cinna:\/\/\/?connect([/?#]|$)/i` and length ≤ `MAX_URL_LENGTH` before anything is parsed or logged; then `deliver(text, 'clipboard', { push: false })`. `deliver`'s `push: false` option buffers and returns before the OAuth-hold and `flush()` steps.
 
 `consume(receivedAt?)` — with an argument, a no-op unless `pending.receivedAt` equals it.
 

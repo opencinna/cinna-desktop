@@ -194,10 +194,10 @@ describe('LocalAgentsSettingsSection', () => {
     })
 
     it('names the managed pinned version once it is installed, muted and with no action', () => {
-      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.162.1/codex', source: 'managed', version: 'codex-cli 0.162.1' }
+      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.167.0/codex', source: 'managed', version: 'codex-cli 0.167.0' }
       render(<LocalAgentsSettingsSection />)
 
-      const status = screen.getByText('Codex 0.162.1 (managed) — runs on your Codex login.')
+      const status = screen.getByText('Codex 0.167.0 (managed) — runs on your Codex login.')
       expect(status.className).toContain('text-[var(--color-text-muted)]')
       expect(screen.queryByRole('button', { name: /Try again|Install now|Installing/ })).toBeNull()
       // The OpenCode binary is not a fact about a machine running Codex (rule 9).
@@ -214,15 +214,15 @@ describe('LocalAgentsSettingsSection', () => {
 
     it('says the same on the Codex button as in the line under it', () => {
       // Mutation: drop `codexBinary` from the picker and the button reads
-      // `0.162.1 managed` directly above "Unverified Codex 0.156.0".
+      // `0.167.0 managed` directly above "Unverified Codex 0.156.0".
       codexBinary = { state: 'ready', path: '/opt/codex', source: 'configured', version: 'codex-cli 0.156.0' }
       const view = render(<LocalAgentsSettingsSection />)
       const button = screen.getByRole('button', { name: /^Codex/ })
       expect(button.textContent).toBe('Codex0.156.0 unverified')
 
-      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.162.1/codex', source: 'managed', version: 'codex-cli 0.162.1' }
+      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.167.0/codex', source: 'managed', version: 'codex-cli 0.167.0' }
       view.rerender(<LocalAgentsSettingsSection />)
-      expect(screen.getByRole('button', { name: /^Codex/ }).textContent).toBe('Codex0.162.1 managed')
+      expect(screen.getByRole('button', { name: /^Codex/ }).textContent).toBe('Codex0.167.0 managed')
     })
 
     it('leaves a failed install by itself when a saved Codex Path resolves, in the same one-line slot', () => {
@@ -254,7 +254,7 @@ describe('LocalAgentsSettingsSection', () => {
       codexBinary = { state: 'unresolved', assetBytes: 90 * 1024 * 1024 + 700_000 }
       render(<LocalAgentsSettingsSection />)
 
-      const status = screen.getByText('Codex 0.162.1 installs on first use, about 90 MB.')
+      const status = screen.getByText('Codex 0.167.0 installs on first use, about 90 MB.')
       expect(status.className).toContain('text-[var(--color-text-muted)]')
       // The action is on the card now, not in the line.
       expect(screen.queryByRole('button', { name: 'Install now' })).toBeNull()
@@ -268,7 +268,7 @@ describe('LocalAgentsSettingsSection', () => {
       codexBinary = { state: 'resolving', received: 45 * 1024 * 1024, total: 90 * 1024 * 1024 }
       render(<LocalAgentsSettingsSection />)
 
-      const status = screen.getByText('Downloading Codex 0.162.1 — 45 of 90 MB.')
+      const status = screen.getByText('Downloading Codex 0.167.0 — 45 of 90 MB.')
       // The slot that holds every other state, so a moving number moves nothing.
       expect(status.className).toContain('truncate')
       expect(status.parentElement?.className).toContain('min-h-[1lh]')
@@ -292,7 +292,7 @@ describe('LocalAgentsSettingsSection', () => {
     })
 
     it('a signed-out Codex: Log in on the card, the line says so, and the chip starts the setup without an install', async () => {
-      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.162.1/codex', source: 'managed', version: 'codex-cli 0.162.1' }
+      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.167.0/codex', source: 'managed', version: 'codex-cli 0.167.0' }
       codexAuth = { state: 'logged_out' }
       render(<LocalAgentsSettingsSection />)
       expect(screen.getByText('Codex is not logged in.').className).toContain('text-[var(--color-danger)]')
@@ -301,7 +301,7 @@ describe('LocalAgentsSettingsSection', () => {
     })
 
     it('a visit never starts a setup, and an unknown login offers no Log in', async () => {
-      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.162.1/codex', source: 'managed', version: 'codex-cli 0.162.1' }
+      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.167.0/codex', source: 'managed', version: 'codex-cli 0.167.0' }
       codexAuth = { state: 'unknown' }
       render(<LocalAgentsSettingsSection />)
       expect(screen.queryByRole('button', { name: 'Log in' })).toBeNull()
@@ -339,7 +339,7 @@ describe('LocalAgentsSettingsSection', () => {
 
     it('selecting an installed card asks main to check its sign-in, never to install', async () => {
       appSettings = HEALTHY_SETTINGS
-      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.162.1/codex', source: 'managed', version: 'codex-cli 0.162.1' }
+      codexBinary = { state: 'ready', path: '/data/runtimes/codex-0.167.0/codex', source: 'managed', version: 'codex-cli 0.167.0' }
       render(<LocalAgentsSettingsSection />)
       fireEvent.click(screen.getByRole('button', { name: /^Codex/ }))
       expect(setAppSetting).toHaveBeenCalledWith({ key: 'localAgentsDefaultEngine', value: 'codex' })
@@ -348,7 +348,7 @@ describe('LocalAgentsSettingsSection', () => {
   })
 
   describe('with Claude Agent as the default runtime', () => {
-    const MANAGED = { state: 'ready', path: '/data/runtimes/claude-2.1.296/claude', source: 'managed', version: '2.1.296 (Claude Code)' }
+    const MANAGED = { state: 'ready', path: '/data/runtimes/claude-2.1.318/claude', source: 'managed', version: '2.1.318 (Claude Code)' }
     beforeEach(() => {
       appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'claude' }
     })
@@ -358,7 +358,7 @@ describe('LocalAgentsSettingsSection', () => {
       // would simply install Claude Code on is told its agents cannot run.
       claudeBinary = { state: 'unresolved', assetBytes: 215_643_408 }
       render(<LocalAgentsSettingsSection />)
-      const status = screen.getByText('Claude Code 2.1.296 installs on first use, about 215 MB.')
+      const status = screen.getByText('Claude Code 2.1.318 installs on first use, about 215 MB.')
       expect(status.className).toContain('text-[var(--color-text-muted)]')
       expect(status.parentElement!.className).toContain('min-h-[1lh]')
       expect(screen.queryByText(/not found/i)).toBeNull()
@@ -367,9 +367,9 @@ describe('LocalAgentsSettingsSection', () => {
     })
 
     it.each([
-      ['a managed copy', MANAGED, 'Claude Code 2.1.296 (managed) — runs on your Claude login.', 'Claude Agent2.1.296 managed'],
+      ['a managed copy', MANAGED, 'Claude Code 2.1.318 (managed) — runs on your Claude login.', 'Claude Agent2.1.318 managed'],
       ['the user’s install at exactly the pin', { ...MANAGED, source: 'path-pinned', path: '/Users/x/.local/bin/claude' },
-        'Claude Code 2.1.296 — your own install, the tested version.', 'Claude Agent2.1.296 (your install)']
+        'Claude Code 2.1.318 — your own install, the tested version.', 'Claude Agent2.1.318 (your install)']
     ])('says the same on the button as in the line under it: %s', (_label, state, line, button) => {
       claudeBinary = state
       render(<LocalAgentsSettingsSection />)
@@ -382,7 +382,7 @@ describe('LocalAgentsSettingsSection', () => {
     it('shows the 215 MB download in the same one line, with the overlay showing progress rather than an action', () => {
       claudeBinary = { state: 'resolving', received: 107_821_704, total: 215_643_408, assetBytes: 215_643_408 }
       render(<LocalAgentsSettingsSection />)
-      const status = screen.getByText('Downloading Claude Code 2.1.296 — 107 of 215 MB.')
+      const status = screen.getByText('Downloading Claude Code 2.1.318 — 107 of 215 MB.')
       expect(status.parentElement!.className).toContain('min-h-[1lh]')
       expect(screen.getByRole('status').textContent).toBe('Installing 50%')
       expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
@@ -439,7 +439,7 @@ describe('LocalAgentsSettingsSection', () => {
     it('says nothing while the state is still being read', () => {
       claudeBinary = undefined
       render(<LocalAgentsSettingsSection />)
-      expect(screen.queryByText(/Claude Code 2\.1\.296/)).toBeNull()
+      expect(screen.queryByText(/Claude Code 2\.1\.318/)).toBeNull()
     })
   })
 
@@ -483,7 +483,7 @@ describe('LocalAgentsSettingsSection', () => {
 
   it('a cancelled login leaves the line agreeing with the Log in chip', async () => {
     appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'codex' }
-    codexBinary = { state: 'ready', path: '/c', source: 'managed', version: 'codex-cli 0.162.1' }
+    codexBinary = { state: 'ready', path: '/c', source: 'managed', version: 'codex-cli 0.167.0' }
     codexAuth = { state: 'logged_out' }
     runtimeSetup.mockResolvedValueOnce({ outcome: 'cancelled' } as never)
     render(<LocalAgentsSettingsSection />)
@@ -496,7 +496,7 @@ describe('LocalAgentsSettingsSection', () => {
 
   it('the green dot only when installed and logged in; an unknown login claims nothing', () => {
     appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'codex' }
-    codexBinary = { state: 'ready', path: '/c', source: 'managed', version: 'codex-cli 0.162.1' }
+    codexBinary = { state: 'ready', path: '/c', source: 'managed', version: 'codex-cli 0.167.0' }
     codexAuth = { state: 'logged_in' }
     const view = render(<LocalAgentsSettingsSection />)
     expect(screen.getByRole('img', { name: 'Ready' })).toBeTruthy()
@@ -536,7 +536,7 @@ describe('LocalAgentsSettingsSection', () => {
 
   it('the end of a setup, seen through the mutation, leaves a failed login in the line', async () => {
     appSettings = { ...HEALTHY_SETTINGS, localAgentsDefaultEngine: 'claude' }
-    claudeBinary = { state: 'ready', path: '/c', source: 'managed', version: '2.1.296 (Claude Code)' }
+    claudeBinary = { state: 'ready', path: '/c', source: 'managed', version: '2.1.318 (Claude Code)' }
     claudeAuth = { state: 'logged_out' }
     runtimeSetup.mockResolvedValueOnce({ outcome: 'login_failed', login: { outcome: 'timeout', command: null } } as never)
     render(<LocalAgentsSettingsSection />)

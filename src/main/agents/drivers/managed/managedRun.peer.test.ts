@@ -204,7 +204,7 @@ describe('Managed run through the official SDK and actual HTTP/SSE', () => {
     const run = start(p)
     await ready(p)
     p.send(user(), message('partial', 'Before budget.'), { type: 'session.thread_status_idle', id: 'child-idle', processed_at: STAMP,
-      agent_name: 'child', session_thread_id: 'sthr_child', stop_reason: { type: 'end_turn' } })
+      agent_name: 'child', session_thread_id: 'sthr_child', stop_reason: { type: 'end_turn' }, stop_details: null })
     await vi.waitFor(() => expect(run.events.some(e => e.type === 'delta' && e.text === 'Before budget.')).toBe(true))
     expect(run.finished).not.toHaveBeenCalled()
     p.send(idle('budget', 'budget_reached'))
@@ -328,6 +328,39 @@ describe('Managed turn start: the saved kickoff and the refusal causes', () => {
     expect(result.error?.message).toContain('in Claude')
     expect(p.sends('user.message')).toHaveLength(0)
     expect(run.binding.save).not.toHaveBeenCalled()
+  })
+
+  it('ends a refused turn as failed, with the session’s reason, and leaves the session ready', async () => {
+    // Mutation: drop the `refusal` case and the turn never ends (the idle
+    // falls through to the events that write nothing).
+    const p = await peer()
+    const run = start(p)
+    await ready(p)
+    p.send(user(), message('partial', 'Let me look.'), { type: 'session.status_idle', id: 'refused', processed_at: STAMP,
+      stop_reason: { type: 'refusal' }, stop_details: { type: 'refusal', category: 'general_harms', explanation: 'The request was declined. ' } })
+    const result = await run.result
+    expect(result).toMatchObject({ text: 'Let me look.', error: { message: 'Claude refused to answer this message (policy: general harms). The request was declined.' } })
+    expect(result.taskState).toBeUndefined()
+    // Settled like a finished turn: nothing interrupted, the session ready for the next message.
+    expect(p.sends('user.interrupt')).toHaveLength(0)
+    expect(run.binding.save).toHaveBeenLastCalledWith({ sessionId: SESSION, state: 'ready' })
+  })
+
+  it('takes a new message after a refused turn', async () => {
+    const p = await peer({ pages: [[user('old'), { type: 'session.status_idle', id: 'old-refused', processed_at: STAMP,
+      stop_reason: { type: 'refusal' }, stop_details: null }]] })
+    const run = start(p, { checkpoint: { sessionId: SESSION, state: 'ready' } })
+    await ready(p)
+    p.send(user(), message('answer', 'Fresh start.'), idle('end'))
+    await expect(run.result).resolves.toMatchObject({ text: 'Fresh start.', stopReason: 'end_turn' })
+  })
+
+  it('names no policy or explanation the refusal did not give', async () => {
+    const p = await peer()
+    const run = start(p)
+    await ready(p)
+    p.send(user(), { type: 'session.status_idle', id: 'refused', processed_at: STAMP, stop_reason: { type: 'refusal' }, stop_details: null })
+    await expect(run.result).resolves.toMatchObject({ text: '', error: { message: 'Claude refused to answer this message.' } })
   })
 
   it('takes a new message after a turn that exhausted its retries', async () => {

@@ -1251,7 +1251,9 @@ describe('a mid-turn message (the steering extension)', () => {
   const LATE_NEW_TURN: FakeAcpScript = {
     ...STEERABLE,
     steer: { delayMs: 900, response: { outcome: 'startedNewTurn' } },
-    prompt: { emit: [chunk('Working.'), { kind: 'delay', ms: 150 }] }
+    // The prompt ends once the message is on the wire, not after a wall-clock
+    // window a loaded run can overshoot before the test sends it.
+    prompt: { emit: [chunk('Working.'), { kind: 'awaitSteer' }] }
   }
 
   it('cancels an unowned turn that arrives after the turn stopped waiting, and leaves a process another turn holds', async () => {
@@ -1260,7 +1262,8 @@ describe('a mid-turn message (the steering extension)', () => {
     const capture = steerCapture()
     const running = w.run({ registerSteer: capture.registerSteer })
     await steerable(w, capture)
-    const late = capture.offered[0]('next')
+    // The offer as it stands now, not the first one made.
+    const late = capture.offered[capture.offered.length - 1]('next')
     await running
     // The next turn on this agent: a retire would wait for it, then kill its process.
     const release = w.pool.hold(AGENT_ID)
@@ -1277,7 +1280,8 @@ describe('a mid-turn message (the steering extension)', () => {
     const capture = steerCapture()
     const running = w.run({ registerSteer: capture.registerSteer })
     await steerable(w, capture)
-    const late = capture.offered[0]('next')
+    // The offer as it stands now, not the first one made.
+    const late = capture.offered[capture.offered.length - 1]('next')
     await running
     expect(await late).toBe('unavailable')
     expect(retire).toHaveBeenCalledWith(AGENT_ID)

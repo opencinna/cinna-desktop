@@ -280,7 +280,12 @@ export function SharePopover({
       if (!result.ok) setError(result.message)
       else {
         done?.()
-        if (result.detail) queryClient.setQueryData<ArtifactsDetailOutcome>(key, { ok: true, detail: result.detail })
+        if (result.detail) {
+          // Typed first: TanStack 5.106's setQueryData rejects an object
+          // literal for a union data type (it checks it against the wrong arm).
+          const next: ArtifactsDetailOutcome = { ok: true, detail: result.detail }
+          queryClient.setQueryData<ArtifactsDetailOutcome>(key, next)
+        }
       }
     } catch (err) {
       setError(unwrapIpcError(err, 'Could not change the sharing.'))

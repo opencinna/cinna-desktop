@@ -182,10 +182,17 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'claude.session.permission-mode-meta-inert', area: 'session lifecycle', surface: '_meta key', name: '_meta.claudeCode.options.permissionMode',
-    expectation: '`permissionMode` in the session options is **ignored**: a session created with `bypassPermissions` there still starts in `default`. `session/set_mode` is the only mechanism.',
+    expectation: '`permissionMode` in the session options is **ignored**: a session created with `bypassPermissions` there starts in the adapter’s own default instead — `auto` from adapter 0.101.0, `default` before it. `session/set_mode` is the only mechanism.',
     owners: [`${LAUNCHERS}#session/set_mode`],
     feature: 'Pinned in both directions. If a release starts honouring it, the `set_mode`-after-every-new-and-load rule can be simplified; until then "simplifying" it hands a folder its own permission mode.',
     flow: { steps: ['none'], note: 'not observable from a chat' }
+  },
+  {
+    id: 'claude.session.prompt-suggestions-off', area: 'session lifecycle', surface: '_meta key', name: '_meta.claudeCode.options.promptSuggestions',
+    expectation: 'The adapter turns prompt suggestions on for every session: after each turn but the first, the CLI sends one more Messages request, a `[SUGGESTION MODE: …]` fork of the conversation. A session created with `promptSuggestions: false` sends none; the same session without it sends one after its second turn (the control).',
+    owners: [`${LAUNCHERS}#promptSuggestions`],
+    feature: 'Every Claude turn would make one more model request that nobody sees — the adapter publishes the predicted prompt only to the JetBrains AIR UI, which the adapter patch says Cinna is not — paid for in tokens and rate limit.',
+    flow: { steps: ['A'], note: 'every chat session passes the option; no step counts requests' }
   },
   {
     id: 'claude.session.model-over-user-settings', area: 'session lifecycle', surface: 'ACP method', name: 'session/set_config_option (model)',

@@ -631,7 +631,9 @@ describe('AnthropicAdapter.listModels', () => {
 
     expect(calls).toHaveLength(2)
     expect(calls[0].method).toBe('GET')
-    expect(calls[0].url).toBe('https://api.anthropic.com/v1/models?beta=true')
+    // SDK 1.x marks the beta route internally (`__qualifiers`), not as `?beta=true`.
+    expect(calls[0].url).toBe('https://api.anthropic.com/v1/models')
+    expect(calls[0].headers.get('authorization')).toBeNull()
     expect(calls[0].headers.get('x-api-key')).toBe(KEY)
     expect(new URL(calls[1].url).searchParams.get('after_id')).toBe('claude-haiku-4-5')
     expect(models).toEqual([

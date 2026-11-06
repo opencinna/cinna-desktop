@@ -108,7 +108,11 @@ it('is never polled, refreshes with every invalidation of the list, and is left 
   // The list beside it is the polled one.
   expect(client.getQueryCache().find({ queryKey: ['chats'], exact: true })!.observers[0].options.refetchInterval).toBe(1_000)
 
-  // What useLiveRunWatch and useReadChatResult do to the list.
+  // What useLiveRunWatch and useReadChatResult do to the list. Main reports
+  // the same rows from here on: otherwise the list's next poll (one second,
+  // easily reached under load) or the invalidation below would read as a
+  // background turn ending, which rightly refreshes the summaries.
+  list.mockResolvedValue(chats.map((row) => ({ ...row, activeRunId: 'run-1' })))
   await act(async () => {
     await client.cancelQueries({ queryKey: ['chats'], exact: true })
     client.setQueryData(['chats'], (rows: typeof chats | undefined) => rows?.map((row) => ({ ...row, activeRunId: 'run-1' })))

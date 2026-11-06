@@ -186,9 +186,12 @@ describe('useSkillInstallLink', () => {
     installOrigin.mockResolvedValue({ origin: 'http://localhost:5173', fromDiscovery: true })
     row(skill({ source: 'catalog', packageId: 'test.erp', packageUuid: 'u1', title: 'ERP lookup', path: '' }))
     await waitFor(() => expect(installOrigin).toHaveBeenCalled())
-    await act(async () => {})
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: LABEL })))
-    expect(writeText).toHaveBeenCalledWith('http://localhost:5173/get/skill/test.erp')
+    // The answer reaches the row a scheduler tick or more after main's call
+    // resolves; click until the copied link is the web app's.
+    await waitFor(async () => {
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: LABEL })))
+      expect(writeText).toHaveBeenLastCalledWith('http://localhost:5173/get/skill/test.erp')
+    })
   })
 
   it('asks main nothing without a package id to link', () => {

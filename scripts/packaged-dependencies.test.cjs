@@ -5,7 +5,7 @@ const { join } = require('node:path')
 const { test } = require('node:test')
 const { spawnSync } = require('node:child_process')
 const { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack } = require('./packaged-dependencies.cjs')
-const { checkEnvironment } = require('./check-packaged-main.cjs')
+const { checkDeadline, checkEnvironment, executableArch } = require('./check-packaged-main.cjs')
 const codexPatch = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 const claudePatch = require('../src/main/agents/drivers/acp/claudeAdapterPatch.json')
 
@@ -234,4 +234,21 @@ test('main check cannot satisfy a missing CommonJS dependency through inherited 
   const isolated = spawnSync(process.execPath, ['-e', source], { cwd: app, env: checkEnvironment(app, host), encoding: 'utf8' })
   assert.equal(isolated.status, 1)
   assert.match(isolated.stderr, /MODULE_NOT_FOUND/)
+})
+
+test('main check waits longer for an executable of another architecture, or as long as the override says', (t) => {
+  const { root } = fixture(t)
+  const header = (bytes) => { const path = join(root, `exe-${bytes.length}-${bytes[4]}-${bytes[18]}`); writeFileSync(path, Buffer.from(bytes)); return path }
+  const machO = (cpu) => { const b = Buffer.alloc(32); b.writeUInt32LE(0xfeedfacf, 0); b.writeUInt32LE(cpu, 4); return [...b] }
+  const elf = (machine) => { const b = Buffer.alloc(32); b.writeUInt32BE(0x7f454c46, 0); b.writeUInt16LE(machine, 18); return [...b] }
+  assert.equal(executableArch(header(machO(0x01000007))), 'x64')
+  assert.equal(executableArch(header(machO(0x0100000c))), 'arm64')
+  assert.equal(executableArch(header(elf(0x3e))), 'x64')
+  assert.equal(executableArch(header(elf(0xb7))), 'arm64')
+  assert.equal(executableArch(join(root, 'missing')), null)
+  assert.equal(checkDeadline('arm64', 'arm64', {}), 45_000)
+  assert.equal(checkDeadline(null, 'arm64', {}), 45_000)
+  assert.equal(checkDeadline('x64', 'arm64', {}), 120_000)
+  assert.equal(checkDeadline('arm64', 'arm64', { CINNA_PACKAGED_MAIN_TIMEOUT_MS: '200000' }), 200_000)
+  assert.equal(checkDeadline('x64', 'arm64', { CINNA_PACKAGED_MAIN_TIMEOUT_MS: 'soon' }), 120_000)
 })

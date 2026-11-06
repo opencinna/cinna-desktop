@@ -25,11 +25,10 @@
   - `downloadToPath({ userId, attachmentId, source, destPath })` — local = `pipeline(createReadStream, createWriteStream)`; cinna = `cinnaFileService.downloadToPath`
   - `assertFileScope(value)` — type-narrows renderer-supplied `'cinna' | 'local'` strings; throws `FileError('invalid_scope')`
 - `src/main/services/fileStore.ts` — `FileStore` interface; `LocalFileStore` (`ingest / read / remove` over `userData/files/<userId>/<chatId>/<uuid><ext>` + `chatFileRepo`); `attachmentToMediaPart(att, { userId, acceptedMimeTypes, nativeMimeTypes, maxFileSizeBytes })` — MIME-routed branching that returns `MediaPart | null`, called only by the ACP inline path (`acpAttachments.ts`); `guessLocalMime(filename)` reused by `fileService.resolvePaths`
-- `src/main/services/textExtractor.ts` — `extractText(bytes, mime, filename)` — UTF-8 decode for `text/*` + structured data + code formats; `parseOffice(bytes).toText()` for binary office and PDF; soft 256KB cap with inline truncation marker; logs `durationMs / bytesIn / charsOut` on office success
+- `src/main/services/textExtractor.ts` — `extractText(bytes, mime, filename)` — UTF-8 decode for `text/*` + structured data + code formats; `(await (await parseOffice(bytes, config)).to('text')).value` (officeparser 8; a PDF is read in a child process, see [Packaged Runtime](../../development/distribution/packaged_runtime.md)) for binary office and PDF; soft 256KB cap with inline truncation marker; logs `durationMs / bytesIn / charsOut` on office success
 - `src/main/services/pastedFiles.ts` — what a paste attaches, without Electron:
-  - `ClipboardFileSources` — the raw formats the desktop read (`fileUrl`, `filenamesPlist`, `uriList`, `fileNameW`)
-  - `clipboardFilePaths(sources)` — the plist's paths, else `public.file-url`'s one, else the `text/uri-list`, else the `FileNameW` path; deduplicated. `parseFilenamesPlist`, `parseUriList`, `fileUrlToPath` (non-`file:` and malformed URLs → `null`)
-  - `resolvePastedFiles({ sources, readImagePng, dir, now })` — references first (regular files kept, none left → `FileError('not_a_file', NOT_A_FILE_ERROR)`); only with no references is `readImagePng` called, and its bytes go through `writePastedImage`; neither → `[]`
+  - `clipboardFilePaths(uriList)` — the paths of the clipboard's `text/uri-list` (CRLF-separated, percent-encoded, `#` comments), deduplicated. `parseUriList`, `fileUrlToPath` (non-`file:` and malformed URLs → `null`). The macOS plist, `public.file-url` and Windows `FileNameW` readers are gone: Electron 44's clipboard maps each platform's file references to this one type
+  - `resolvePastedFiles({ uriList, readImagePng, dir, now })` (`readImagePng` is async) — references first (regular files kept, none left → `FileError('not_a_file', NOT_A_FILE_ERROR)`); only with no references is `readImagePng` called, and its bytes go through `writePastedImage`; neither → `[]`
   - `writePastedImage(dir, png, now)` — `mkdir` `0700`, `writeFile` with `flag: 'wx'`, mode `0600`, retrying `pastedImageName(now, attempt)` on `EEXIST` (up to 1000); other failures → `FileError('write_failed')`
   - `PASTED_DIR` (`tmp/pasted`), `pastedRoot(userData)`, `clearPastedFiles(userData)`
 - `src/main/services/fileService.ts` — `readThumbnail(input)` for the inline thumbnails, and `pathPreview` for composer files read by path; both documented with [File Preview — Technical Details](../file_preview/file_preview_tech.md)
@@ -54,7 +53,7 @@
 
 ### Main process — desktop host
 
-- `src/main/host/desktop/clipboard.ts` — `readClipboardFileSources(platform?, cb?)` (macOS `public.file-url` + `NSFilenamesPboardType`, Windows `FileNameW` via `readBuffer`, else `text/uri-list`; a throwing read counts as absent), `readClipboardImagePng(cb?)` (`readImage().toPNG()`, `null` when empty or on a throw), `clipboardHasFileRefs()`, `clearPastedFilesAtStart()` (from `startup()` in `src/main/index.ts`, not awaited, logged on failure)
+- `src/main/host/desktop/clipboard.ts` — `readClipboardUriList(cb?)` (W3C-shaped `clipboard.read()`, the `text/uri-list` item's text; a throwing read counts as absent), `readClipboardImagePng(cb?, toPng?)` (`image/png` first, else the first other `image/*` type through `nativeImage`; `null` when none, empty or on a throw), async `clipboardHasFileRefs(cb?)`, async `writeClipboardText`, `clearPastedFilesAtStart()` (from `startup()` in `src/main/index.ts`, not awaited, logged on failure)
 - `src/main/host/desktop/imageThumbnails.ts` — `nativeImageThumbnail(bytes, maxSide)`, the desktop host's `images.thumbnail` (see [File Preview — Technical Details](../file_preview/file_preview_tech.md))
 
 ### Main process — IPC
@@ -68,7 +67,7 @@
   - `files:remove` — accepts string (legacy Cinna-only) or `{ id, source }` (modern); delegates to `fileService.remove`
   - `files:download` — `basename(filename)` strips traversal; delegates to `fileService.downloadToPath`; `shell.showItemInFolder` after save
   - `files:download-task-attachment` — task-scoped Cinna download (unchanged)
-  - `files:clipboard-has-file-refs` (`ipcMain.on`, answered through `event.returnValue`) — `clipboardHasFileRefs()`; a throw answers `false`. No activation check and no paths: it returns one boolean, and it must answer inside the renderer's paste event
+  - `files:clipboard-has-file-refs` (`ipcHandle`, async) — `clipboardHasFileRefs()`; a throw answers `false`. No activation check and no paths: it returns one boolean. It was a `sendSync` answered through `event.returnValue` until Electron 44 made the clipboard asynchronous; it must not become synchronous again
   - `files:paste-from-clipboard` — `requireActivated()`, `resolvePastedFiles` over the desktop's clipboard reads and `pastedRoot(userData)`, then `pathGuard.recordMany(paths)`; failures as data via `ipcErrorShape`
   - `files:read-thumbnail`, `files:read-image`, `files:read-preview-path` — the composer's and the transcript's image and path reads; see [File Preview — Technical Details](../file_preview/file_preview_tech.md#ipc-channels)
 - src/main/services/runExecutionService.ts forwards attachments into the model admission path; src/main/ipc/llm.ipc.ts retains model capability lookup.
@@ -84,7 +83,7 @@
   - `window.api.files.ingestPaths({ scope?, chatId?, paths })`
   - `window.api.files.remove(string | { id, source })`
   - `window.api.files.download({ fileId, filename, source? })`
-  - `window.api.files.clipboardHasFileRefs()` — `ipcRenderer.sendSync('files:clipboard-has-file-refs') === true`
+  - `window.api.files.clipboardHasFileRefs()` — `ipcRenderer.invoke('files:clipboard-has-file-refs')`, resolved to `true` only on `=== true` (a `Promise<boolean>`)
   - `window.api.files.pasteFromClipboard()` — `files:paste-from-clipboard`
   - `window.api.files.readThumbnail(input)`, `readImage(input)`, `readPreviewPath({ path })` — see [File Preview](../file_preview/file_preview_tech.md)
   - `window.api.files.getPathForFile(file)` — wraps `webUtils.getPathForFile`; fire-and-forget `ipcRenderer.send('files:track-path', path)` as a side-effect so the path-guard allowlist auto-populates
@@ -108,7 +107,7 @@
   - `formatSize` is exported for the thumbnail's tooltip
 - `src/renderer/src/components/chat/AttachmentThumbnail.tsx` — `AttachmentThumbnail({ attachment, imageRef, onClick?, onRemove? })`, `THUMBNAIL_SIZE` (64). `useImage(imageRef, 'thumbnail')`; `data-state` `loading` / `ready` / `failed`; an `<img>` `onError` marks that data URL broken. With `onClick` it is a `Preview <name>` button, else `role="img"`; `onRemove` adds an absolutely positioned `Remove <name>` button beside it
 - `src/renderer/src/utils/imageDataCache.ts` — `ImageRef` (`attachment` by `fileId` + `source`, or `path`), `attachmentImageRef(a)` (`pending` → path), `imageRefKey(ref)` (prefixed with the active profile's id from `useAuthStore`), `loadImage(ref, size)` / `peekImage` / `useImage` over two LRUs (`thumbnail` 300, `full` 20) with in-flight de-duplication, `MAX_THUMBNAIL_READS` (4) as a semaphore on thumbnail reads only whose waiters are released last-in first-out, failures returned but not kept; `carryImage(from, to)` and `carryIngestedImages(pending, ingested)` (by position when the lengths match, else a unique filename + size match)
-- `src/renderer/src/utils/composerPaste.ts` — `pasteIntent(types, hasFileRefs)` and the error strings `PASTE_NOT_ACCEPTED`, `PASTE_NEEDS_DESTINATION`, `PASTE_WHILE_STREAMING`, `PASTE_NOTHING_USABLE`
+- `src/renderer/src/utils/composerPaste.ts` — `pasteIntent(types)` (`'text' | 'files' | 'ask'`), `insertPastedText(el, text)` (`insertText` so undo works; a spliced value plus `input` event where `execCommand` is missing; returns `false` without inserting when the textarea lost focus) and the error strings `PASTE_NOT_ACCEPTED`, `PASTE_NEEDS_DESTINATION`, `PASTE_WHILE_STREAMING`, `PASTE_NOTHING_USABLE`
 - `src/renderer/src/hooks/useAttachmentOpen.ts` — `useComposerAttachmentOpen()` (pending → `openPathPreview`, ingested → `openPreview(…, { composer: true })`; never downloads) and `composerCanPreview(a)`
 - `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — The left-side `[+]` composer menu; its **Attach files** row (`canAttachFiles` / `onAttachFiles`) is what the old right-anchored `AttachMenuPopup` became. See [Composer Menu](../composer_menu/composer_menu.md)
 - `src/renderer/src/components/chat/ChatInput.tsx` — Owns the attach button gating + scope decision:
@@ -117,7 +116,7 @@
   - `canShowAttachButton` (active): `(isCinnaUser && targetIsRemote) || (chatId && !attachmentTargetAgent && modelSupportsMedia)`
   - `canShowAttachButton` (new-chat): `hasAnyDestination = isCinnaUser || providers.some(isCredentialActive)` (`useHasAttachDestination`) — the shared predicate rather than `hasApiKey`, so a keyless credential (Ollama) counts as a destination and a managed OAuth row that cannot call does not. `isCredentialActive` is the named form of `enabled && isCredentialUsable`, which this call site used to spell out
   - Drop handlers: `dragenter / dragover / dragleave / drop` with depth counter, `dataTransfer.types.includes('Files')` filter, `pointer-events-none` overlay
-  - `handlePaste` on the textarea: returns (native paste) without `Files`; when `!canShowAttachButton || attachBlockedByStream` (`isStreaming && !chatId`: a running turn in an active chat takes files), lets text through or `preventDefault` + one of the `PASTE_*` errors; otherwise `pasteIntent`, then `preventDefault`, `pasteFromClipboard()` → `pickAttachmentsFromPaths(paths)` (the drop's path), `PASTE_NOTHING_USABLE` for an empty result, main's `error` for a refusal, and `focusComposer` at the end
+  - `handlePaste` on the textarea: returns (native paste) without `Files`; when `!canShowAttachButton || attachBlockedByStream` (`isStreaming && !chatId`: a running turn in an active chat takes files), lets text through or `preventDefault` + one of the `PASTE_*` errors; otherwise `pasteIntent`: `'ask'` goes to `takeAmbiguousPaste` (prevent, hold the event's text, await `clipboardHasFileRefs()`, then attach, chip, or `insertPastedText`; dropped when the draft key changed, `pasteGenRef` moved because a send or queued-edit save took the composer, or the element is gone; with attachments unavailable it asks only when the text would chip), and `'files'` goes on to `preventDefault`, `pasteFromClipboard()` → `pickAttachmentsFromPaths(paths)` (the drop's path), `PASTE_NOTHING_USABLE` for an empty result, main's `error` for a refusal, and `focusComposer` at the end
   - The composer's `AttachmentList` gets `onClick={useComposerAttachmentOpen()}`, `canClick={composerCanPreview}`, `previewsOnClick` and `thumbnailFor={attachmentImageRef}`
   - `attachError` renders in the toolbar row between the left cluster and Send: a `flex-1 min-w-0 truncate` slot, `role="alert"` and `title` while it holds text, empty otherwise
   - Active-chat narrow: `attachmentsToSend.filter((a): a is MessageAttachment => a.source !== 'pending')` before `composer.submit` (pending impossible by gating but the narrow keeps types honest)
@@ -153,7 +152,7 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 | `files:remove` | renderer → main | `string | { id, source }` | `{ success: true }` / `{ success: false, error, code? }` |
 | `files:download` | renderer → main | `{ fileId, filename, source? }` | `{ success: true, savedPath }` / `canceled: true` / `{ success: false, error, code? }` |
 | `files:download-task-attachment` | renderer → main | `{ taskId, attachmentId, filename }` | (same shape) |
-| `files:clipboard-has-file-refs` | renderer → main (`sendSync`) | (none) | `boolean` as `event.returnValue` |
+| `files:clipboard-has-file-refs` | renderer → main (`invoke`) | (none) | `boolean` |
 | `files:paste-from-clipboard` | renderer → main | (none) | `{ success: true, paths: string[] }` (empty when the clipboard holds neither files nor an image) / `{ success: false, error, code? }` (`not_a_file`, `write_failed`, …) |
 | `files:read-thumbnail` | renderer → main | `{ fileId, source? }` or `{ path }` | `{ success: true, dataUrl, mimeType }` / `{ success: false, error, code? }`. Gates and caps in [File Preview](../file_preview/file_preview_tech.md#ipc-channels) |
 | `llm:get-model-capability` | renderer → main | `{ providerId, modelId }` | `ModelCapability` |
@@ -213,9 +212,9 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 - `src/main/services/acpAttachments.test.ts` — a PDF copied and listed (never a `resource` block), equal bytes reused and a different file suffixed, a native image alongside the path, an unreadable file named, a hostile name kept inside the folder and a Cyrillic one readable; inline: extracted text with nothing copied, a native image and the unreadable marker
 - `src/main/services/conductorTranscript.test.ts` — a replayed historical PDF is copied into the uploads folder and listed by path, a historical image is still sent natively
 - `e2e/specs/live-attachments.spec.ts` — model-free: a kit agent's PDF lands in `app-data/uploads/` and the engine's first text block opens with its path; a plain chat's PDF reaches the chat runtime as extracted text with nothing copied. `@live`: a real engine answers from the PDF ([E2E notes](../../development/e2e/e2e_llm.md))
-- `src/main/services/pastedFiles.test.ts` — URL and plist parsing, plist before `public.file-url`, the dated name and its counter, references before the image, mixed copies, a copied folder refused, no overwrite, the clear at start
-- `src/main/host/desktop/clipboard.test.ts` — per-platform formats read, throwing reads as absent, the PNG read
-- `src/renderer/src/utils/composerPaste.test.ts` — `pasteIntent`'s three cases
+- `src/main/services/pastedFiles.test.ts` — `text/uri-list` parsing, the dated name and its counter, references before the image, mixed copies, a copied folder refused, no overwrite, the clear at start
+- `src/main/host/desktop/clipboard.test.ts` — the `text/uri-list` read, throwing reads as absent, the PNG read and its non-PNG fallback
+- `src/renderer/src/utils/composerPaste.test.ts` — `pasteIntent`'s three cases and `insertPastedText`
 - `src/renderer/src/components/chat/ChatInput.paste.test.tsx` — image-only and Finder pastes attach, plain text and an Excel copy paste natively, the new-chat destination error, text let through when files cannot be taken, two back-to-back pastes, main's folder refusal
 - `src/renderer/src/hooks/useChatAttachments.queue.test.tsx` — the queue uploads after the running upload in one batch and is dropped with the draft
 - `src/renderer/src/components/chat/AttachmentBadge.test.tsx` — thumbnails (fixed box in every state, first in the row, the thumbnail read not the full one, the failed box, cache reuse, a composer path with a sibling remove button, carry-over after ingest, none for task attachments) and composer badges (preview and remove as sibling buttons, a non-previewable one not clickable)

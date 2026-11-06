@@ -51,9 +51,15 @@ A keyword with a faithful equivalent is rewritten so the model keeps the constra
 
 ### Shape rules
 
-Filtering field *names* is necessary but not sufficient — Gemini also rejects an allowed field carrying a wrong-shaped *value*, and container types with nothing in them. Three rules close that gap:
+Filtering field *names* is necessary but not sufficient — Gemini also rejects an allowed field carrying a wrong-shaped *value*, and container types with nothing in them. These rules close that gap:
 
 - **No typeless nodes.** A node left bare after filtering (e.g. `{ not: {...} }`) becomes `type: 'string'`. A node with `properties`/`items` infers `object`/`array`; `anyOf` carries its own types.
+- **A node never carries both `type` and `anyOf`.** The `@google/genai` request builder throws "type and anyOf cannot be both populated" and the whole turn fails, so one side goes:
+  - On an object or array (`properties` / `items`) the `anyOf` is dropped, since it only adds constraints. A choice of required fields (`anyOf: [{required:['url']},{required:['path']}]`) survives as a description hint, "Provide one of: url, path."
+  - On a scalar, the alternatives inherit the outer `type` when they have none of their own, then the outer `type` is dropped.
+  - A scalar with an `enum` keeps its `type` and loses the `anyOf`: the enum already names every value, and alternatives beside it (`const`s) could only narrow it.
+  - A `{ type: 'null' }` alternative becomes `nullable: true` on the parent; a node that is only `null` becomes a nullable string, because the builder also throws on a lone `type: 'null'`.
+  Each is counted in the `dropped` / `translated` report (`anyOf:with-type`, `anyOf:with-enum`, `type:with-anyOf`, `anyOf:null`, `type:null`).
 - **No empty containers.** An OBJECT with no `properties` — what a free-form `{ type: 'object', additionalProperties: true }` dict becomes once filtered — degrades to a `type: 'string'` whose description asks for a JSON-encoded object. An ARRAY with no `items` gets `items: { type: 'string' }`. Gemini answers both with `should be non-empty for OBJECT type`.
 - **No `parameters` for a no-argument tool.** The schema root is exempt from the rule above: instead of degrading it to a string, the `parameters` field is omitted from the function declaration entirely.
 
@@ -119,13 +125,13 @@ Only `properties` values, `items`, and `anyOf` members are treated as nested sch
 
 ### Maintenance
 
-The field list is not folklore — it is `Schema.properties` in Gemini's own discovery document, `https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta`. When Google adds a field (they have: `anyOf`, `title`, `default`, `propertyOrdering` are all recent), re-read it there and widen the allowlist rather than guessing from SDK typings — `@google/generative-ai`'s TypeScript `Schema` type is narrower than the wire format and would under-report.
+The field list is not folklore — it is `Schema.properties` in Gemini's own discovery document, `https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta`. When Google adds a field (they have: `anyOf`, `title`, `default`, `propertyOrdering` are all recent), re-read it there and widen the allowlist rather than guessing from SDK typings — `@google/genai`'s TypeScript `Schema` type is narrower than the wire format and would under-report.
 
 `src/main/llm/geminiSchema.test.ts` holds a mirror of the field set inside `assertGeminiClean()`, a walker that re-checks every emitted node against the API's field names *and* shape rules (single-object `items`, array `anyOf`, non-empty containers). It runs against the output of every test, so a keyword added to the walker without being admitted by the API can't slip through. Update both lists together.
 
 ### Future Option
 
-The v1beta `FunctionDeclaration` also exposes `parametersJsonSchema`, which accepts full JSON Schema and is mutually exclusive with `parameters`. Adopting it would retire most of this translation. It is newer, model-dependent, and unverified against the legacy `@google/generative-ai` SDK this project uses — treat it as a migration to evaluate, not a drop-in.
+The v1beta `FunctionDeclaration` also exposes `parametersJsonSchema`, which accepts full JSON Schema and is mutually exclusive with `parameters`. Adopting it would retire most of this translation. It is newer, model-dependent, and unverified against the `@google/genai` SDK this project uses — treat it as a migration to evaluate, not a drop-in.
 
 ## Integration Points
 

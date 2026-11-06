@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { PINNED_UV_VERSION } from '../../localdev/toolchain'
 
 /**
  * `commandService` against the real bundled kit contract (`resources/`), a
@@ -623,7 +624,7 @@ describe('scheduled command execution', () => {
 })
 
 describe('the managed uv on a command\'s PATH', () => {
-  const managedDir = (): string => join(workshop, 'userData', 'localdev', 'uv-0.12.10')
+  const managedDir = (): string => join(workshop, 'userData', 'localdev', `uv-${PINNED_UV_VERSION}`)
 
   it('appends the managed uv directory last on the spawned PATH', async () => {
     writeCatalog('commands:\n  - name: path\n    description: x\n    command: printf "%s" "$PATH"\n')

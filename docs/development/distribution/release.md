@@ -278,6 +278,15 @@ npx electron-vite build
 npm run dev              # Ctrl+C once the window opens cleanly
 ```
 
+Check dependencies before tagging (see [Dependency Updates](../dependencies/dependencies_llm.md#cadence)):
+
+```bash
+npm audit --omit=dev     # no unexplained high/critical advisory in a direct dependency
+npm outdated             # Electron must still be one of the three supported majors
+```
+
+A high or critical advisory is fixed (usually an in-range `npm update <pkg>`) or named with its reason in the release notes draft.
+
 Run `npm run test:packaging` as a separate pre-flight check. It runs the dependency/hook and environment fixtures without a package; neither `npm test` nor the Vite build includes it.
 
 If anything fails, fix it on `main` before continuing — every release tag is a permanent reference point.

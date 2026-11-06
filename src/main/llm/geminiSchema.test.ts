@@ -35,6 +35,9 @@ function assertGeminiClean(node: unknown, path = 'root', isRoot = true): void {
     expect(Array.isArray(obj.items), `tuple "items" at ${path}`).toBe(false)
     assertGeminiClean(obj.items, `${path}.items`, false)
   }
+  // The `@google/genai` request builder throws on both before sending.
+  expect('type' in obj && 'anyOf' in obj, `"type" beside "anyOf" at ${path}`).toBe(false)
+  expect(obj.type, `"type: null" at ${path}`).not.toBe('null')
   if ('anyOf' in obj) {
     expect(Array.isArray(obj.anyOf), `non-array "anyOf" at ${path}`).toBe(true)
     ;(obj.anyOf as unknown[]).forEach((s, i) => assertGeminiClean(s, `${path}.anyOf[${i}]`, false))
@@ -181,6 +184,108 @@ describe('sanitizeForGemini', () => {
     expect(out.properties.choice.anyOf).toHaveLength(2)
     expect(Object.keys(out.properties.merged.properties)).toEqual(['a', 'b'])
     expect(out.properties.merged.required).toEqual(['a', 'b'])
+    assertGeminiClean(out)
+  })
+
+  it('a container keeps its type and loses alternatives that only add constraints, such as which field is required', () => {
+    const report = createReport()
+    const out = sanitizeForGemini(
+      {
+        type: 'object',
+        properties: { id: { type: 'string' }, name: { type: 'string' } },
+        anyOf: [{ required: ['id'] }, { required: ['name'] }]
+      },
+      report
+    ) as any
+
+    expect(out).toEqual({
+      type: 'object',
+      properties: { id: { type: 'string' }, name: { type: 'string' } },
+      description: 'Provide one of: id, name.'
+    })
+    expect(report.dropped).toContain('anyOf:with-type')
+    assertGeminiClean(out)
+  })
+
+  it('a dropped choice of required fields is kept as a hint after the description', () => {
+    const out = sanitizeForGemini({
+      type: 'object',
+      properties: {
+        source: {
+          type: 'object',
+          description: 'Where to read from.',
+          properties: { url: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' } },
+          anyOf: [{ required: ['url'] }, { required: ['path', 'ref'] }]
+        },
+        // Alternatives that say more than which fields are required get no hint.
+        other: {
+          type: 'object',
+          properties: { a: { type: 'string' } },
+          anyOf: [{ required: ['a'] }, { properties: { a: { minLength: 2 } } }]
+        }
+      }
+    }) as any
+
+    expect(out.properties.source.description).toBe('Where to read from. Provide one of: url, path and ref.')
+    expect(out.properties.source.anyOf).toBeUndefined()
+    expect(out.properties.other.description).toBeUndefined()
+    assertGeminiClean(out)
+  })
+
+  it('a scalar with an enum keeps its type and loses the alternatives beside it', () => {
+    const report = createReport()
+    const out = sanitizeForGemini(
+      { type: 'object', properties: { mode: { type: 'string', enum: ['fast', 'slow'], anyOf: [{ const: 'fast' }, { const: 'slow' }] } } },
+      report
+    ) as any
+
+    expect(out.properties.mode).toEqual({ type: 'string', enum: ['fast', 'slow'] })
+    expect(report.dropped).toContain('anyOf:with-enum')
+    assertGeminiClean(out)
+  })
+
+  it('a scalar with typed alternatives keeps the alternatives and loses the outer type', () => {
+    const report = createReport()
+    const out = sanitizeForGemini(
+      { type: 'object', properties: { mode: { type: 'string', oneOf: [{ const: 'fast' }, { const: 'slow' }] } } },
+      report
+    ) as any
+
+    expect(out.properties.mode).toEqual({ anyOf: [{ type: 'string', enum: ['fast'] }, { type: 'string', enum: ['slow'] }] })
+    expect(report.dropped).toContain('type:with-anyOf')
+    assertGeminiClean(out)
+  })
+
+  it('a typed scalar gives its type to the alternatives that name none, instead of a string', () => {
+    const out = sanitizeForGemini({
+      type: 'object',
+      properties: {
+        count: { type: 'integer', anyOf: [{ minimum: 0 }, { maximum: -10 }] },
+        ratio: { type: 'number', anyOf: [{ minimum: 1 }, { type: 'integer' }] }
+      }
+    }) as any
+
+    expect(out.properties.count).toEqual({ anyOf: [{ type: 'integer', minimum: 0 }, { type: 'integer', maximum: -10 }] })
+    expect(out.properties.ratio).toEqual({ anyOf: [{ type: 'number', minimum: 1 }, { type: 'integer' }] })
+    assertGeminiClean(out)
+  })
+
+  it('a null alternative becomes nullable, and a null-only node a nullable string', () => {
+    const report = createReport()
+    const out = sanitizeForGemini(
+      {
+        type: 'object',
+        properties: {
+          either: { anyOf: [{ type: 'string' }, { type: 'integer' }, { type: 'null' }] },
+          only: { type: 'null' }
+        }
+      },
+      report
+    ) as any
+
+    expect(out.properties.either).toEqual({ anyOf: [{ type: 'string' }, { type: 'integer' }], nullable: true })
+    expect(out.properties.only).toEqual({ type: 'string', nullable: true })
+    expect(report.translated).toEqual(expect.arrayContaining(['anyOf:null', 'type:null']))
     assertGeminiClean(out)
   })
 

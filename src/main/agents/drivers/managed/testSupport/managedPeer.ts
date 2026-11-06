@@ -1,4 +1,4 @@
-import { createServer, type ServerResponse } from 'node:http'
+import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { ManagedEvent } from '../managedEvents'
 
@@ -10,21 +10,31 @@ export const user = (id = 'kickoff', processed = true): ManagedEvent => ({ type:
 export const message = (id: string, text: string): ManagedEvent => ({ type: 'agent.message', id,
   processed_at: STAMP, content: [{ type: 'text', text }] })
 export const idle = (id: string, type: 'end_turn' | 'budget_reached' = 'end_turn'): ManagedEvent => ({
-  type: 'session.status_idle', id, processed_at: STAMP, stop_reason: { type } })
+  type: 'session.status_idle', id, processed_at: STAMP, stop_reason: { type }, stop_details: null })
 export const permissionTool = (id: string, thread?: string): ManagedEvent => thread
   ? { type: 'agent.mcp_tool_use', id, processed_at: STAMP, name: 'lookup', input: { q: id },
       mcp_server_name: 'peer-tools', evaluated_permission: 'ask', session_thread_id: thread }
   : { type: 'agent.tool_use', id, processed_at: STAMP, name: 'bash', input: { command: 'printf fixture' }, evaluated_permission: 'ask' }
 export const requires = (ids: string[]): ManagedEvent => ({ type: 'session.status_idle', id: `requires-${ids.join('-')}`,
-  processed_at: STAMP, stop_reason: { type: 'requires_action', event_ids: ids } })
+  processed_at: STAMP, stop_reason: { type: 'requires_action', event_ids: ids }, stop_details: null })
 export const running = (id: string): ManagedEvent => ({ type: 'session.status_running', id, processed_at: STAMP })
 export const exhausted = (id: string): ManagedEvent => ({ type: 'session.status_idle', id, processed_at: STAMP,
-  stop_reason: { type: 'retries_exhausted' } })
+  stop_reason: { type: 'retries_exhausted' }, stop_details: null })
 export const interrupted = (processed: boolean): ManagedEvent => ({ type: 'user.interrupt', id: 'interrupt-peer', processed_at: processed ? STAMP : null })
 export function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((yes) => { resolve = yes })
   return { promise, resolve }
+}
+/**
+ * The key the SDK sent: `@anthropic-ai/sdk` 1.x defaults to `Authorization:
+ * Bearer`, older clients and an explicit override send `X-Api-Key`.
+ */
+export function requestKey(headers: IncomingHttpHeaders): string | undefined {
+  const apiKey = headers['x-api-key']
+  if (typeof apiKey === 'string' && apiKey) return apiKey
+  const bearer = /^Bearer (.+)$/i.exec(headers.authorization ?? '')
+  return bearer?.[1]
 }
 export interface SentEvent { type: string; [key: string]: unknown }
 export interface PeerRequest { method: string; path: string; page: string | null; body?: { events?: SentEvent[]; [key: string]: unknown }; key?: string; workspace?: string }
@@ -59,7 +69,7 @@ export async function managedPeer(options: PeerOptions = {}): Promise<ManagedPee
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const row: PeerRequest = { method: req.method ?? 'GET', path: url.pathname, page: url.searchParams.get('page'),
-      key: req.headers['x-api-key'] as string | undefined, workspace: req.headers['anthropic-workspace-id'] as string | undefined }
+      key: requestKey(req.headers), workspace: req.headers['anthropic-workspace-id'] as string | undefined }
     requests.push(row)
     if (req.method === 'GET' && url.pathname.endsWith('/events/stream')) {
       if (options.onStream?.(res)) return

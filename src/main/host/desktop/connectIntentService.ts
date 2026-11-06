@@ -149,10 +149,12 @@ let getWindow: (() => BrowserWindow | null) | null = null
 
 /**
  * Where the first-run clipboard check reads from. `index.ts` installs it: the
- * real pasteboard in a normal run, the `CINNA_E2E_CLIPBOARD_TEXT` seam (or
- * nothing at all) under the E2E sandbox. Null never reads.
+ * real pasteboard in a normal run (asynchronous since Electron 44), the
+ * `CINNA_E2E_CLIPBOARD_TEXT` seam (or nothing at all) under the E2E sandbox.
+ * Null never reads.
  */
-let clipboardSource: (() => string | undefined) | null = null
+export type ClipboardTextSource = () => string | undefined | Promise<string | undefined>
+let clipboardSource: ClipboardTextSource | null = null
 /** Clipboard text worth parsing: a `cinna://connect` link in either spelling. */
 const CLIPBOARD_LINK = new RegExp(`^${CONNECT_SCHEME}:///?${CONNECT_ACTION}(?:[/?#]|$)`, 'i')
 
@@ -226,7 +228,7 @@ export const connectIntentService = {
   },
 
   /** Called once from `index.ts`, which decides whether the sandbox may read it. */
-  installClipboardSource(source: (() => string | undefined) | null): void {
+  installClipboardSource(source: ClipboardTextSource | null): void {
     clipboardSource = source
   },
 
@@ -246,16 +248,17 @@ export const connectIntentService = {
    * under the user), and a push would land regardless. Returns only an intent
    * this read delivered: one that was already pending reaches the renderer
    * through `connect:get-pending`, and the renderer consumes a late answer, so
-   * returning a clicked link here would let that consume drop it.
+   * returning a clicked link here would let that consume drop it. A link
+   * clicked while the read is in flight wins the same way.
    */
-  checkClipboardOnce(): ConnectIntent | null {
+  async checkClipboardOnce(): Promise<ConnectIntent | null> {
     if (clipboardChecked) return null
     clipboardChecked = true
     if (pending || !clipboardSource) return null
 
     let raw: unknown
     try {
-      raw = clipboardSource()
+      raw = await clipboardSource()
     } catch (err) {
       logger.warn('could not read the clipboard', {
         // The class and message of the failure only; a failed read has no
@@ -264,7 +267,8 @@ export const connectIntentService = {
       })
       return null
     }
-    if (typeof raw !== 'string') return null
+    // Accepted window (Linux only, two links within milliseconds): a link clicked and already consumed during the read leaves `pending` empty, so the clipboard link may be delivered too.
+    if (pending || typeof raw !== 'string') return null
 
     const text = raw.trim()
     // Narrower than the scheme: `parseConnectUrl` logs the action of a

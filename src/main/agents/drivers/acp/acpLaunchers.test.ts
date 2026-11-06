@@ -243,7 +243,8 @@ describe('the OpenCode launcher', () => {
     const p = plan(await launcher().plan(CTX))
     const config = JSON.parse(readFileSync(p.spec.env.OPENCODE_CONFIG, 'utf8'))
     expect(config.plugins).toEqual(['-opencode.config.compatibility'])
-    // The 1.x switches; 2.x does not know them.
+    // Not needed: 2.0.30 knows `OPENCODE_DISABLE_CLAUDE_CODE` again, but the
+    // plugin entry alone keeps the personal skills out (the contract's control).
     expect(p.spec.env.OPENCODE_DISABLE_CLAUDE_CODE).toBeUndefined()
     expect(p.spec.env.OPENCODE_DISABLE_EXTERNAL_SKILLS).toBeUndefined()
     // It would also move `~/…` tool paths and the cloud credential lookups.
@@ -508,6 +509,13 @@ describe('the Claude launcher', () => {
       expect(claudeCode.emitRawSDKMessages).toEqual(filter)
       expect(claudeCode.options).toMatchObject({ model: 'sonnet' })
       expect(Object.keys(claudeCode).sort()).toEqual(['emitRawSDKMessages', 'options'])
+    }
+  })
+
+  it('turns the adapter’s prompt suggestions off on both branches', async () => {
+    // Adapter 0.101.0 asks for one after every turn — a model request — and shows it only to the AIR UI.
+    for (const ctx of [CTX, BARE_CTX]) {
+      expect(claudeOptions(plan(await createClaudeLauncher(deps).plan(ctx))).promptSuggestions, ctx.folder.runtimeMode).toBe(false)
     }
   })
 

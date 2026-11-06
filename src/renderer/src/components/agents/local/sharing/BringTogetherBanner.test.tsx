@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { AgentShareStatus } from '../../../../../../shared/agentSharing'
 
 /**
@@ -39,7 +39,7 @@ function status(overrides: Partial<AgentShareStatus> = {}): AgentShareStatus {
 
 const ok = <T,>(value: T) => ({ success: true as const, value })
 
-let sharing: Record<string, ReturnType<typeof vi.fn>>
+let sharing: Record<string, Mock<(...args: any[]) => any>>
 
 beforeEach(() => {
   resetSharingFetchClock()
@@ -57,9 +57,9 @@ afterEach(() => {
 })
 
 interface Actions {
-  bringTogether: ReturnType<typeof vi.fn>
+  bringTogether: Mock<(...args: any[]) => any>
   bringTogetherPending: boolean
-  notNow: ReturnType<typeof vi.fn>
+  notNow: Mock<(...args: any[]) => any>
 }
 
 function mount(listed: AgentShareStatus[], initialOffered: boolean, pending = false): { client: QueryClient; actions: Actions } {

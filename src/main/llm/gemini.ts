@@ -1,15 +1,7 @@
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import { ApiError, GoogleGenAI } from '@google/genai'
+import type { Content, Part, FunctionDeclaration, Schema } from '@google/genai'
 import { nanoid } from 'nanoid'
 import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
-import type {
-  Content,
-  Part,
-  InlineDataPart,
-  FunctionCallPart,
-  FunctionResponsePart,
-  FunctionDeclaration,
-  FunctionDeclarationSchema
-} from '@google/generative-ai'
 import { TEXT_EXTRACTABLE_MIMES } from './capabilityMimes'
 import { createReport, toGeminiParameters } from './geminiSchema'
 import { createLogger } from '../logger/logger'
@@ -40,8 +32,11 @@ function geminiHasVision(modelId: string): boolean {
 
 const logger = createLogger('gemini')
 
-// The `@google/generative-ai` SDK doesn't expose a list-models call, so we
-// hit the public REST endpoint directly. Returns models filtered to those
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com'
+const GEMINI_API_VERSION = 'v1beta'
+
+// Listing goes to the public REST endpoint directly (it predates the Gen AI
+// SDK's `models.list()`, and its pages and filter are what the picker expects). Returns models filtered to those
 // that support `generateContent` (i.e. usable for text chat).
 interface GeminiRestModel {
   name: string // "models/<id>"
@@ -80,12 +75,23 @@ async function fetchGeminiModels(apiKey: string): Promise<GeminiRestModel[]> {
 
 export class GeminiAdapter implements LLMAdapter {
   readonly providerType = 'gemini'
-  private genAI: GoogleGenerativeAI
+  private genAI: GoogleGenAI
   private apiKey: string
   private providerId: string
 
   constructor(apiKey: string, providerId: string) {
-    this.genAI = new GoogleGenerativeAI(apiKey)
+    // The Gen AI client fills what the caller leaves unset from the process
+    // environment: GOOGLE_GENAI_USE_VERTEXAI / _ENTERPRISE would send the turn
+    // to a Google Cloud project, GOOGLE_GEMINI_BASE_URL to another host, and
+    // GOOGLE_GENAI_API_VERSION changes the API. The credential row is the only
+    // thing that decides what is sent and where, so every one is explicit —
+    // the values the legacy SDK used, which read no environment at all.
+    this.genAI = new GoogleGenAI({
+      apiKey,
+      vertexai: false,
+      apiVersion: GEMINI_API_VERSION,
+      httpOptions: { baseUrl: GEMINI_BASE_URL }
+    })
     this.apiKey = apiKey
     this.providerId = providerId
   }
@@ -113,44 +119,54 @@ export class GeminiAdapter implements LLMAdapter {
   async stream(params: StreamParams): Promise<StreamResult> {
     const { model, messages, tools, signal, onDelta } = params
 
-    // Gemini accepts `systemInstruction` on model creation, not in history.
+    // Gemini takes the system prompt as `systemInstruction`, not in history.
     const systemPrompt = messages
       .filter((m) => m.role === 'system')
       .map((m) => m.content)
       .join('\n\n')
     const nonSystem = messages.filter((m) => m.role !== 'system')
 
-    const genModel = this.genAI.getGenerativeModel({
-      model,
-      tools: tools ? [{ functionDeclarations: this.convertTools(tools) }] : undefined,
-      ...(systemPrompt ? { systemInstruction: systemPrompt } : {})
-    })
-
     const { history, lastMessage } = this.convertMessages(nonSystem)
-    const chat = genModel.startChat({ history })
 
     let content = ''
     const toolCalls: ToolCallInfo[] = []
 
-    const result = await chat.sendMessageStream(lastMessage, { signal })
+    // `models.generateContentStream`, not `chats`: a chat session validates
+    // history to `user` / `model` roles and curates it, while this adapter
+    // rebuilds the whole conversation every turn and sends tool results as
+    // `function` turns — the same request the legacy SDK's chat sent.
+    const stream = await this.genAI.models.generateContentStream({
+      model,
+      contents: [...history, lastMessage],
+      config: {
+        ...(tools ? { tools: [{ functionDeclarations: this.convertTools(tools) }] } : {}),
+        ...(systemPrompt ? { systemInstruction: { role: 'system', parts: [{ text: systemPrompt }] } } : {}),
+        ...(signal ? { abortSignal: signal } : {})
+      }
+    })
 
-    for await (const chunk of result.stream) {
+    for await (const chunk of stream) {
       const parts = chunk.candidates?.[0]?.content?.parts ?? []
       for (const part of parts) {
-        if ('text' in part && part.text) {
+        if (part.text) {
           content += part.text
           onDelta(part.text)
         }
-        if ('functionCall' in part && part.functionCall) {
+        if (part.functionCall) {
           const fc = part.functionCall
           toolCalls.push({
             id: `gemini-${nanoid(10)}`,
-            name: fc.name,
+            name: fc.name ?? '',
             input: (fc.args ?? {}) as Record<string, unknown>
           })
         }
       }
     }
+
+    // The SDK hands the signal to fetch, whose body then errors on abort. Should
+    // a version end the iteration quietly instead (as the OpenAI SDK does), a
+    // cancelled turn must still reject rather than resolve with partial text.
+    signal?.throwIfAborted()
 
     return { content, toolCalls }
   }
@@ -173,7 +189,7 @@ export class GeminiAdapter implements LLMAdapter {
   }
 
   parseError(error: Error): LLMError {
-    const msg = error.message
+    const msg = error instanceof ApiError ? describeApiError(error) : error.message
     const statusMatch = msg.match(/\[(\d{3})\s+([^\]]+)\]/)
     if (statusMatch) {
       const code = parseInt(statusMatch[1])
@@ -201,7 +217,7 @@ export class GeminiAdapter implements LLMAdapter {
 
   private convertMessages(messages: ChatMessage[]): {
     history: Content[]
-    lastMessage: string | Part[]
+    lastMessage: Content
   } {
     const history: Content[] = []
 
@@ -222,9 +238,7 @@ export class GeminiAdapter implements LLMAdapter {
         }
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           for (const tc of msg.toolCalls) {
-            parts.push({
-              functionCall: { name: tc.name, args: tc.input }
-            } as FunctionCallPart)
+            parts.push({ functionCall: { name: tc.name, args: tc.input } })
           }
         }
         if (parts.length === 0) parts.push({ text: '' })
@@ -256,16 +270,18 @@ export class GeminiAdapter implements LLMAdapter {
               name: msg.toolName ?? '',
               response: responseObj
             }
-          } as FunctionResponsePart]
+          }]
         })
       }
     }
 
-    // Build lastMessage from the final message
+    // The newest message is sent as its own content. A tool result goes as a
+    // `function` turn and anything else as a `user` turn — the roles the
+    // legacy SDK's `sendMessageStream` assigned.
     const last = messages[messages.length - 1]
-    let lastMessage: string | Part[]
+    let lastMessage: Content
     if (!last) {
-      lastMessage = ''
+      lastMessage = { role: 'user', parts: [{ text: '' }] }
     } else if (last.role === 'tool_call') {
       let responseObj: Record<string, unknown>
       try {
@@ -285,38 +301,35 @@ export class GeminiAdapter implements LLMAdapter {
       } catch {
         responseObj = { result: last.content }
       }
-      lastMessage = [{
-        functionResponse: {
-          name: last.toolName ?? '',
-          response: responseObj
-        }
-      } as FunctionResponsePart]
+      lastMessage = {
+        role: 'function',
+        parts: [{
+          functionResponse: {
+            name: last.toolName ?? '',
+            response: responseObj
+          }
+        }]
+      }
     } else if (last.role === 'user') {
-      // The most recent user turn is where freshly-attached media lives.
-      // Gemini's `sendMessageStream` accepts either a string or a Part[],
-      // so we promote to Part[] only when native media is present; text
-      // attachments fold into the user's string content via the shared
-      // prefix renderer.
+      // The most recent user turn is where freshly-attached media lives:
+      // native media first, then the text, with text attachments folded
+      // into it via the shared prefix renderer.
       const mediaParts = this.buildInlineDataParts(last.media)
       const textPrefix = renderTextPartsPrefix(last.media)
       const userText = `${textPrefix}${last.content}`
-      if (mediaParts.length > 0) {
-        const parts: Part[] = [...mediaParts]
-        if (userText) parts.push({ text: userText })
-        lastMessage = parts
-      } else {
-        lastMessage = userText
-      }
+      const parts: Part[] = [...mediaParts]
+      if (userText || parts.length === 0) parts.push({ text: userText })
+      lastMessage = { role: 'user', parts }
     } else {
-      lastMessage = last.content
+      lastMessage = { role: 'user', parts: [{ text: last.content }] }
     }
 
     return { history, lastMessage }
   }
 
-  private buildInlineDataParts(media: MediaPart[] | undefined): InlineDataPart[] {
+  private buildInlineDataParts(media: MediaPart[] | undefined): Part[] {
     if (!media || media.length === 0) return []
-    const parts: InlineDataPart[] = []
+    const parts: Part[] = []
     for (const part of media) {
       // Both images and PDFs ship as `inlineData` parts. Text-kind parts
       // never reach this branch — they fold into the user's string content
@@ -356,8 +369,32 @@ export class GeminiAdapter implements LLMAdapter {
       return {
         name: t.name,
         description: t.description,
-        ...(parameters ? { parameters: parameters as unknown as FunctionDeclarationSchema } : {})
+        ...(parameters ? { parameters: parameters as Schema } : {})
       }
     })
   }
+}
+
+/**
+ * The legacy SDK's error text — `[429 Too Many Requests] <message> <details>`
+ * — rebuilt from the Gen AI SDK's `ApiError`, whose message is the response
+ * body as JSON. `parseError` reads the bracketed status and the "retry in Ns"
+ * hint out of exactly that shape, and the user sees the API's own sentence
+ * instead of a JSON blob when the status is not one it names.
+ */
+function describeApiError(error: ApiError): string {
+  let message = error.message
+  let status = ''
+  try {
+    // A mid-stream error frame arrives as `got status: <STATUS>. <body JSON>`.
+    const body = JSON.parse(error.message.replace(/^got status: [^.]*\. /, '')) as { error?: { message?: unknown; status?: unknown; details?: unknown } }
+    if (body.error && typeof body.error.message === 'string') {
+      message = body.error.message
+      if (body.error.details) message += ` ${JSON.stringify(body.error.details)}`
+    }
+    if (body.error && typeof body.error.status === 'string') status = body.error.status
+  } catch {
+    // Not JSON: keep the message whole.
+  }
+  return `[${error.status} ${status || 'Error'}] ${message}`
 }

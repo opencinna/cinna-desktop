@@ -93,7 +93,20 @@ async function until(check: () => boolean, ms = 20_000): Promise<boolean> {
 const toolCallOf = (request: AdapterMessage | undefined): Json => (request?.params?.toolCall ?? {}) as Json
 const optionsOf = (request: AdapterMessage | undefined): Json[] => (request?.params?.options as Json[] | undefined) ?? []
 const commandCwd = (systemText: string | undefined): string | null => /Command Working Directory: (\S+)/.exec(systemText ?? '')?.[1] ?? null
-const schemaDir = (systemText: string): string | null => /Each MCP server has a directory `([^`]+?)\/<serverName>`/.exec(systemText)?.[1] ?? null
+/**
+ * The MCP schema directory the instruction names: an absolute path on 1.3.0;
+ * on 1.4.5 `<appDataDir>/brain/<conversation-id>`, resolved here from the
+ * instruction's own `App Data Directory:` and `Conversation ID:` lines.
+ */
+const schemaDir = (systemText: string): string | null => {
+  const named = /Each MCP server has a directory `([^`]+?)\/<serverName>`/.exec(systemText)?.[1]
+  if (!named) return null
+  const appData = /^App Data Directory: (\S+)/m.exec(systemText)?.[1]
+  const conversation = /^Conversation ID: (\S+)/m.exec(systemText)?.[1]
+  return named
+    .replace('<appDataDir>', appData ?? '<appDataDir>')
+    .replace('<conversation-id>', conversation ?? '<conversation-id>')
+}
 
 /** One prompt and everything it caused. */
 interface Step {
@@ -328,7 +341,7 @@ async function nativeScenario(binary: string): Promise<void> {
       log.unfilteredTurn = gateway.turns[before] ?? null
     }
     // The tool filter, one session per name set.
-    for (const names of [['start_subagent'], ['create_file', 'edit_file'], ['send_message', 'define_subagent'], [...ANTIGRAVITY_FILTER_TOOLS]]) {
+    for (const names of [['start_subagent'], ['invoke_subagent'], ['create_file', 'edit_file'], ['send_message', 'define_subagent'], [...ANTIGRAVITY_FILTER_TOOLS]]) {
       const before = gateway.turns.length
       const probe = await connection.rpc('session/new', { cwd, mcpServers: [], _meta: { agy: { disabledTools: names } } })
       const id = String(probe.result?.sessionId ?? '')
@@ -661,7 +674,8 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
   it(entry('antigravity.launch.command-cwd'), () => {
     expect(seen.folder.home.startsWith(`${seen.folder.cwd}/`)).toBe(true)
     expect(commandCwd(folderStep('first')?.turns[0]?.systemText)).toBe(seen.folder.cwd)
-    expect(commandCwd(seen.native.firstTurn?.systemText)).toBe(join(seen.native.home, 'antigravity-cli', 'skills'))
+    // 1.3.0 named `<home>/antigravity-cli/skills` here.
+    expect(commandCwd(seen.native.firstTurn?.systemText)).toBe(seen.native.cwd)
   })
 
   it(entry('antigravity.auth.methods'), () => {
@@ -760,12 +774,12 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     expect(toolCallOf(ask)).toMatchObject({ toolCallId: asked?.toolCallId, title: 'cinna_probe', kind: 'other', _meta: { mcp: { server: 'cinna', tool: 'probe' } } })
     const bare = firstToolCall(folderStep('mcp-yolo')?.updates ?? [])
     expect(folderStep('mcp-yolo')?.permissions).toEqual([])
-    expect(bare).toMatchObject({ title: 'Running probe', kind: 'other', rawInput: {} })
-    expect(bare?._meta).toBeUndefined()
+    // 1.3.0 titled this one `Running probe`, with `rawInput: {}` and no `_meta`.
+    expect(bare).toMatchObject({ title: 'cinna_probe', kind: 'other', rawInput: { arguments: {} }, _meta: { mcp: { server: 'cinna', tool: 'probe' }, is_mcp_tool_call: true } })
     // The owners: the shared name reader (`_meta.mcp` first) and the stream, on both shapes, and the ask itself.
     const offers = { offers: (name: string) => name === 'probe', kind: 'other' }
     expect(cinnaToolName(String(asked?.title), asked?.rawInput, undefined, asked?._meta)).toBe('probe')
-    expect(cinnaToolName(String(bare?.title), bare?.rawInput, offers)).toBe('probe')
+    expect(cinnaToolName(String(bare?.title), bare?.rawInput, offers, bare?._meta)).toBe('probe')
     const askCall = toolCallOf(ask)
     expect(cinnaToolName(String(askCall.title), askCall.rawInput, offers, askCall._meta)).toBe('probe')
     const stream = new AcpMessageStream({ launcher: 'antigravity' })
@@ -880,10 +894,18 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
       expect(update.used as number).toBeGreaterThan(0)
       expect(update.size as number).toBeGreaterThan(update.used as number)
     }
-    const answer = folderStep('first')?.result.result
-    expect(answer).toEqual({ stopReason: 'end_turn' })
-    // The owner turns such an answer into no turn telemetry.
-    expect(parsePromptTelemetry(answer, 'antigravity')).toBeNull()
+    const answer = folderStep('first')?.result.result as Json | undefined
+    expect(keys(answer ?? {})).toEqual(['stopReason', 'usage'])
+    expect(keys((answer?.usage ?? {}) as Json)).toEqual(['cachedReadTokens', 'cachedWriteTokens', 'inputTokens', 'outputTokens', 'thoughtTokens', 'totalTokens'])
+    // The turn's sum: the fake gateway answers every model call with 2
+    // output tokens, and a step that called a tool made two calls.
+    for (const step of seen.folder.steps) {
+      const usage = ((step.result.result as Json | undefined)?.usage ?? null) as Json | null
+      if (usage && step.turns.length > 0) expect(usage.outputTokens).toBe(2 * step.turns.length)
+    }
+    expect(folderStep('command')?.turns.length).toBe(2)
+    // The owner reads it as the whole turn's, on the selected model.
+    expect(parsePromptTelemetry(answer, 'antigravity', MODEL)).toMatchObject({ model: MODEL, tokenScope: 'turn', tokens: { input: (answer?.usage as Json).inputTokens, output: 2 } })
   })
 
   it(entry('antigravity.policy.workspace-native-tools'), () => {
@@ -912,8 +934,9 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
       expect(run.pwdOutput).toContain('The command exited with code 0.')
       expect(run.pwdOutput).toContain(run.chatFolder)
     }
-    // The control: the home beside the process folder takes the cwd from a chat id after `processes`.
-    expect(commandCwd(seen.workspaceControl?.steps[0]?.turns[0]?.systemText)).toBe(join(seen.workspaceControl?.home ?? '', 'antigravity-cli', 'skills'))
+    // The control: the home beside the process folder no longer takes the cwd
+    // from a chat id after `processes` (1.3.0 named `<home>/antigravity-cli/skills`).
+    expect(commandCwd(seen.workspaceControl?.steps[0]?.turns[0]?.systemText)).toBe(seen.workspaceControl?.chatFolder)
   })
 
   it(entry('antigravity.policy.builtin-tools'), () => {
@@ -924,7 +947,9 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     const builtins = seen.native.unfilteredTurn?.tools ?? []
     expect(builtins.length).toBeGreaterThan(0)
     const removed = (names: string): string[] => builtins.filter((tool) => !(seen.native.filters[names] ?? builtins).includes(tool)).sort()
-    expect(removed('start_subagent')).toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'send_message'])
+    expect(removed('start_subagent')).toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'run_workflow', 'send_message'])
+    // `invoke_subagent` is the enum's own value, `start_subagent` its deprecated alias: the same filter.
+    expect(removed('invoke_subagent')).toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'run_workflow', 'send_message'])
     expect(removed('create_file,edit_file')).toEqual(['replace_file_content', 'write_to_file'])
     expect(removed('send_message,define_subagent')).toEqual([])
     // Every filter name Cinna sends is one the server accepts: all of them
@@ -934,12 +959,12 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     expect(seen.folder.plan?.session.meta).toEqual({ agy: { disabledTools: [...ANTIGRAVITY_ISOLATED_DISABLED_TOOLS] } })
     const sealed = folderStep('first')?.turns[0]?.tools ?? []
     expect(builtins.filter((tool) => !sealed.includes(tool)).sort())
-      .toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'schedule', 'send_message'])
+      .toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'run_workflow', 'schedule', 'send_message'])
     // A native folder's session, as the launcher opens it, loses the subagent family and keeps `schedule`.
     const native = seen.native.firstTurn?.tools ?? []
     expect(builtins.filter((tool) => !native.includes(tool)).sort())
-      .toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'send_message'])
-    expect(ANTIGRAVITY_NATIVE_DISABLED_TOOLS).toEqual(['start_subagent'])
+      .toEqual(['define_subagent', 'invoke_subagent', 'manage_subagents', 'run_workflow', 'send_message'])
+    expect(ANTIGRAVITY_NATIVE_DISABLED_TOOLS).toEqual(['invoke_subagent', 'start_subagent'])
   })
 
   it(entry('antigravity.policy.conductor-tools'), () => {

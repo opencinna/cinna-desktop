@@ -57,6 +57,16 @@ const OFFICE_MIMES = new Set<string>([
   'text/rtf'
 ])
 
+/**
+ * officeparser 8.1+ reads a PDF in a separate process: `process.execPath` run
+ * with `ELECTRON_RUN_AS_NODE`, so a PDF that inflates to gigabytes ends that
+ * process (the parse rejects) instead of the app. Where it cannot start, it
+ * falls back to this process with a `PDF_SEPARATE_PROCESS_UNAVAILABLE`
+ * warning, logged below. `npm run test:packaged:main` proves the packaged app
+ * starts it.
+ */
+export const OFFICE_PARSER_CONFIG = { pdfParserConfig: { separateProcess: true } } as const
+
 export function isUtf8DecodableMime(mime: string): boolean {
   if (UTF8_DECODE_MIMES.has(mime)) return true
   // `text/*` is a broad text bucket — anything labeled text/ counts even if
@@ -123,8 +133,9 @@ export async function extractText(
   if (isOfficeExtractableMime(mime)) {
     const started = Date.now()
     try {
-      const ast = await parseOffice(bytes)
-      const text = ast.toText()
+      const ast = await parseOffice(bytes, OFFICE_PARSER_CONFIG)
+      const text = (await ast.to('text')).value
+      const warnings = ast.warnings.map((warning) => warning.code)
       if (!text || text.trim().length === 0) {
         logger.warn('office extract produced empty text', {
           mime,
@@ -141,7 +152,8 @@ export async function extractText(
         durationMs: Date.now() - started,
         bytesIn: bytes.length,
         charsOut: capped.length,
-        truncated: capped.length !== text.length
+        truncated: capped.length !== text.length,
+        ...(warnings.length ? { warnings } : {})
       })
       return capped
     } catch (err) {

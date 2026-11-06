@@ -48,7 +48,7 @@ import type { RealLogin } from './realLogin'
  *   fails the turn outright), so every write in an unattended task would wait
  *   on an ask nobody answers. An override names a model alias (`haiku`).
  * - Codex: `gpt-5.6-luna`, the cheapest slug in the pinned CLI's catalog
- *   (contract snapshot `codex-0.162.1.json`), as T2.3c uses.
+ *   (contract snapshot `codex-0.167.0.json`), as T2.3c uses.
  * - Antigravity: `gemini-3.8-flash-low` (`ANTIGRAVITY_LIVE_MODEL`); the logins this was
  *   run on no longer offer `gemini-3.6-*`. Its server is the pinned copy the
  *   developer already has (`CINNA_E2E_ANTIGRAVITY_PATH`, else the installed
@@ -76,7 +76,7 @@ export interface LiveEngine {
   toolNote: string
 }
 
-/** The cheapest model in the pinned Codex CLI's catalog (contract snapshot `codex-0.162.1.json`). */
+/** The cheapest model in the pinned Codex CLI's catalog (contract snapshot `codex-0.167.0.json`). */
 export const CODEX_LIVE_MODEL = 'gpt-5.6-luna'
 
 /** Gemini Flash, the cheapest model the Antigravity login lists (3.6 is refused since 2026-10). */
@@ -299,9 +299,9 @@ export function claudeLoginProblem(binary: string): string | null {
   return `CINNA_E2E_LIVE_ENGINE=claude: ${binary} is not logged in on this machine (claude auth status)`
 }
 
-/** `codex login status` — prints `Logged in using …` (on stderr) when there is a login. */
+/** `codex login status` — prints `Logged in using …` (on stderr) when there is a login; an API key reads `API key configured - …` from 0.167.0. */
 function codexLoginProblem(binary: string): string | null {
   const out = spawnSync(binary, ['login', 'status'], { encoding: 'utf8', timeout: 15_000 })
-  if (/^Logged in (?:using|with)\b/im.test(`${out.stdout ?? ''}\n${out.stderr ?? ''}`)) return null
+  if (/^(?:Logged in (?:using|with)|API key configured)\b/im.test(`${out.stdout ?? ''}\n${out.stderr ?? ''}`)) return null
   return `CINNA_E2E_LIVE_ENGINE=codex: ${binary} is not logged in on this machine (codex login status)`
 }

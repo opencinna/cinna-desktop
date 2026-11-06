@@ -37,14 +37,14 @@ export const ANTIGRAVITY_LOGOUT_REFUSED =
   'Cinna does not send /logout to Antigravity: it would sign you out of Antigravity everywhere on this computer, not only for this agent. Sign out in Antigravity itself if that is what you want.'
 
 /**
- * Every built-in function the 1.3.0 server declares to a model, by the name
+ * Every built-in function the 1.4.5 server declares to a model, by the name
  * the model sees. **Not** what `_meta.agy.enabledTools` / `disabledTools` take
  * (see {@link ANTIGRAVITY_FILTER_TOOLS}); kept so the contract notices a
  * built-in a later server adds.
  */
 export const ANTIGRAVITY_BUILTIN_TOOLS: readonly string[] = [
   'ask_question', 'define_subagent', 'generate_image', 'invoke_subagent', 'manage_subagents', 'manage_task',
-  'read_url_content', 'replace_file_content', 'run_command', 'schedule', 'search_web', 'send_message',
+  'read_url_content', 'replace_file_content', 'run_command', 'run_workflow', 'schedule', 'search_web', 'send_message',
   'write_to_file', 'view_file'
 ]
 
@@ -54,14 +54,18 @@ export const ANTIGRAVITY_BUILTIN_TOOLS: readonly string[] = [
  * 1.3.0, matched exactly. A declared function name such as `send_message` is
  * rejected ("Unknown tool name in disabledTools", logged) and removes nothing.
  * One filter name can stand for several declared functions: `start_subagent`
- * removes `define_subagent`, `invoke_subagent`, `manage_subagents` and
- * `send_message`; `create_file` and `edit_file` remove `write_to_file` and
- * `replace_file_content`. `list_directory`, `search_directory` and `find_file`
+ * removes `define_subagent`, `invoke_subagent`, `manage_subagents`,
+ * `run_workflow` and `send_message` (1.4.5; `run_workflow` is new there);
+ * `create_file` and `edit_file` remove `write_to_file` and
+ * `replace_file_content`. On 1.4.5 the enum's own values are `invoke_subagent`
+ * and `run_workflow`, and `start_subagent` is a deprecated alias of the first,
+ * so every filter names both: either one alone works on 1.4.5, and neither
+ * survives a release that drops its spelling. `list_directory`, `search_directory` and `find_file`
  * are off unless enabled, and `finish` is never declared to an interactive
  * session; they are named so a filter covers the whole enum.
  */
 export const ANTIGRAVITY_FILTER_TOOLS: readonly string[] = [
-  'ask_question', 'create_file', 'edit_file', 'find_file', 'finish', 'generate_image', 'list_directory',
+  'ask_question', 'create_file', 'edit_file', 'find_file', 'finish', 'generate_image', 'invoke_subagent', 'list_directory',
   'read_url_content', 'run_command', 'schedule', 'search_directory', 'search_web', 'start_subagent', 'view_file'
 ]
 
@@ -69,13 +73,15 @@ export const ANTIGRAVITY_FILTER_TOOLS: readonly string[] = [
  * The built-ins a sealed (kit) folder runs without, by filter name: Cinna owns
  * scheduling, messaging and agents there, and a second scheduler or subagent
  * system inside the engine would run work nobody can see from the desktop.
- * `start_subagent` is the one name for subagents and `send_message`.
+ * `invoke_subagent` (and its deprecated alias `start_subagent`) is the one
+ * name for subagents and `send_message`.
  */
-export const ANTIGRAVITY_ISOLATED_DISABLED_TOOLS: readonly string[] = ['schedule', 'start_subagent']
+export const ANTIGRAVITY_ISOLATED_DISABLED_TOOLS: readonly string[] = ['invoke_subagent', 'schedule', 'start_subagent']
 
 /**
  * The built-ins a native folder runs without: the subagent family alone
- * (`start_subagent`, which also takes `send_message`, the subagents' message
+ * (`invoke_subagent` and its alias `start_subagent`, which also take
+ * `send_message`, the subagents' message
  * channel and nothing else). Not for ownership, as in a sealed folder, but
  * because Cinna cannot show that work: over ACP 1.3.0 a child's calls arrive
  * flat on the root session with nothing but an id prefix, its text and its
@@ -85,7 +91,7 @@ export const ANTIGRAVITY_ISOLATED_DISABLED_TOOLS: readonly string[] = ['schedule
  * are no transcript Cinna owes anyone, and the sealed-folder reason for
  * removing it (Cinna owns scheduling there) does not apply.
  */
-export const ANTIGRAVITY_NATIVE_DISABLED_TOOLS: readonly string[] = ['start_subagent']
+export const ANTIGRAVITY_NATIVE_DISABLED_TOOLS: readonly string[] = ['invoke_subagent', 'start_subagent']
 
 /** The auth method an isolated home is told to use: the user's personal Google login. */
 const ISOLATED_SETTINGS = `${JSON.stringify({ auth: { type: 'oauth-personal' } })}\n`

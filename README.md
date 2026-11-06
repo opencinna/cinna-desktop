@@ -93,10 +93,10 @@ See [`docs/README.md`](docs/README.md) for the full project index, glossary, and
 
 | Layer | Technology |
 |-------|-----------|
-| Shell | Electron 41, electron-vite, electron-builder |
-| Renderer | React 19, TypeScript, Zustand, TanStack Query, Tailwind CSS v4 |
+| Shell | Electron 45, electron-vite 6 (Vite 8), electron-builder |
+| Renderer | React 19, TypeScript 6, Zustand, TanStack Query, Tailwind CSS v4 |
 | Main | Node.js, better-sqlite3, Drizzle ORM |
-| LLM SDKs | `@anthropic-ai/sdk`, `openai`, `@google/generative-ai` |
+| LLM SDKs | `@anthropic-ai/sdk`, `openai`, `@google/genai` |
 | Protocols | `@a2a-js/sdk` (A2A), `@modelcontextprotocol/sdk` (MCP) |
 | Crypto | Electron `safeStorage`, PBKDF2-SHA512, OAuth 2.0 + PKCE |
 

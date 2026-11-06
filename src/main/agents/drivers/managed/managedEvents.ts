@@ -13,6 +13,8 @@ export type ManagedEffect =
   | { type: 'tool_result'; id: string; content: unknown; failed: boolean }
   | { type: 'permissions'; tools: ManagedPermissionTool[] }
   | { type: 'terminal'; reason: 'end_turn' | 'budget' | 'canceled' }
+  /** The turn ended because the model's answer was refused; it fails with `message`. */
+  | { type: 'refused'; message: string }
 
 /**
  * One reducer for history and the official SDK iterator. Initial history only
@@ -25,7 +27,7 @@ export class ManagedEvents {
   private readonly tools = new Map<string, ManagedPermissionTool>()
   private readonly queuedInputs = new Set<string>()
   private readonly resolvedTools = new Set<string>()
-  private latestStatus: 'running' | 'end_turn' | 'requires_action' | 'budget_reached' | 'retries_exhausted' | 'terminated' | null = null
+  private latestStatus: 'running' | 'end_turn' | 'refusal' | 'requires_action' | 'budget_reached' | 'retries_exhausted' | 'terminated' | null = null
   private kickoffId: string | null = null
   private active = false
   private interruptId: string | null = null
@@ -134,6 +136,9 @@ export class ManagedEvents {
           case 'end_turn': return [{ type: 'terminal', reason: 'end_turn' }]
           case 'budget_reached': return [{ type: 'terminal', reason: 'budget' }]
           case 'retries_exhausted': throw new Error('The Managed session exhausted its retries.')
+          // A finished turn, like `end_turn`: the session is idle and takes
+          // the next message, so nothing is interrupted. The turn fails.
+          case 'refusal': return [{ type: 'refused', message: refusalMessage(event.stop_details) }]
           case 'requires_action': {
             const tools = event.stop_reason.event_ids.filter((id) => !this.resolvedTools.has(id)).map((id) => {
               const tool = this.tools.get(id)
@@ -187,4 +192,11 @@ export class ManagedEvents {
       case 'session.status_terminated': this.latestStatus = 'terminated'; break
     }
   }
+}
+
+/** The error a refused turn reports, with the policy and explanation the session gave, when it gave them. */
+function refusalMessage(details: { category: string | null; explanation: string | null } | null): string {
+  const category = details?.category ? ` (policy: ${details.category.replace(/_/g, ' ')})` : ''
+  const explanation = details?.explanation?.trim() ? ` ${details.explanation.trim()}` : ''
+  return `Claude refused to answer this message${category}.${explanation}`
 }

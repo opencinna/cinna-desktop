@@ -34,7 +34,7 @@
 - `src/renderer/src/components/agents/statusViews.tsx` — `StatusCard`, `DetailView`, `SeverityIcon`, `formatRelative`, `sortByUrgency`, extracted from the overlay. The overlay imports all; the popup imports `sortByUrgency` (and reuses `DetailView` indirectly via the main-window overlay).
 
 ### Build
-- `electron.vite.config.ts` — `renderer.build.rollupOptions.input = { index, trayPanel }` adds the second HTML entry; the preload is shared.
+- `electron.vite.config.ts` — `renderer.build.rolldownOptions.input = { index, trayPanel }` adds the second HTML entry; the preload is shared.
 
 ## Database Schema
 

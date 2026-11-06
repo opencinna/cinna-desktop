@@ -70,7 +70,7 @@
 
 ## SDK versions, and one that moved for a reason outside this domain
 
-Each adapter is a thin wrapper over its vendor's own SDK: `@anthropic-ai/sdk`, `openai`, `@google/generative-ai`. Versions are in `package.json`; only one of them is worth a paragraph.
+Each adapter is a thin wrapper over its vendor's own SDK: `@anthropic-ai/sdk`, `openai`, `@google/genai`. Versions are in `package.json`; the Gemini adapter's environment pinning is in [Provider Integration](provider_integration.md), and one bump is worth a paragraph here.
 
 **`@anthropic-ai/sdk` was moved `^0.89.0` → `^0.93.0` by a change in a different feature.** [The Claude Engine](../../agents/local_agents/claude_engine.md) adds `@anthropic-ai/claude-agent-sdk`, which peer-requires `>= 0.93`, so the bump was forced rather than chosen — and it lands on `anthropic.ts`, a **shipping chat provider used by every Anthropic credential in the app**.
 

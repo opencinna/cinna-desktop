@@ -15,6 +15,9 @@ export function parseCodexAuthStatus(output: string): CodexAuthStatus {
     const method = /\bChatGPT\b/i.test(how) ? 'chatgpt' as const : /\bAPI key\b/i.test(how) ? 'api_key' as const : undefined
     return method ? { state: 'logged_in', method } : { state: 'logged_in' }
   }
+  // From 0.167.0 an API-key login prints "API key configured - sk-…" (and that
+  // authentication is checked on the first request) instead of "Logged in using an API key".
+  if (/^API key configured\b/im.test(output.trim())) return { state: 'logged_in', method: 'api_key' }
   if (/^Not logged in\s*$/im.test(output.trim())) return { state: 'logged_out' }
   return UNKNOWN
 }

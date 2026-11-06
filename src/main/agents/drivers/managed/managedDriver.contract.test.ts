@@ -38,7 +38,7 @@ function world(scenario: Scenario = 'complete') {
       if (scenario === 'complete') peer.send(message(`answer-${sequence}`, 'Contract answer.'), idle(`end-${sequence}`))
       if (scenario === 'hang') peer.send(message(`partial-${sequence}`, 'A partial answer.'))
       if (scenario === 'park') peer.send(permissionTool(`tool-${sequence}`), requires([`tool-${sequence}`]))
-      if (scenario === 'failed') peer.send({ type: 'session.status_idle', id: 'failed', processed_at: STAMP, stop_reason: { type: 'retries_exhausted' } })
+      if (scenario === 'failed') peer.send({ type: 'session.status_idle', id: 'failed', processed_at: STAMP, stop_reason: { type: 'retries_exhausted' }, stop_details: null })
       return { data: [user(id)] }
     }
   }).then((peer) => {

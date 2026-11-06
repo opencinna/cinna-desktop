@@ -91,7 +91,7 @@ export interface RuntimePinCompanion {
   size: number
 }
 
-const CLAUDE_CLI = '2.1.296'
+const CLAUDE_CLI = '2.1.318'
 const CLAUDE_RELEASE =
   `https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/${CLAUDE_CLI}`
 
@@ -99,7 +99,7 @@ function claudeAsset(platform: string, sha256: string, size: number): RuntimePin
   return { file: 'claude', sha256, url: `${CLAUDE_RELEASE}/${platform}/claude`, format: 'executable', size }
 }
 
-const CODEX_CLI = '0.162.1'
+const CODEX_CLI = '0.167.0'
 const CODEX_RELEASE = `https://github.com/openai/codex/releases/download/rust-v${CODEX_CLI}`
 
 /** The `codex-code-mode-host` archive of the same release and triple. POSIX tarballs only. */
@@ -129,7 +129,7 @@ function codexAsset(
   }
 }
 
-const ANTIGRAVITY_CLI = '1.3.0'
+const ANTIGRAVITY_CLI = '1.4.5'
 
 /** One Antigravity ACP server zip: `<os>` is `macos` or `linux` in Google's release path. */
 function antigravityAsset(os: 'macos' | 'linux', file: string, sha256: string, size: number): RuntimePinAsset {
@@ -143,7 +143,7 @@ function antigravityAsset(os: 'macos' | 'linux', file: string, sha256: string, s
   }
 }
 
-const OPENCODE_CLI = '2.0.27'
+const OPENCODE_CLI = '2.2.5'
 
 /**
  * One `@opencode/cli-<target>` platform tarball from the npm registry. npm
@@ -161,12 +161,12 @@ function opencodeAsset(target: string, sha256: string, size: number): RuntimePin
   }
 }
 
-const GIT_CLI = '2.53.0'
-/** dugite-native's release tag; its fourth packaging of git 2.53.0. */
-const GIT_RELEASE_TAG = 'v2.53.0-4'
+const GIT_CLI = '2.56.0'
+/** dugite-native's release tag; its second repackaging of git 2.56.0. */
+const GIT_RELEASE_TAG = 'v2.56.0-2'
 const GIT_RELEASE = `https://github.com/desktop/dugite-native/releases/download/${GIT_RELEASE_TAG}`
 /** Asset names carry the git version and the short commit dugite-native built from, not the tag. */
-const GIT_ASSET_PREFIX = `dugite-native-v${GIT_CLI}-4098283`
+const GIT_ASSET_PREFIX = `dugite-native-v${GIT_CLI}-a44aeca`
 
 /** One dugite-native tarball: `<plat>` is the release's own platform name. */
 function gitAsset(plat: string, sha256: string, size: number): RuntimePinAsset {
@@ -179,21 +179,21 @@ export const RUNTIME_PINS = {
     cli: CLAUDE_CLI,
     /** Exactly what `claude --version` prints for the pin. */
     versionOutput: `${CLAUDE_CLI} (Claude Code)`,
-    adapter: '0.89.1',
+    adapter: '0.101.0',
     /** `@agentclientprotocol/claude-agent-acp/dist/acp-agent.js` as published (checked against the locked npm tarball). */
-    adapterOriginalSha256: 'f00fea811d7144360a6e70bc87e38e36d00a807d15825a8179e2458520b71784',
+    adapterOriginalSha256: 'aa7681b597fc44748ae57877c1eb92dae9e701bc02d6594cbb718540a9217b50',
     /** The same file after `scripts/patch-claude-agent-acp.cjs` (the `_cinna/contextUsage` request, and `air.client` forced off). */
-    adapterPatchedSha256: 'd9d4d9ac13623f29745c8a3e1e790dd7ce04000714794a01d820e905ce11c4aa',
+    adapterPatchedSha256: 'b009fefc2ae0a0ccb57136e29fcc28483d5e9dc8653358b93ba09dc7f0d801cb',
     /** `dist/native-subagents.js` as published, from the same tarball. */
-    adapterSubagentsOriginalSha256: 'b4e65a57eacd03509f49fb91fe3b27f132fa6e2509e3ecb91d84e22e62eed306',
+    adapterSubagentsOriginalSha256: '4417e917642de18b63d2c3de2ddfc849b4995bbdd3de93b18786a9db7e11835f',
     /** The same file after `scripts/patch-claude-agent-acp.cjs` (a SendMessage-resumed subagent keyed by the Agent call its frames name, and not ended by that call's late notification; `subagent_spawned` names the Agent call the child runs under). */
-    adapterSubagentsPatchedSha256: '43483d031396e84da119ccaae4807330a1ca43dafd9bea2b20588f06c2776bfb',
+    adapterSubagentsPatchedSha256: '1820e3cabc76e20878ece2a2f33d911f79813cbc6204608ba77ff41c415807c8',
     /**
      * Anthropic's own release bucket — the one `claude`'s installer and updater
      * read. `<release>/manifest.json` lists `platforms.<key>.{binary, checksum,
      * size}`; the executable is `<release>/<key>/<binary>`, a single file, not an archive.
      *
-     * Every row was downloaded from the bucket and hashed on 2026-10-11 (`make
+     * Every row was downloaded from the bucket and hashed on 2026-11-06 (`make
      * pin-assets` with `--verify`), and agreed with the manifest's `checksum`
      * and `size`.
      *
@@ -203,26 +203,26 @@ export const RUNTIME_PINS = {
      * POSIX-verified only, so a Windows user sets a Claude Path in Settings.
      */
     assets: {
-      'darwin-arm64': claudeAsset('darwin-arm64', 'c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937', 240664432),
-      'darwin-x64': claudeAsset('darwin-x64', 'a6bf4f30be241053a923f3820ad23c5991d2f5ac2935b3a8dd64da218d9cc603', 249194752),
-      'linux-x64': claudeAsset('linux-x64', '24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de', 257068216),
-      'linux-arm64': claudeAsset('linux-arm64', 'f1f6e96e0d8342b9dbf41d7e88255397a6a52ce3d8736ad6a4c6b59c9b62fefa', 256434168)
+      'darwin-arm64': claudeAsset('darwin-arm64', '677a2ea7bf576cedd20e191d973914ed8a41796f53a63b1923381ddc4d5b5e7d', 319598464),
+      'darwin-x64': claudeAsset('darwin-x64', 'ee9c8577a528aa8efa478bf552b17efa40bb58aa4981d2913c13d383a4d409a4', 334272544),
+      'linux-x64': claudeAsset('linux-x64', '708c77b204db30086ff6f1ed34577bda03e1be74ced80557cbf7b54249ebf0bd', 337814032),
+      'linux-arm64': claudeAsset('linux-arm64', '53a0d7e219d7b0804ecba5dbc002745e89f786cc946d2de85a6470d5b2d1fb06', 337438136)
     } as Readonly<Record<string, RuntimePinAsset>>
   },
   codex: {
     cli: CODEX_CLI,
     /** Exactly what `codex --version` prints for the pin. */
     versionOutput: `codex-cli ${CODEX_CLI}`,
-    adapter: '2.2.2',
+    adapter: '2.5.0',
     /** `@agentclientprotocol/codex-acp/dist/index.js` as published (checked against the locked npm tarball). */
-    adapterOriginalSha256: '6b1bb4e7e9caaf4aeca1042ae4aec2dc2433b0b0e4b1614b38a4d41699902aaa',
+    adapterOriginalSha256: '15de6b2dd5203876a48b12861378bcf87040d623ab2159e05052dc9d54c32b16',
     /** The same file after `scripts/patch-codex-acp.cjs` (MCP merge, session instructions, `isAirClient` forced false, the whole command output on the completing update, and a cancel that interrupts the subagent threads too). */
-    adapterPatchedSha256: '0dc1769a1137b1eedda294f68528f9657efe91a175e58ff5c97e8ae383f455f9',
+    adapterPatchedSha256: 'f1dc49e2a08c26832c29df4f2fb949715a985c198383f9cfaa1fde76eac8a7da',
     /**
-     * The vendor's unmodified GitHub release archives for `rust-v0.162.1`: the
+     * The vendor's unmodified GitHub release archives for `rust-v0.167.0`: the
      * `codex` archive, and beside it the `codex-code-mode-host` archive of the
      * same triple as a companion. Every archive, main and companion, was
-     * downloaded and hashed 2026-10-11 (`make pin-assets`); each `size` is the
+     * downloaded and hashed 2026-11-06 (`make pin-assets`); each `size` is the
      * byte count of that same download, so it is exact for the digest beside
      * it. Linux is the musl build — the only one the release ships.
      *
@@ -231,7 +231,10 @@ export const RUNTIME_PINS = {
      * `codex-code-mode-host` in the directory of its own executable; without it
      * Code Mode is unavailable and the agent reports "the required
      * codex-code-mode-host executable is missing". So the managed install is two files, and a bump recomputes the
-     * companion rows as well as the main ones.
+     * companion rows as well as the main ones. From 0.166.0 a release also
+     * ships `codex-exec-server-<triple>`, the standalone remote executor; it is
+     * not a companion: `codex` links the same executor in (`codex exec-server`)
+     * and the contract runs green on the two files alone.
      *
      * **Windows is absent deliberately.** Its release zip is not one
      * executable: `codex-<triple>.exe` ships beside
@@ -244,30 +247,30 @@ export const RUNTIME_PINS = {
       'darwin-arm64': codexAsset(
         'aarch64-apple-darwin',
         'tar.gz',
-        'b293a0fcdd871900a44c0a4f40a1aa401b31e02854f790ebdb8bd5d1177fd1fe',
-        98104184,
-        { sha256: '1f464a2894adbc916e431b6bf19bef2cb485cf7e13e636d42578c581962b3727', size: 23826262 }
+        '4b22a2a971be2791c3e31f912f3e77a88ebd64a65812a7289ccba65dd6425fe9',
+        108379331,
+        { sha256: '876a3e263348ef0edaeae5cf5bc52a5c121141cefd15157ab0eeca305f3eb563', size: 25262553 }
       ),
       'darwin-x64': codexAsset(
         'x86_64-apple-darwin',
         'tar.gz',
-        'd68e39d8f62639f33f7d00656554cb9c3ef7809e664a3827e62ab3ace3c21b21',
-        107055460,
-        { sha256: 'cd52af8a6884b18239aaf36d0c99bc990e7dcf75b0917155474ffde88a111d37', size: 25706483 }
+        'd8eb4a865a0b17319cde10347523e5bab0978d01725b39f4a639f40905e01221',
+        117941240,
+        { sha256: '612d0dc2c7316fbf05ee922796f4d740a285b76a55d4c78e1b946ba621bdcc91', size: 27285629 }
       ),
       'linux-x64': codexAsset(
         'x86_64-unknown-linux-musl',
         'tar.gz',
-        '86f268d81b898f3e144c5ecff2ad2fda2c5802e042d6195b72538fe0fa125057',
-        111350218,
-        { sha256: '458239ea45c1fc508d89695f180ab352f2834709a8a46929a4466f4f04399ada', size: 27500770 }
+        '9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a',
+        122587028,
+        { sha256: 'b5074d5dd64643b2c073927e494a588eff31c1f5a27f12c1e2c45f9a6cf07dd4', size: 29079293 }
       ),
       'linux-arm64': codexAsset(
         'aarch64-unknown-linux-musl',
         'tar.gz',
-        'bf3ca2719f1143b1440fbd85c149379e696c782c50ad7991f8bfcec60b2600c1',
-        103595962,
-        { sha256: '1395ce9367f8acd280674dff083edf25bf221d908b8351d5bd4f3fdde9181e9a', size: 26003900 }
+        '843489acb4d4b1079745c36b03c5963b887b83155af208fd53584e33ee8eb281',
+        114300898,
+        { sha256: '6e99948fa20ca816a01f222a56afa261b321e00cbed611d76bb92c765fd11ec6', size: 27500578 }
       )
     } as Readonly<Record<string, RuntimePinAsset>>
   },
@@ -277,7 +280,7 @@ export const RUNTIME_PINS = {
      * Google's own release zips. Each holds `agy_acp_server.par` (the ACP
      * server, installed under that name) and `localharness_external` at the
      * archive root, so both land in one directory with nothing else to fetch.
-     * Every row was downloaded and hashed on 2026-10-11; `size` is the byte
+     * Every row was downloaded and hashed on 2026-11-06; `size` is the byte
      * count of that download, and must stay set — the Linux zips are larger
      * than the download guard's default ceiling.
      *
@@ -290,26 +293,26 @@ export const RUNTIME_PINS = {
       'darwin-arm64': antigravityAsset(
         'macos',
         `agy-acp-server-${ANTIGRAVITY_CLI}-darwin-arm64.zip`,
-        '7cd97045f7b4fe81175a107cdf16f9c51484e3c78a5162cae415338bb6aa5b88',
-        111456962
+        '886fff7767d08994ca39eb02c3d01a7532c7325a94aa33aaf52d52068733284f',
+        97923855
       ),
       'darwin-x64': antigravityAsset(
         'macos',
         `agy-acp-server-${ANTIGRAVITY_CLI}-darwin-x86_64.zip`,
-        'bb23956b89984bf5d354af2c3725e6c57f0cc1b7228e77a0e91c9c2bc1d47646',
-        117245544
+        'b39f3573c03b9acb9df028853f647527f1f3133f32bd77e78b796e48a205114a',
+        103577295
       ),
       'linux-x64': antigravityAsset(
         'linux',
         `agy-acp-server-${ANTIGRAVITY_CLI}-linux-x86_64.zip`,
-        '9fb60956af0a9d76220a4db91ca9ac88e2a2372ad68f985ab5fceace6b825b96',
-        333727150
+        '923923a0d7dc8073f66cc6f78647a3107e3a7ee2b7e1a24df8b3927b5188013b',
+        321783181
       ),
       'linux-arm64': antigravityAsset(
         'linux',
         `agy-acp-server-${ANTIGRAVITY_CLI}-linux-arm64.zip`,
-        '500b0bc0fb858e88f4df404d4cedf80bf9298c178291e39e383d6c50b111cbdf',
-        321690363
+        '7d64246633ae094f67e3bbcd2d679e89048f91346d5339313336e7483f40f056',
+        307829008
       )
     } as Readonly<Record<string, RuntimePinAsset>>
   },
@@ -320,7 +323,7 @@ export const RUNTIME_PINS = {
     /**
      * The npm platform packages of `@opencode/cli` — OpenCode 2 publishes no
      * GitHub release, so the registry is the vendor's own channel. Every
-     * tarball was downloaded and hashed on 2026-10-12 (`make pin-assets`):
+     * tarball was downloaded and hashed on 2026-11-06 (`make pin-assets`):
      * the `sha256` is ours, from those bytes, and the same bytes' sha512
      * matched the package's `dist.integrity`. `size` is the byte count of
      * that download.
@@ -329,12 +332,12 @@ export const RUNTIME_PINS = {
      * packages; see `engine/binaryResolver.ts` for why libc is not detected).
      */
     assets: {
-      'darwin-arm64': opencodeAsset('darwin-arm64', '3800a8d4b7c19a26a8d9441bc9c25d03368e661f6dbad54d1d80ecd77034916b', 84933121),
-      'darwin-x64': opencodeAsset('darwin-x64', 'ad0cd88b6c432fb672725cc7d555a06171d151b6e502f5056346f14048a7167b', 89943815),
-      'linux-x64': opencodeAsset('linux-x64', '763514227a7bb2428af1d5f592c01d727a866f7bff3208fd5e9efd85429d8139', 97714874),
-      'linux-arm64': opencodeAsset('linux-arm64', '5b20242cf83fce3d57fe6bf8776f1cc0519c61f1fcd22d23c54250cc30c9c15d', 96500248),
-      'win32-x64': opencodeAsset('windows-x64', 'ed891f09c17d0952a75a3cce2f450d03b5433b643fcbb6ec9b5025f862e1ae6e', 99863676),
-      'win32-arm64': opencodeAsset('windows-arm64', 'aee359d67de979b933510e48f34dbd105b83e3f62d94440a4a7b1072bee0f805', 95328606)
+      'darwin-arm64': opencodeAsset('darwin-arm64', 'dfd827de3281b4c3ca2b0bfc8f4beb103fa660c419d148a1a515c4344f9e9c02', 105814595),
+      'darwin-x64': opencodeAsset('darwin-x64', '304f4666e7e37eac338de258f763b7f5b8987ab1bde2341dc1a613a8205c0010', 111044366),
+      'linux-x64': opencodeAsset('linux-x64', '92690eee07a680d3cb760ca02ba43878de9eab1b4e5d5dfae8795518c53628f4', 118637290),
+      'linux-arm64': opencodeAsset('linux-arm64', 'f8c5a82075fede9b5b044ed6c8a6d13ad807a7e62caea1cd0a878adef49eb053', 117223869),
+      'win32-x64': opencodeAsset('windows-x64', '7a9e1dbe80965b75ace78d512c91ce4e6c9e4683fa5a5a25b00ff0b736f1c15c', 121997426),
+      'win32-arm64': opencodeAsset('windows-arm64', '0aec456e313a0bd4c65dd6e3834bf6a3005280a311d8cc449933931ccbbbe389', 115455350)
     } as Readonly<Record<string, RuntimePinAsset>>
   },
   git: {
@@ -354,16 +357,16 @@ export const RUNTIME_PINS = {
      * Linux) — that runs from anywhere only with the environment dugite itself
      * sets, which is why it is run through a wrapper script and not by path.
      *
-     * Every row was downloaded from the release and hashed on 2026-09-29, and
+     * Every row was downloaded from the release and hashed on 2026-11-06, and
      * agreed with the digest GitHub publishes for the asset; `size` is the byte
      * count of the same download. **Windows is absent**: the wrapper is a POSIX
      * shell script, and a Windows git ships as its own installer anyway.
      */
     assets: {
-      'darwin-arm64': gitAsset('macOS-arm64', 'f9dc64635a5b62fbd7ad95db73268bbb8912255ac516d65d37bf7af22fcb8ffe', 62348987),
-      'darwin-x64': gitAsset('macOS-x64', 'ae6686718aa34f4140424db16b92a47dcffd6d1f312eb8b5f3b267f7404e2680', 66136060),
-      'linux-x64': gitAsset('ubuntu-x64', 'cca76aa31ad9e835e771ee7f55b73934777fbd8d16757a10d307ba06de860901', 65269219),
-      'linux-arm64': gitAsset('ubuntu-arm64', 'a161f45af4626bb7e0c688854bd4a9aee47cc514bca404cff0a5e3536ef1c0af', 23223345)
+      'darwin-arm64': gitAsset('macOS-arm64', '1110de343de11cc6f469b782b60f36217b9199b5e06875dd65baa26dd60563c7', 63488287),
+      'darwin-x64': gitAsset('macOS-x64', '52cc663281e1ec2f1d76ba781193ca4847e62dbbf767f6c99ec9ec5b978a7659', 67470398),
+      'linux-x64': gitAsset('ubuntu-x64', '1efd8ce0516b670b6b6d0f49ecaf395ceb8cf7fff3f5857259763d97a1238df9', 67467493),
+      'linux-arm64': gitAsset('ubuntu-arm64', 'd5ce120515bf3013a014e6a918aa87ec0f7a6f5f9687c48d50127e637cb9b6c2', 25250010)
     } as Readonly<Record<string, RuntimePinAsset>>
   }
 } as const

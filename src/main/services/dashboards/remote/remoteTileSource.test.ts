@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../../../db/testSupport/nodeSqlite'
 
 /**
@@ -41,9 +41,9 @@ const spec = (refresh: Record<string, unknown> = {}) => ({
 
 let clock: number
 let live: boolean
-let client: Record<string, ReturnType<typeof vi.fn>>
-let events: { want: ReturnType<typeof vi.fn>; isLive: () => boolean }
-let highlight: ReturnType<typeof vi.fn>
+let client: Record<string, Mock<(...args: any[]) => any>>
+let events: { want: Mock<(...args: any[]) => any>; isLive: () => boolean }
+let highlight: Mock<(...args: any[]) => any>
 let published: string[]
 let intervals: Array<{ fn: () => void; ms: number; cleared: boolean }>
 let dashboards: ReturnType<typeof createDashboardService>

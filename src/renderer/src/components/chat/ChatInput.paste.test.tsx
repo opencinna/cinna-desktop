@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState, type ReactNode } from 'react'
 
@@ -10,7 +10,7 @@ import { useState, type ReactNode } from 'react'
  */
 
 const files = {
-  clipboardHasFileRefs: vi.fn(() => false),
+  clipboardHasFileRefs: vi.fn(async (): Promise<boolean> => false),
   pasteFromClipboard: vi.fn(),
   resolvePaths: vi.fn(),
   readThumbnail: vi.fn(async () => ({ success: false, error: 'no' }))
@@ -44,7 +44,7 @@ beforeEach(() => {
   useChatStore.getState().reset()
   useComposerDraftStore.setState({ drafts: {} })
   useAuthStore.setState({ currentUser: { id: 'u1', type: 'cinna_user' } as never })
-  files.clipboardHasFileRefs.mockReset().mockReturnValue(false)
+  files.clipboardHasFileRefs.mockReset().mockResolvedValue(false)
   files.pasteFromClipboard.mockReset().mockResolvedValue({ success: true, paths: [PASTED] })
   files.resolvePaths.mockReset().mockResolvedValue({
     success: true,
@@ -68,15 +68,80 @@ describe('pasting into the composer', () => {
     expect(files.pasteFromClipboard).not.toHaveBeenCalled()
   })
 
-  it('pastes the text of an Excel copy, whose picture of the cells is not a file', () => {
+  // Main answers asynchronously (Electron 44+), so the composer holds the
+  // event's own text and puts it in at the caret once main says "no files".
+  it('pastes the text of an Excel copy, whose picture of the cells is not a file', async () => {
     render(<ChatInput chatId={null} />, { wrapper })
-    expect(paste(['text/plain', 'text/html', 'Files'])).toBe(false)
+    const box = screen.getByRole('combobox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'See ' } })
+    box.setSelectionRange(4, 4)
+    expect(paste(['text/plain', 'text/html', 'Files'])).toBe(true)
     expect(files.clipboardHasFileRefs).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(box.value).toBe('See Q3 report.pdf'))
+    expect(files.pasteFromClipboard).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('pastes the held text when main cannot be asked', async () => {
+    files.clipboardHasFileRefs.mockRejectedValue(new Error('no main'))
+    render(<ChatInput chatId={null} />, { wrapper })
+    const box = screen.getByRole('combobox') as HTMLTextAreaElement
+    expect(paste(['text/plain', 'Files'])).toBe(true)
+    await waitFor(() => expect(box.value).toBe('Q3 report.pdf'))
     expect(files.pasteFromClipboard).not.toHaveBeenCalled()
   })
 
+  it('drops a held paste when the composer switches chats or unmounts before main answers', async () => {
+    let answer!: (refs: boolean) => void
+    files.clipboardHasFileRefs.mockImplementation(() => new Promise<boolean>((resolve) => (answer = resolve)))
+    const { rerender, unmount } = render(<ChatInput chatId={null} />, { wrapper })
+    const box = screen.getByRole('combobox') as HTMLTextAreaElement
+    expect(paste(['text/plain', 'Files'])).toBe(true)
+    rerender(<ChatInput chatId="chat-2" />)
+    await act(async () => answer(true))
+    expect(files.pasteFromClipboard).not.toHaveBeenCalled()
+    expect(box.value).toBe('')
+    unmount()
+
+    render(<ChatInput chatId={null} />, { wrapper })
+    const second = screen.getByRole('combobox') as HTMLTextAreaElement
+    expect(paste(['text/plain', 'Files'])).toBe(true)
+    cleanup()
+    await act(async () => answer(false))
+    expect(second.value).toBe('')
+    expect(files.pasteFromClipboard).not.toHaveBeenCalled()
+  })
+
+  it('drops a held paste when the message is sent before main answers', async () => {
+    let answer!: (refs: boolean) => void
+    files.clipboardHasFileRefs.mockImplementation(() => new Promise<boolean>((resolve) => (answer = resolve)))
+    const onNewChat = vi.fn(async () => true)
+    render(<ChatInput chatId={null} onNewChat={onNewChat} />, { wrapper })
+    const box = screen.getByRole('combobox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'Look at this' } })
+    expect(paste(['text/plain', 'Files'])).toBe(true)
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(onNewChat).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(box.value).toBe(''))
+    expect(document.activeElement).toBe(box)
+    await act(async () => answer(false))
+    expect(box.value).toBe('')
+    expect(files.pasteFromClipboard).not.toHaveBeenCalled()
+  })
+
+  it('logs, rather than leaving unhandled, a held paste whose handling throws', async () => {
+    const { useLoggerStore } = await import('../../stores/logger.store')
+    const log = vi.spyOn(useLoggerStore.getState(), 'log')
+    files.clipboardHasFileRefs.mockResolvedValue(true)
+    files.pasteFromClipboard.mockImplementation(() => { throw new Error('preload gone') })
+    render(<ChatInput chatId={null} />, { wrapper })
+    expect(paste(['text/plain', 'Files'])).toBe(true)
+    await waitFor(() => expect(log).toHaveBeenCalledWith('warn', 'composer', 'held paste failed', { error: 'preload gone' }))
+    log.mockRestore()
+  })
+
   it('attaches the files of a Finder copy rather than pasting their names', async () => {
-    files.clipboardHasFileRefs.mockReturnValue(true)
+    files.clipboardHasFileRefs.mockResolvedValue(true)
     render(<ChatInput chatId={null} />, { wrapper })
     expect(paste(['text/plain', 'Files'])).toBe(true)
     await waitFor(() => expect(files.pasteFromClipboard).toHaveBeenCalledTimes(1))
@@ -239,27 +304,36 @@ describe('a long text paste becomes a chip', () => {
 
   it('never chips the names of a Finder copy', async () => {
     useAuthStore.setState({ currentUser: { id: 'u1', type: 'cinna_user' } as never })
-    files.clipboardHasFileRefs.mockReturnValue(true)
+    files.clipboardHasFileRefs.mockResolvedValue(true)
     render(<ChatInput chatId={null} />, { wrapper })
     expect(pasteText(EMAIL, ['Files'])).toBe(true)
     await waitFor(() => expect(files.pasteFromClipboard).toHaveBeenCalledTimes(1))
     expect(draftPastes()).toEqual([])
   })
 
-  it('pastes a Finder copy\'s long names inline when files cannot be taken', () => {
-    files.clipboardHasFileRefs.mockReturnValue(true)
+  it('pastes a Finder copy\'s long names inline when files cannot be taken', async () => {
+    files.clipboardHasFileRefs.mockResolvedValue(true)
     mountNew()
-    expect(pasteText(EMAIL, ['Files'])).toBe(false)
+    expect(pasteText(EMAIL, ['Files'])).toBe(true)
     expect(files.clipboardHasFileRefs).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(box().value).toBe(EMAIL))
     expect(draftPastes()).toEqual([])
   })
 
-  it('chips the long text of an Excel copy', () => {
+  it('chips the long text of an Excel copy', async () => {
     useAuthStore.setState({ currentUser: { id: 'u1', type: 'cinna_user' } as never })
     render(<ChatInput chatId={null} />, { wrapper })
     expect(pasteText(EMAIL, ['Files'])).toBe(true)
+    await waitFor(() => expect(draftPastes()).toHaveLength(1))
     expect(files.pasteFromClipboard).not.toHaveBeenCalled()
-    expect(draftPastes()).toHaveLength(1)
+    expect(box().value).toBe('')
+  })
+
+  it('chips the long text of an Excel copy when files cannot be taken', async () => {
+    mountNew()
+    expect(pasteText(EMAIL, ['Files'])).toBe(true)
+    await waitFor(() => expect(draftPastes()).toHaveLength(1))
+    expect(box().value).toBe('')
   })
 
   it('makes two chips of the same text pasted twice', () => {

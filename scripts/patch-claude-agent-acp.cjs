@@ -108,7 +108,10 @@ function cinnaTrimContextUsage(usage) {
 // generation's session. The new generation is keyed by the call its frames
 // name, and the SendMessage call is mapped to it as well, because the resume's
 // `task_notification` names that call (`finishTask` resolves the child by it).
-// Watched live on CLI 2.1.296 with adapter 0.89.1.
+// Watched live on CLI 2.1.296 with adapter 0.89.1. Re-read on adapter 0.101.0,
+// whose RFD form keeps one child session across resumes: the AIR form, which
+// Cinna's `_meta.jetbrains.air` declaration gets (`acp-subagents.js`
+// `subagentForm`), still keys a resumed generation by the SendMessage call.
 const resumeKeyAnchor = '            parentToolUseId: task.toolUseId ?? undefined,\n'
 const resumeKey = `            // Cinna Desktop (scripts/patch-claude-agent-acp.cjs): a resume keeps the Agent call its frames name; its own SendMessage call is an alias.
             parentToolUseId: previous?.parentToolUseId ?? task.toolUseId ?? undefined,
@@ -184,12 +187,11 @@ const FILES = [
     originalSha256: policy.subagentsOriginalSha256,
     patchedSha256: policy.subagentsPatchedSha256,
     edits: [[resumeKeyAnchor, resumeKey], [resumeAliasAnchor, resumeAlias], [resumeFinishAnchor, resumeFinish], [spawnCallAnchor, spawnCall]],
-    // Earlier reviewed patches of this file, by the digest of the file they produced, each with the exact reversal
-    // of its edits. A checkout carrying one is restored to the original (verified by digest) and patched again.
-    earlierPatches: {
-      // The resume routing, before `subagent_spawned` named the Agent call.
-      ef389ca1aa3dc4bc6b491f2605f78789efc6998d4e15d083a8966c32e57d1fa4: undo([[resumeKeyAnchor, resumeKey], [resumeAliasAnchor, resumeAlias], [resumeFinishAnchor, resumeFinish]])
-    }
+    // Earlier reviewed patches of this file at this adapter version, by the digest of the file they produced, each
+    // with the exact reversal of its edits (`undo`). A checkout carrying one is restored to the original (verified by
+    // digest) and patched again. None at 0.101.0: the three-edit patch was reviewed on 0.89.1 only, and a version
+    // bump installs the pristine file.
+    earlierPatches: {}
   }
 ]
 

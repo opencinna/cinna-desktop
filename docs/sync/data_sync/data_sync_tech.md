@@ -134,7 +134,7 @@ Base path `/api/v1/app-sync` (see `services/syncApi.ts`; shapes mirror cinna-cor
 
 ## Configuration
 
-- Dependencies: `libsodium-wrappers-sumo` (full API — see `crypto/sodium.ts`), `@scure/bip39`, `qrcode` (+ `@types/libsodium-wrappers-sumo`).
+- Dependencies: `libsodium-wrappers-sumo` (full API — see `crypto/sodium.ts`), `@scure/bip39`, `qrcode`.
 - Engine constants in `syncEngine.ts`: `MAX_RECORDS_PER_PUSH` (500), `MAX_PAYLOAD_BYTES` (1 MiB), `PULL_PAGE` (200).
 - Timing in `syncService.ts`: `PERIODIC_MS` (60s), `DEBOUNCE_MS` (1.5s). Pairing poll cadence/cap (the joiner side) live in `components/sync/SyncSetupModal.tsx`.
 

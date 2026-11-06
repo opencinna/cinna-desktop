@@ -102,8 +102,8 @@ describe('the prompt response', () => {
       .toEqual({ input: 4, output: 1, cacheRead: 2, cacheWrite: 3 })
   })
 
-  it('reads Antigravity’s usage, should it send one, as the last request’s', () => {
-    expect(parsePromptTelemetry(CODEX_RESPONSE, 'antigravity')?.tokenScope).toBe('last_request')
+  it('reads Antigravity’s usage as the whole turn’s', () => {
+    expect(parsePromptTelemetry(CODEX_RESPONSE, 'antigravity')?.tokenScope).toBe('turn')
   })
 
   it('reads Codex’s quota when usage is null, and nothing from a response with neither', () => {
@@ -644,8 +644,35 @@ describe('Antigravity telemetry', () => {
   })
 
   it('reads no turn usage from a prompt answer that carries only its stop reason', () => {
-    // 1.3.0 answers `{stopReason}` alone; its context arrives as usage_update.
+    // 1.3.0 answered `{stopReason}` alone; its context arrives as usage_update.
     expect(parsePromptTelemetry({ stopReason: 'end_turn' }, 'antigravity', 'gemini-3.6-flash-low')).toBeNull()
+  })
+
+  /** What 1.4.5 answered a two-call turn with (`antigravity.telemetry.usage-update`): the calls' sum, no model. */
+  const ANSWER_1_4_5 = { stopReason: 'end_turn', usage: { totalTokens: 207, inputTokens: 203, outputTokens: 4, thoughtTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 } }
+
+  it('reads 1.4.5’s usage as the whole turn’s, on the selected model', () => {
+    // Mutation: put back `last_request` for Antigravity and the scope reads
+    // "last request only" on a sum of every call; drop Antigravity from the
+    // selected-model branch and the turn names no model.
+    expect(parsePromptTelemetry(ANSWER_1_4_5, 'antigravity', 'gemini-3.6-flash-low')).toEqual({
+      model: 'gemini-3.6-flash-low',
+      tokens: { input: 203, output: 4, cacheRead: 0, cacheWrite: 0 },
+      byModel: { 'gemini-3.6-flash-low': { input: 203, output: 4, cacheRead: 0, cacheWrite: 0 } },
+      tokenScope: 'turn'
+    })
+  })
+
+  it('settles a 1.4.5 turn with its tokens and context, and no cost', () => {
+    const changes: SessionTelemetryChange[] = []
+    const turn = new TurnTelemetry({ chatId: 'c', engine: 'antigravity', costs: new CostReadings(), reporter: { report: (_chatId, change) => void changes.push(change) } })
+    turn.model('gemini-3.6-flash-low')
+    turn.started()
+    turn.frame({} as AcpConnection, 's', { used: 104, size: 1048576 })
+    turn.answered(ANSWER_1_4_5)
+    const settled = turn.settle('s')
+    expect(settled).toMatchObject({ tokens: { input: 203, output: 4 }, tokenScope: 'turn' })
+    expect(settled?.costUsd).toBeUndefined()
   })
 
   it('settles a turn with its context from usage_update and no cost', () => {

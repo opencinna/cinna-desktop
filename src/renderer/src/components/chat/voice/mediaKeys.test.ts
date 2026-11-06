@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 type Handler = (() => void) | null
 
@@ -29,7 +29,7 @@ async function load(): Promise<typeof import('./mediaKeys')> {
   }
 }
 
-function entry(): { toggle: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> } {
+function entry(): { toggle: Mock<(...args: any[]) => any>; send: Mock<(...args: any[]) => any> } {
   return { toggle: vi.fn(), send: vi.fn() }
 }
 

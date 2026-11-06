@@ -66,7 +66,7 @@ test('patches the exact pinned adapter once and packaging rejects the pristine a
   assert.equal(subagentsText.split('if (child?.resumeToolUseId && toolUseId === child.parentToolUseId)').length, 2)
   // The spawn call: once, on the live announcement in announceNativeSubagent.
   assert.equal(subagentsText.split('_meta: { claudeCode: { toolUseId: child.parentToolUseId } }').length, 2)
-  assert.match(subagentsText, /export async function announceNativeSubagent\(child, publish\) \{[\s\S]*?capabilities: \{\},\n[^\n]*Cinna Desktop[^\n]*\n\s+\.\.\.\(child\.parentToolUseId \? \{ _meta: \{ claudeCode: \{ toolUseId: child\.parentToolUseId \} \} \} : \{\}\),\n\s+\},\n\s+\}\);\n\s+child\.announced = true;/)
+  assert.match(subagentsText, /export async function announceNativeSubagent\(child, publish, form, cwd\) \{[\s\S]*?capabilities: \{\},\n[^\n]*Cinna Desktop[^\n]*\n\s+\.\.\.\(child\.parentToolUseId \? \{ _meta: \{ claudeCode: \{ toolUseId: child\.parentToolUseId \} \} \} : \{\}\),\n\s+\},\n\s+\}\);\n\s+child\.announced = true;/)
 })
 
 test('packaging rejects either file unpatched, and a refusal of one file leaves the other unwritten', (t) => {
@@ -93,17 +93,15 @@ test('rejects unexpected source and version without modifying the package', (t) 
   assert.throws(() => verifyClaudeAgentAcpPatch(f.root), /version/)
 })
 
-test('a native-subagents.js carrying the previous reviewed patch is restored and patched again', (t) => {
+test('a native-subagents.js carrying part of the patch is refused and left as it is', (t) => {
   const f = fixture(t)
   patchClaudeAgentAcp(f.root)
+  // The three-edit patch reviewed on 0.89.1 has no reversal at 0.101.0: neither the original nor a reviewed result.
   const previous = f.subagentsOriginal.replace(resumeKeyAnchor, () => resumeKey).replace(resumeAliasAnchor, () => resumeAlias)
     .replace(resumeFinishAnchor, () => resumeFinish)
-  assert.equal(sha(previous), 'ef389ca1aa3dc4bc6b491f2605f78789efc6998d4e15d083a8966c32e57d1fa4')
   writeFileSync(f.subagentsPath, previous)
-  patchClaudeAgentAcp(f.root)
-  assert.equal(sha(readFileSync(f.subagentsPath)), policy.subagentsPatchedSha256)
-  assert.equal(sha(readFileSync(f.path)), policy.patchedSha256)
-  // Part of that patch is neither the original nor a reviewed result: refused and left as it is.
+  assert.throws(() => patchClaudeAgentAcp(f.root), /native-subagents\.js\) differs/)
+  assert.equal(readFileSync(f.subagentsPath, 'utf8'), previous)
   const partial = f.subagentsOriginal.replace(resumeKeyAnchor, () => resumeKey)
   writeFileSync(f.subagentsPath, partial)
   assert.throws(() => patchClaudeAgentAcp(f.root), /native-subagents\.js\) differs/)
@@ -216,7 +214,8 @@ test('a resumed subagent is routed by the Agent call its frames name, outlives t
   const { NativeSubagentRuntime } = await import(pathToFileURL(join(dist, 'native-subagents.js')).href)
   const published = []
   const logs = []
-  const runtime = new NativeSubagentRuntime(true, 'root', {}, async (n) => { published.push(n) }, { log: (line) => logs.push(line) })
+  // 'air': the form Cinna's `_meta.jetbrains.air` declaration gets (`acp-subagents.js` `subagentForm`).
+  const runtime = new NativeSubagentRuntime('air', 'root', {}, async (n) => { published.push(n) }, { log: (line) => logs.push(line) })
   const deliver = async () => {}
   const agentCall = (id, parentToolUseId) => ({
     sessionId: 'root',

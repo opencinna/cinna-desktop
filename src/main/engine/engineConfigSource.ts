@@ -261,6 +261,10 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
     // before the prompt so the prompt only says "the skill tool has them" when
     // the links folder exists. Scanned fresh by the builder, as Claude's is.
     const ownPlugin = agent.skills ? ensureKitAgentSkillsPlugin({ id: agent.id, path: agent.path }) : null
+    // The one kit-versus-bare decision for this agent: it picks the prompt
+    // assembler, and the dashboard design pack's read allow follows it, since
+    // only the kit assembler names the pack.
+    const bare = agent.kind === 'bare'
     out.push({
       agentId: agent.id,
       slug: agent.slug,
@@ -271,7 +275,7 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
       // Per agent, not per collection: the context carries this agent's own id,
       // which is what its handover briefs have to state as `origin.agent`.
       prompt:
-        agent.kind === 'bare'
+        bare
           ? assembleBareAgentPrompt(agent.path, agent.name, { ...context, agentId: agent.id })
           : assembleAgentPrompt(agent.path, agent.manifest, {
               ...context,
@@ -286,7 +290,7 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
           : null,
       ...ownSkills(ownPlugin),
       ...workshopKit(agent),
-      ...dashboardsDesign(agent, context.dashboardsDesign ?? null),
+      ...(bare ? {} : dashboardsDesign(context.dashboardsDesign ?? null)),
       ...kitAgentPluginCommands(agent)
     })
   }
@@ -294,11 +298,12 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
 }
 
 /**
- * The dashboard design pack for OpenCode's read allow: a kit agent's, when its
- * prompt names the pack's guide (`dashboardsDesign` in the prompt context).
+ * The dashboard design pack for OpenCode's read allow: a kit agent's (the
+ * caller decides that with the prompt assembler), when its prompt names the
+ * pack's guide (`dashboardsDesign` in the prompt context).
  */
-function dashboardsDesign(agent: { kind: string }, design: DashboardDesignGuide | null): Pick<EngineAgentInput, 'dashboardsDesignPath'> {
-  if (agent.kind !== 'kit' || !design) return {}
+function dashboardsDesign(design: DashboardDesignGuide | null): Pick<EngineAgentInput, 'dashboardsDesignPath'> {
+  if (!design) return {}
   const dir = dashboardDesignReadDir()
   return dir ? { dashboardsDesignPath: dir } : {}
 }

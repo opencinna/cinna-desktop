@@ -58,7 +58,7 @@ export const ANTIGRAVITY_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'antigravity.launch.command-cwd', area: 'launch & env', surface: 'file', name: 'Command Working Directory',
-    expectation: 'The system instruction names the session’s cwd as its `Command Working Directory` when `GEMINI_HOME` is nested inside that cwd; with the home outside it (a native folder on `~/.gemini`), it names `<home>/antigravity-cli/skills` instead.',
+    expectation: 'The system instruction names the session’s cwd as its `Command Working Directory`, both when `GEMINI_HOME` is nested inside that cwd and when the home is outside it (a native folder on `~/.gemini`). 1.3.0 named `<home>/antigravity-cli/skills` in the second case; pinned both ways, so a release that brings that back fails here.',
     owners: [`${LAUNCHER}#antigravityIsolatedHome`],
     feature: 'A sealed folder’s commands and relative paths would run in the engine’s skills directory; a native folder depends on the prompt naming the folder as long as the second half holds.',
     flow: NO_FLOW
@@ -134,7 +134,7 @@ export const ANTIGRAVITY_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'antigravity.mcp.tool-call-naming', area: 'tools & MCP', surface: 'ACP field', name: 'tool_call title / _meta.mcp',
-    expectation: 'An MCP call is reported in one of two shapes. When it raises an ask (mode `default`): titled `<server>_<tool>`, `kind: "other"`, `rawInput: { arguments }`, `_meta: { mcp: { server, tool }, is_mcp_tool_call: true }`, and the permission request carries that same `toolCall`. When it does not (mode `yolo`): titled `Running <tool>` with the bare name, `kind: "other"`, `rawInput: {}`, no `_meta` — no server anywhere.',
+    expectation: 'An MCP call is reported in one shape whether it raises an ask (mode `default`) or not (mode `yolo`): titled `<server>_<tool>`, `kind: "other"`, `rawInput: { arguments }`, `_meta: { mcp: { server, tool }, is_mcp_tool_call: true }`; an ask’s permission request carries that same `toolCall`. 1.3.0 titled an unasked call `Running <tool>` with the bare name, `rawInput: {}` and no `_meta`; the bare-name reader still accepts that shape.',
     owners: [`${POLICY}#BARE_MCP_TITLE`, `${POLICY}#mcpCallOf`, `${POLICY}#cinnaToolName`, `${MESSAGES}#cinnaTool`, `${DRIVER}#isCinnaToolAsk`],
     feature: 'Cinna’s tool calls are not recognised as Cinna’s: no agent sub-thread, and the permission gate treats them as native actions — under Ask approval a conducting session’s every Cinna call surfaces an ask.',
     flow: NO_FLOW
@@ -203,7 +203,7 @@ export const ANTIGRAVITY_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'antigravity.telemetry.usage-update', area: 'models & config', surface: 'ACP field', name: 'usage_update',
-    expectation: 'Each model call is followed by `usage_update { used, size }` (no `cost`), and a prompt answers with its `stopReason` alone — no `usage`, no `_meta`.',
+    expectation: 'Each model call is followed by `usage_update { used, size }` (no `cost`), and a prompt answers with its `stopReason` and a `usage` (`inputTokens`, `outputTokens`, `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens`, `totalTokens`) that is the sum over the turn’s model calls — no `_meta`, so no model named. 1.3.0 answered with the `stopReason` alone.',
     owners: ['src/main/agents/drivers/acp/acpTelemetry.ts#parsePromptTelemetry', `${MESSAGES}#usageFrame`],
     feature: 'The context meter stays empty for Antigravity chats.',
     flow: NO_FLOW
@@ -219,7 +219,7 @@ export const ANTIGRAVITY_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'antigravity.policy.filter-names', area: 'restricted chat policy', surface: '_meta key', name: '_meta.agy.disabledTools',
-    expectation: 'The filter names are the server’s `BuiltinTools` values (`ANTIGRAVITY_FILTER_TOOLS`), not the declared function names: `start_subagent` removes `define_subagent`, `invoke_subagent`, `manage_subagents` and `send_message`; `create_file` + `edit_file` remove `write_to_file` and `replace_file_content`; a declared name such as `send_message` is rejected (logged) and removes nothing; all of `ANTIGRAVITY_FILTER_TOOLS` together leave no built-in declared. The launcher’s sealed-folder denylist (`schedule`, `start_subagent`) removes exactly `schedule` and the subagent and messaging functions; its native-folder denylist (`start_subagent`) removes exactly the subagent and messaging functions and keeps `schedule`.',
+    expectation: 'The filter names are the server’s `BuiltinTools` values (`ANTIGRAVITY_FILTER_TOOLS`), not the declared function names: `invoke_subagent` and its deprecated alias `start_subagent` each remove `define_subagent`, `invoke_subagent`, `manage_subagents`, `run_workflow` and `send_message`, and every filter names both; `create_file` + `edit_file` remove `write_to_file` and `replace_file_content`; a declared name such as `send_message` is rejected (logged) and removes nothing; all of `ANTIGRAVITY_FILTER_TOOLS` together leave no built-in declared. The launcher’s sealed-folder denylist (`invoke_subagent`, `schedule`, `start_subagent`) removes exactly `schedule` and the subagent, workflow and messaging functions; its native-folder denylist (`invoke_subagent`, `start_subagent`) removes exactly the subagent, workflow and messaging functions and keeps `schedule`.',
     owners: [`${LAUNCHER}#ANTIGRAVITY_FILTER_TOOLS`, `${LAUNCHER}#ANTIGRAVITY_ISOLATED_DISABLED_TOOLS`, `${LAUNCHER}#ANTIGRAVITY_NATIVE_DISABLED_TOOLS`, `${POLICY}#applyConductorToolPolicy`],
     feature: 'A sealed folder keeps the engine’s own scheduler, subagents and messaging beside Cinna’s, a native folder runs subagents whose work never reaches the chat, or a plain chat’s denylist names tools the server ignores.',
     flow: NO_FLOW
@@ -248,7 +248,7 @@ export const ANTIGRAVITY_CONTRACT: readonly ContractEntry[] = [
   },
   {
     id: 'antigravity.policy.workspace-cwd', area: 'restricted chat policy', surface: 'provider request', name: 'Command Working Directory',
-    expectation: 'With the session in the chat folder `<conductors>/<chatId>` and the shared home from `antigravitySharedHome(…, true)` (`<conductors>/~workspace-homes/<hash>.agyhome`), the server names the chat folder the Command Working Directory, and a command run there prints it — for a chat id sorting before `processes` and one after it. Control: with the plain-chat home beside the process folder, a chat id after `processes` gets `<home>/antigravity-cli/skills`, which does not exist.',
+    expectation: 'With the session in the chat folder `<conductors>/<chatId>` and the shared home from `antigravitySharedHome(…, true)` (`<conductors>/~workspace-homes/<hash>.agyhome`), the server names the chat folder the Command Working Directory, and a command run there prints it — for a chat id sorting before `processes` and one after it. Control: with the plain-chat home beside the process folder, a chat id after `processes` gets the chat folder too on 1.4.5; 1.3.0 gave it `<home>/antigravity-cli/skills`, which does not exist, which is why the shared home sits under `~workspace-homes`. Pinned both ways: the layout is kept, and a release that brings the quirk back fails here.',
     owners: [`${LAUNCHER}#antigravitySharedHome`, 'src/main/agents/drivers/index.ts#acpLauncherFor'],
     feature: 'Commands of one chat in six fail with “no such directory”, or run outside the chat’s folder.',
     flow: NO_FLOW

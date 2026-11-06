@@ -538,7 +538,10 @@ describe('a Codex subagent turn (V1 collaboration calls)', () => {
     // unowned-turn branch and the child stays running.
     const fixture = loadActivityFixture('codex', 'subagent_collab_cancel')
     const spawned = fixture.notifications.filter((n) => (n.update as { title?: string }).title !== 'wait')
-    const offered: ((text: string) => Promise<string>)[] = []
+    // The offer as it stands: the thought chunks open it, the spawn call withdraws
+    // it, and its completion offers it again. A message sent while it is withdrawn
+    // is refused unsent, so the test waits for the child and a live offer.
+    let live: ((text: string) => Promise<string>) | null = null
     const w = world({
       sessionId: fixture.notifications[0].sessionId, launcher: 'codex',
       script: {
@@ -548,12 +551,14 @@ describe('a Codex subagent turn (V1 collaboration calls)', () => {
       emit: [
         ...steps(spawned),
         { kind: 'update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working.' } } },
-        { kind: 'delay', ms: 150 }
+        // The prompt ends once the message is on the wire, not after a wall-clock
+        // delay that a loaded run can overshoot before the test sends it.
+        { kind: 'awaitSteer' }
       ]
     })
-    const running = w.run({ registerSteer: (steer) => { if (steer) offered.push(steer) } })
-    await waitFor(() => offered.length > 0, 'the turn to take messages')
-    const late = offered[0]('next')
+    const running = w.run({ registerSteer: (steer) => { live = steer } })
+    const offer = await waitFor(() => w.hub.snapshot(CHAT_ID).items.length === 1 && live, 'the turn to take messages')
+    const late = offer('next')
     expect((await running).error).toBeUndefined()
     expect(items(w.hub)).toEqual([[CANCELLED, codexNickname(CANCELLED), 'running', 'MODE=LONG']])
     // The next turn holds the process: it is left up, so nothing else would end the item.
