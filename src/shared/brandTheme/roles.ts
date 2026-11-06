@@ -119,3 +119,9 @@ export type BrandThemeChangedPayload = { origin: string; revision: number } | nu
 
 export const BRAND_THEME_CHANGED_CHANNEL = 'brandTheme:changed'
 export const BRAND_THEME_GET_CHANNEL = 'brandTheme:get'
+/**
+ * The cached theme of one profile's server, for a sign-in surface showing that
+ * profile before it is active. Cache only: never fetches. Null for a guest,
+ * local or unknown profile, a server without a cached theme, or any error.
+ */
+export const BRAND_THEME_GET_FOR_PROFILE_CHANNEL = 'brandTheme:getForProfile'

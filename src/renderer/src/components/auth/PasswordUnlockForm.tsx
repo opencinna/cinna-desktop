@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Lock } from 'lucide-react'
 import { useLogin } from '../../hooks/useAuth'
+import { useBrandThemeForProfile } from '../../stores/brandTheme.store'
 
 interface PasswordUnlockFormProps {
   userId: string
@@ -18,6 +19,10 @@ export function PasswordUnlockForm({
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const login = useLogin()
+  // The lock looks like the server it unlocks (its cached brand, or stock),
+  // at startup and over the app when switching to a locked profile; closing
+  // it restores the active profile's look.
+  useBrandThemeForProfile(userId)
 
   const initial = userName.charAt(0).toUpperCase() || '?'
 
@@ -37,7 +42,7 @@ export function PasswordUnlockForm({
     <div className="w-72 space-y-6">
       <div className="flex flex-col items-center gap-3">
         <div className="w-16 h-16 rounded-full bg-[var(--color-accent)] flex items-center justify-center">
-          <span className="text-2xl font-bold text-white">{initial}</span>
+          <span className="text-2xl font-bold text-white [[data-brand]_&]:text-[var(--color-on-accent)]">{initial}</span>
         </div>
         <div className="text-sm font-semibold text-[var(--color-text)]">
           {userName || 'User'}
@@ -65,7 +70,7 @@ export function PasswordUnlockForm({
         <button
           type="submit"
           disabled={login.isPending}
-          className="w-full py-2 text-sm rounded-lg bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+          className="w-full py-2 text-sm rounded-lg bg-[var(--color-accent)] text-white [[data-brand]_&]:text-[var(--color-on-accent)] hover:opacity-90 transition-opacity disabled:opacity-50"
         >
           {login.isPending ? 'Signing in...' : 'Unlock'}
         </button>

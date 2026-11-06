@@ -136,7 +136,10 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
   const cachedPayload = (origin: string | null): BrandThemeChangedPayload => {
     if (!origin) return null
     const row = brandThemeRepo.get(origin)
-    return row ? { origin, revision: row.revision } : null
+    if (!row) return null
+    // A row that no longer resolves is stock: announcing its revision would
+    // send windows to `get` (null) while the former look still shows.
+    return resolve(origin) ? { origin, revision: row.revision } : null
   }
 
   const emitIfActive = (origin: string, payload: BrandThemeChangedPayload): void => {
@@ -253,6 +256,17 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
      */
     get(): ResolvedBrandTheme | null {
       const origin = activeOrigin()
+      return origin ? resolve(origin) : null
+    },
+
+    /**
+     * The cached theme of `userId`'s server, whether or not that profile is
+     * active: a sign-in surface (the password lock of a profile being
+     * switched to) shows it while it is up. Cache only — never fetches — and
+     * null for a profile without a Cinna server.
+     */
+    resolveForProfile(userId: string): ResolvedBrandTheme | null {
+      const origin = deps.serverOf(userId)?.origin ?? null
       return origin ? resolve(origin) : null
     },
 

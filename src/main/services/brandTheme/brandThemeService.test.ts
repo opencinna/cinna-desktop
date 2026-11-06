@@ -233,6 +233,24 @@ describe('brandThemeService against a fake core', () => {
     expect(emitted).toEqual([])
   })
 
+  it('resolveForProfile reads any profile\'s cached theme without fetching; null for a server with none or no server', async () => {
+    const { core, service, activate } = setup(full.assets)
+    activate('acme-1')
+    core.state.reply = { status: 200, doc: full.doc }
+    await service.refresh('acme-1')
+    // The active profile is now one on another server: the lock of an acme profile still shows acme.
+    activate('other')
+    core.state.calls.length = 0
+    expect(service.resolveForProfile('acme-2')?.origin).toBe('https://acme.example')
+    expect(service.resolveForProfile('acme-2')?.logo?.dark).toMatch(/^data:image\//)
+    expect(service.resolveForProfile('other')).toBeNull()
+    expect(service.resolveForProfile('local')).toBeNull()
+    expect(service.resolveForProfile('no-such-profile')).toBeNull()
+    expect(core.state.calls).toEqual([])
+    // It does not move what the active profile shows.
+    expect(service.get()).toBeNull()
+  })
+
   it('collapses concurrent refreshes of one origin into one request', async () => {
     const { core, service, activate } = setup(full.assets)
     activate('acme-1')

@@ -2,14 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrandThemeChangedPayload, ResolvedBrandTheme } from '../../../shared/brandTheme/roles'
-import { BRAND_STYLE_ID, applyBrandTheme, handleBrandThemeChanged, initBrandTheme, useBrandThemeStore } from './brandTheme.store'
+import { act, renderHook } from '@testing-library/react'
+import {
+  BRAND_STYLE_ID,
+  applyBrandTheme,
+  handleBrandThemeChanged,
+  initBrandTheme,
+  useBrandThemeForProfile,
+  useBrandThemeStore
+} from './brandTheme.store'
 
 const served = JSON.parse(
   readFileSync(join(process.cwd(), 'src/shared/brandTheme/fixtures/valid/full/served/served.json'), 'utf8')
 ) as { theme: { name: string; modes: ResolvedBrandTheme['modes'] } }
 
-const theme = (revision: number): ResolvedBrandTheme => ({
-  origin: 'https://acme.example',
+const theme = (revision: number, origin = 'https://acme.example'): ResolvedBrandTheme => ({
+  origin,
   revision,
   name: served.theme.name,
   modes: JSON.parse(JSON.stringify(served.theme.modes)) as ResolvedBrandTheme['modes'],
@@ -21,14 +29,17 @@ const options = { background: true }
 const sheet = (): string | null => document.getElementById(BRAND_STYLE_ID)?.textContent ?? null
 
 let get: ReturnType<typeof vi.fn>
+let getForProfile: ReturnType<typeof vi.fn>
 let listener: ((payload: BrandThemeChangedPayload) => void) | null
 
 beforeEach(() => {
   get = vi.fn()
+  getForProfile = vi.fn()
   listener = null
   ;(window as unknown as { api: unknown }).api = {
     brandTheme: {
       get,
+      getForProfile,
       onChanged: (cb: (payload: BrandThemeChangedPayload) => void) => {
         listener = cb
         return () => { listener = null }
@@ -37,6 +48,7 @@ beforeEach(() => {
   }
 })
 afterEach(() => {
+  useBrandThemeStore.setState({ active: null, override: null })
   applyBrandTheme(null, options)
 })
 
@@ -95,5 +107,105 @@ describe('brand theme store', () => {
     finishFirst(theme(1))
     await first
     expect(document.documentElement.hasAttribute('data-brand')).toBe(false)
+  })
+})
+
+describe('a profile override (sign-in surfaces)', () => {
+  const shown = (): string | null => useBrandThemeStore.getState().key
+  const flush = async (): Promise<void> => { await act(async () => { await Promise.resolve() }) }
+
+  /** Active: acme rev 1, applied as at startup. */
+  async function startBranded(): Promise<void> {
+    get.mockResolvedValueOnce(theme(1))
+    await initBrandTheme(options)
+    expect(shown()).toBe('https://acme.example#1')
+  }
+
+  it('a profile on a stock server shows stock over a branded active profile, and unmount restores the active brand', async () => {
+    await startBranded()
+    getForProfile.mockResolvedValueOnce(null)
+    const view = renderHook(() => useBrandThemeForProfile('bob'))
+    await flush()
+    expect(getForProfile).toHaveBeenCalledWith('bob')
+    expect(useBrandThemeStore.getState().override).toEqual({ userId: 'bob', theme: null })
+    expect(document.documentElement.hasAttribute('data-brand')).toBe(false)
+    expect(shown()).toBeNull()
+    view.unmount()
+    expect(useBrandThemeStore.getState().override).toBeNull()
+    expect(document.documentElement.hasAttribute('data-brand')).toBe(true)
+    expect(shown()).toBe('https://acme.example#1')
+  })
+
+  it('a branded profile over a stock active one shows its theme', async () => {
+    get.mockResolvedValueOnce(null)
+    await initBrandTheme(options)
+    getForProfile.mockResolvedValueOnce(theme(4, 'https://other.example'))
+    const view = renderHook(() => useBrandThemeForProfile('bob'))
+    await flush()
+    expect(shown()).toBe('https://other.example#4')
+    expect(sheet()).toContain('--color-accent:')
+    view.unmount()
+    expect(shown()).toBeNull()
+    expect(sheet()).toBeNull()
+  })
+
+  it('changed events while an override shows update the active theme underneath, not the display', async () => {
+    await startBranded()
+    getForProfile.mockResolvedValueOnce(theme(4, 'https://other.example'))
+    const view = renderHook(() => useBrandThemeForProfile('bob'))
+    await flush()
+    get.mockResolvedValueOnce(theme(2))
+    await act(() => handleBrandThemeChanged({ origin: 'https://acme.example', revision: 2 }, options))
+    expect(useBrandThemeStore.getState().active?.revision).toBe(2)
+    expect(shown()).toBe('https://other.example#4')
+    await act(() => handleBrandThemeChanged(null, options))
+    expect(useBrandThemeStore.getState().active).toBeNull()
+    expect(shown()).toBe('https://other.example#4')
+    view.unmount()
+    expect(shown()).toBeNull()
+  })
+
+  it('unlocking the overridden profile adopts its theme as active without another get', async () => {
+    await startBranded()
+    getForProfile.mockResolvedValueOnce(theme(4, 'https://other.example'))
+    const view = renderHook(() => useBrandThemeForProfile('bob'))
+    await flush()
+    get.mockClear()
+    await act(() => handleBrandThemeChanged({ origin: 'https://other.example', revision: 4 }, options))
+    expect(get).not.toHaveBeenCalled()
+    view.unmount()
+    expect(shown()).toBe('https://other.example#4')
+  })
+
+  it('an answer for a previous user id, or after unmount, is ignored', async () => {
+    await startBranded()
+    let answerAlice: (value: ResolvedBrandTheme | null) => void = () => {}
+    getForProfile.mockImplementationOnce(() => new Promise((resolve) => { answerAlice = resolve }))
+    getForProfile.mockResolvedValueOnce(null)
+    const view = renderHook(({ id }) => useBrandThemeForProfile(id), { initialProps: { id: 'alice' } })
+    view.rerender({ id: 'bob' })
+    await flush()
+    expect(useBrandThemeStore.getState().override).toEqual({ userId: 'bob', theme: null })
+    await act(async () => { answerAlice(theme(9, 'https://alice.example')) })
+    expect(useBrandThemeStore.getState().override).toEqual({ userId: 'bob', theme: null })
+    expect(shown()).toBeNull()
+
+    let late: (value: ResolvedBrandTheme | null) => void = () => {}
+    getForProfile.mockImplementationOnce(() => new Promise((resolve) => { late = resolve }))
+    view.rerender({ id: 'carol' })
+    view.unmount()
+    await act(async () => { late(theme(7, 'https://carol.example')) })
+    expect(useBrandThemeStore.getState().override).toBeNull()
+    expect(shown()).toBe('https://acme.example#1')
+  })
+
+  it('a getForProfile that fails shows stock for that profile', async () => {
+    await startBranded()
+    getForProfile.mockRejectedValueOnce(new Error('no handler'))
+    const view = renderHook(() => useBrandThemeForProfile('bob'))
+    await flush()
+    expect(shown()).toBeNull()
+    view.unmount()
+    expect(shown()).toBe('https://acme.example#1')
   })
 })

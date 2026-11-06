@@ -1,7 +1,11 @@
 import { brandThemeService } from '../services/brandTheme/brandThemeService'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
-import { BRAND_THEME_GET_CHANNEL, type ResolvedBrandTheme } from '../../shared/brandTheme/roles'
+import {
+  BRAND_THEME_GET_CHANNEL,
+  BRAND_THEME_GET_FOR_PROFILE_CHANNEL,
+  type ResolvedBrandTheme
+} from '../../shared/brandTheme/roles'
 
 const logger = createLogger('brand-theme')
 
@@ -17,6 +21,19 @@ export function registerBrandThemeHandlers(): void {
       return brandThemeService.get()
     } catch (err) {
       logger.warn('brand theme could not be read; showing stock', { error: err instanceof Error ? err.message : 'error' })
+      return null
+    }
+  })
+
+  // A sign-in surface for a profile that is not active yet (its password
+  // lock). Same reasoning: public data, read from the cache only, so no
+  // activation gate; anything wrong — including a malformed id — is stock.
+  ipcHandle(BRAND_THEME_GET_FOR_PROFILE_CHANNEL, (_event, userId: unknown): ResolvedBrandTheme | null => {
+    if (typeof userId !== 'string' || userId.length === 0) return null
+    try {
+      return brandThemeService.resolveForProfile(userId)
+    } catch (err) {
+      logger.warn('brand theme for a profile could not be read; showing stock', { error: err instanceof Error ? err.message : 'error' })
       return null
     }
   })

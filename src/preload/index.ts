@@ -101,6 +101,7 @@ import type { CinnaCliUpdate } from '../shared/cinnaCli'
 import {
   BRAND_THEME_CHANGED_CHANNEL,
   BRAND_THEME_GET_CHANNEL,
+  BRAND_THEME_GET_FOR_PROFILE_CHANNEL,
   type BrandThemeChangedPayload,
   type ResolvedBrandTheme
 } from '../shared/brandTheme/roles'
@@ -1907,6 +1908,9 @@ const api = {
    */
   brandTheme: {
     get: (): Promise<ResolvedBrandTheme | null> => ipcRenderer.invoke(BRAND_THEME_GET_CHANNEL),
+    /** The cached theme of one profile's server (its password lock); null when it has none. Never fetches. */
+    getForProfile: (userId: string): Promise<ResolvedBrandTheme | null> =>
+      ipcRenderer.invoke(BRAND_THEME_GET_FOR_PROFILE_CHANNEL, userId),
     onChanged: (handler: (payload: BrandThemeChangedPayload) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, payload: BrandThemeChangedPayload): void => handler(payload)
       ipcRenderer.on(BRAND_THEME_CHANGED_CHANNEL, listener)

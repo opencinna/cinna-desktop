@@ -28,6 +28,7 @@ import type { ChatModeData } from '../../constants/chatModeColors'
 import { composerModes } from '../../utils/composerModes'
 import { ChatModeGlyph } from '../chat/ChatModeGlyph'
 import { CinnaLogoDraw } from '../ui/CinnaLogoDraw'
+import { useBrandThemeStore } from '../../stores/brandTheme.store'
 import type { ComposerAttachment } from '../../../../shared/attachments'
 import { useComposerDraftField, useComposerDraftKey } from '../../hooks/useComposerDraft'
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
@@ -65,6 +66,11 @@ export function ChatWorkspace({
   const { activeView, pendingAgentId, setPendingAgentId } = useUIStore()
   const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)
   const pendingModeId = useUIStore((s) => s.pendingModeId)
+  // The active profile's brand (not a lock screen's override): its logo for the mode
+  // showing (the resolved Dark/Light, System included) and its heading.
+  const colorMode = useUIStore((s) => s.theme)
+  const brandLogo = useBrandThemeStore((s) => s.active?.logo?.[colorMode] ?? null)
+  const brandHeading = useBrandThemeStore((s) => s.active?.copy?.newChatHeading ?? null)
   const setPendingModeId = useUIStore((s) => s.setPendingModeId)
   const storedChatId = useChatStore((s) => s.activeChatId)
   const hosted = hostedChatId !== undefined
@@ -562,9 +568,24 @@ export function ChatWorkspace({
             blank agent by "@" or Skip guidance changes only text. Undetermined,
             the heading line is blank. */}
         {!embedded && <div className="text-center mb-8">
-          <CinnaLogoDraw className="mx-auto mb-3" />
+          {brandLogo ? (
+            // The server's logo in CinnaLogoDraw's box: the same 62 px height
+            // and mb-3 (both block, per preflight), so the heading and all
+            // below sit where they do with the stock mark (ux_rules rule 1).
+            // Shown at once; no click-to-reveal, no draw or sweep.
+            <img
+              data-testid="brand-logo"
+              src={brandLogo}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              className="mx-auto mb-3 h-[62px] w-auto max-w-[240px] object-contain"
+            />
+          ) : (
+            <CinnaLogoDraw className="mx-auto mb-3" />
+          )}
           <h1 className="text-lg font-semibold text-[var(--color-text)]">
-            {guidedInvite && pickedFolder ? GUIDED_BUILD_HEADING : guidedUndetermined ? '\u00a0' : 'What can I help with?'}
+            {guidedInvite && pickedFolder ? GUIDED_BUILD_HEADING : guidedUndetermined ? '\u00a0' : brandHeading || 'What can I help with?'}
           </h1>
         </div>}
         <div data-testid="new-chat-prompt-slot" className="flex w-full flex-col items-center justify-end">
