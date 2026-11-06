@@ -82,6 +82,7 @@ import { useRunQueue } from '../../hooks/useRunQueue'
 import { VoiceInputButton } from './voice/VoiceInputButton'
 import { useVoiceErrorToast } from './voice/useVoiceErrorToast'
 import { cloudHasContent } from '../../utils/minimalView'
+import { matchesMentionQuery } from '../../utils/mentionMatch'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/' | '?'
@@ -1412,7 +1413,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     () =>
       enabledAgents.filter(
         (a) =>
-          a.name.toLowerCase().includes(triggerFilter.toLowerCase()) ||
+          matchesMentionQuery(a.name, triggerFilter) ||
           a.protocol.toLowerCase().includes(triggerFilter.toLowerCase())
       ),
     [enabledAgents, triggerFilter]
@@ -1427,7 +1428,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     if (!inMcpMentionContext) return []
     const q = triggerFilter.toLowerCase()
     return enabledMcps.filter(
-      (m) => m.name.toLowerCase().includes(q) || m.transportType.toLowerCase().includes(q)
+      (m) => matchesMentionQuery(m.name, q) || m.transportType.toLowerCase().includes(q)
     )
   }, [enabledMcps, triggerFilter, inMcpMentionContext])
 

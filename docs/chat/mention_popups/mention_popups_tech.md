@@ -55,7 +55,7 @@
 
 Each trigger has its own filter predicate in `ChatInput.tsx`:
 
-- **`@`** (`filteredAgents`) — matches `agent.name` and `agent.protocol`.
+- **`@`** (`filteredAgents`) — matches `agent.name` and `agent.protocol`. The name goes through `matchesMentionQuery` (`utils/mentionMatch.ts`): a plain case-insensitive substring first, then the same with every non-letter, non-digit character dropped from both sides, so `@adcreat` finds "Ad Creatives Agent" and "Ad-Creatives Agent". The protocol stays a plain substring. The MCP entries in the same popup (`filteredMcps`) match `mcp.name` the same way and `transportType` as a plain substring.
 - **`#`** (`filteredPrompts`) — matches `prompt.label` and `prompt.full`.
 - **`/`** (`filteredCommands`) — matches **only** `c.slug` and `c.command` (the signature parts). `name` and `description` are intentionally excluded so a filter like `/status` does not pull in commands whose human-readable text happens to contain "status".
 
