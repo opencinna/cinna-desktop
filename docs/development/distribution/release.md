@@ -369,7 +369,18 @@ gh release view "$VERSION" --repo opencinna/cinna-desktop
 # "ZIP file not provided" on the client side if it only sees DMGs):
 gh release download "$VERSION" --repo opencinna/cinna-desktop --pattern "latest-mac.yml" --clobber
 grep -q '\.zip$' latest-mac.yml || echo "WARNING: latest-mac.yml has no zip entries — auto-update will fail"
+
+# Keep Macs below the app's minimum OS on the release they run: electron-updater
+# (6.8.3 in 0.10.0 and later) skips an update whose manifest names a
+# `minimumSystemVersion` above `os.release()` — the DARWIN version, so macOS 13
+# is 22.0.0, not 13.0. electron-builder writes the minimum only into Info.plist
+# (LSMinimumSystemVersion, 13.0 from Electron 44), never into the manifest.
+# Without this line a macOS 12 install auto-updates into an app that won't open.
+grep -q '^minimumSystemVersion:' latest-mac.yml || printf 'minimumSystemVersion: 22.0.0\n' >> latest-mac.yml
+gh release upload "$VERSION" latest-mac.yml --repo opencinna/cinna-desktop --clobber
 ```
+
+Darwin ↔ macOS: 21 = 12 Monterey, 22 = 13 Ventura, 23 = 14 Sonoma, 24 = 15 Sequoia. Raise the line with the minimum when an Electron major drops another macOS (check `LSMinimumSystemVersion` in `node_modules/electron/dist/Electron.app/Contents/Info.plist`). The manifest's SHA512 entries cover the zips and DMGs, not the manifest itself, so editing it does not invalidate them.
 
 > If `gh release view` shows `draft: false`, electron-builder published immediately. Check `electron-builder.yml`'s `publish.releaseType` — it should be `draft`.
 
