@@ -1486,3 +1486,23 @@ export const dashboardTileResults = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.tileId, table.paramsHash] })]
 )
+
+/**
+ * The last good brand theme per Cinna server origin: the served document as
+ * JSON, its revision and the ETag to revalidate it with. See
+ * `migrations/brand-themes.ts`.
+ */
+export const brandThemes = sqliteTable('brand_themes', {
+  origin: text('origin').primaryKey(),
+  revision: integer('revision').notNull(),
+  etag: text('etag'),
+  themeJson: text('theme_json').notNull(),
+  fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull()
+})
+
+/** A brand theme asset's bytes, once per sha256, with the MIME type sniffed from them. */
+export const brandThemeAssets = sqliteTable('brand_theme_assets', {
+  sha256: text('sha256').primaryKey(),
+  mime: text('mime').notNull(),
+  bytes: blob('bytes', { mode: 'buffer' }).notNull()
+})

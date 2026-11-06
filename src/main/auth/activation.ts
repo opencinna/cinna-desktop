@@ -5,6 +5,7 @@ import { clearAllAdapters } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import { runSyncOnce, startPeriodicSync, stopPeriodicSync } from '../agents/remote-sync'
 import { libraryService } from '../services/libraryService'
+import { brandThemeService } from '../services/brandTheme/brandThemeService'
 import {
   runAccountConfigSyncOnce,
   startAccountConfigPeriodicSync,
@@ -143,6 +144,7 @@ class UserActivation {
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
     libraryService.stop()
+    brandThemeService.stop()
     const epoch = ++this._epoch
     this._activated = false
     this._notifyClosing()
@@ -160,6 +162,9 @@ class UserActivation {
     const operation = this._operations.catch(() => {}).then(async () => {
       if (!current()) return
       setCurrentUser(userId)
+      // The new profile's brand (its server's cached theme, or stock) before
+      // anything is awaited, so no window shows the former profile's look.
+      brandThemeService.applyForProfile(userId)
       await serviceCredentialService.activate(userId)
       if (!current()) return
       await reloadUserProviders(current)
@@ -191,6 +196,8 @@ class UserActivation {
       // The team library: listed now and every five minutes, which is how a
       // shared agent learns the team moved without a fetch per folder.
       libraryService.start(userId)
+      // The server's brand theme: fetched now and on the same five-minute cadence.
+      brandThemeService.start(userId)
       // Activate cloud data-sync (silent device-key unlock + periodic push/pull).
       void syncService.ensureActivated(userId)
       // Bring local development to its target state: the managed toolchain and
@@ -207,6 +214,7 @@ class UserActivation {
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
     libraryService.stop()
+    brandThemeService.stop()
     const epoch = ++this._epoch
     this._pendingActivation = undefined
     this._activated = false
@@ -227,7 +235,10 @@ class UserActivation {
     clearAllAdapters()
     const operation = this._operations.catch(() => {}).then(async () => {
       await mcpManager.disconnectAll()
-      if (epoch === this._epoch) setCurrentUser(DEFAULT_USER_ID)
+      if (epoch === this._epoch) {
+        setCurrentUser(DEFAULT_USER_ID)
+        brandThemeService.applyForProfile(DEFAULT_USER_ID)
+      }
     })
     this._operations = operation
     await operation

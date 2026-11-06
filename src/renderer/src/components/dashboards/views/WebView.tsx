@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DASHBOARD_FRAME_SANDBOX } from '../../../../../shared/htmlPreview'
 import type { CollectedPageContext, DashboardFrameTarget, DashboardsErrorCode } from '../../../../../shared/dashboards'
 import { useUIStore } from '../../../stores/ui.store'
+import { useBrandThemeStore } from '../../../stores/brandTheme.store'
 import { createBridgeSession, readHostContext, type BridgeSession, type BridgeTileMeta } from '../componentBridge'
 import { coalescePerKey } from '../dashboardContext'
 import { OpenLinkDialog } from '../OpenLinkDialog'
@@ -71,6 +72,8 @@ export function useComponentBridge(
   } = {}
 ): void {
   const theme = useUIStore((s) => s.theme)
+  // The brand (origin + revision) moves the app's variables as a theme change does.
+  const brandKey = useBrandThemeStore((s) => s.key)
   const latest = useRef({ meta, data, theme, onContext, ...bridge })
   latest.current = { meta, data, theme, onContext, ...bridge }
   const sessionRef = useRef<BridgeSession | null>(null)
@@ -191,10 +194,10 @@ export function useComponentBridge(
   }, [highlightKey])
 
   useEffect(() => {
-    // After the theme class lands on the document, so the variables read are the new ones.
+    // After the theme class (or the brand sheet) lands on the document, so the variables read are the new ones.
     const id = requestAnimationFrame(() => sessionRef.current?.sendHostContext())
     return () => cancelAnimationFrame(id)
-  }, [theme])
+  }, [theme, brandKey])
 
   // The owner asked for what the page shows now (the composer gained focus); none on mount.
   const collectRequest = bridge.collect?.request ?? 0

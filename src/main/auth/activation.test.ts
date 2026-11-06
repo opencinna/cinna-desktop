@@ -19,6 +19,14 @@ vi.mock('../services/localScheduleScheduler', () => ({ localScheduleScheduler: {
 vi.mock('../services/handoverScheduler', () => ({ handoverScheduler: { stop() {}, start() {} } }))
 vi.mock('../host/desktopFeatures', () => ({ desktopFeatures: { clearDevelopment: state.localDevClear, reconcileDevelopment: state.localDevReconcile } }))
 vi.mock('../db/users', () => ({ userRepo: { get: state.user } }))
+const brand = vi.hoisted(() => ({ applied: [] as Array<{ userId: string; current: string }>, start: vi.fn(), stop: vi.fn() }))
+vi.mock('../services/brandTheme/brandThemeService', () => ({
+  brandThemeService: {
+    applyForProfile: (userId: string) => { brand.applied.push({ userId, current: state.current }) },
+    start: brand.start,
+    stop: brand.stop
+  }
+}))
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve() }
 
 describe('profile activation admission', () => {
@@ -111,6 +119,44 @@ describe('local development invalidation through ordinary activation', () => {
     await Promise.all([first, second])
     expect(state.localDevClear).toHaveBeenCalledTimes(1)
     expect(state.localDevReconcile).toHaveBeenCalledExactlyOnceWith('cinna-a')
+  })
+})
+
+describe('brand theme on activation', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    brand.applied = []
+    state.current = ''
+    state.reload.mockResolvedValue(undefined)
+    state.disconnect.mockResolvedValue(undefined)
+    state.user.mockImplementation((id: string) => id === 'cinna-a'
+      ? { type: 'cinna_user', cinnaServerUrl: 'https://a.example.com' }
+      : { type: 'local_user' })
+  })
+
+  it('applies the new profile\'s cached brand right after it becomes current, before any await', async () => {
+    const { userActivation } = await import('./activation')
+    let release = () => {}
+    credentials.activate.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve }))
+    const switching = userActivation.activate('cinna-a')
+    await flush()
+    // Still waiting on the first await of the activation: the brand is already applied.
+    expect(brand.applied).toEqual([{ userId: 'cinna-a', current: 'cinna-a' }])
+    expect(brand.stop).toHaveBeenCalled()
+    expect(brand.start).not.toHaveBeenCalled()
+    release()
+    await switching
+    expect(brand.start).toHaveBeenCalledExactlyOnceWith('cinna-a')
+  })
+
+  it('starts no refresh for a local profile, and applies stock after sign-out', async () => {
+    const { userActivation } = await import('./activation')
+    await userActivation.activate('local-b')
+    expect(brand.applied).toEqual([{ userId: 'local-b', current: 'local-b' }])
+    expect(brand.start).not.toHaveBeenCalled()
+    await userActivation.deactivate()
+    expect(brand.applied.at(-1)).toEqual({ userId: '__default__', current: '__default__' })
   })
 })
 

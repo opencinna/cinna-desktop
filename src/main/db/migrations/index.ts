@@ -40,6 +40,7 @@ import { migrateRuntimeModelCatalogs } from './runtime-model-catalogs'
 import { migratePublishedArtifacts } from './published-artifacts'
 import { migrateArtifactSupport } from './artifact-support'
 import { migrateDashboards } from './dashboards'
+import { migrateBrandThemes } from './brand-themes'
 import { runSyncMigrations } from './sync'
 import { runSyncDepsMigrations } from './sync-deps'
 import { shareLocalAgentChats } from './share-local-agent-chats'
@@ -131,6 +132,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateArtifactSupport(sqlite)
   // Dashboards, their tiles and the tiles' last results; FK → users; creation only.
   migrateDashboards(sqlite)
+  // The last good brand theme per server origin and its assets; no FK, creation only.
+  migrateBrandThemes(sqlite)
   // Sync bookkeeping tables (must come after notes/jobs exist).
   runSyncMigrations(sqlite)
   // Portable-dependency-sync columns (jobs.sync_deps + created_by_sync flags).

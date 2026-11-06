@@ -24,9 +24,23 @@ All colors use CSS variables `var(--color-*)` defined in `src/renderer/src/asset
 | `--color-warning` | Default star, awaiting-auth status |
 | `--color-send-queued` | The composer's Send while a turn runs (joins that turn or its queue); idle Send stays `--color-success` |
 
-Custom CSS must go inside `@layer base` in `main.css` (otherwise it overrides Tailwind v4 utilities).
+Custom CSS must go inside `@layer base` in `main.css` (otherwise it overrides Tailwind v4 utilities). The one exception is the brand overrides, which go in `@layer brand` (see "Brand layer" below).
 
 A hand-written `backdrop-filter` lists `-webkit-backdrop-filter` **first** and the standard property after it. The build's CSS optimizer (lightningcss, run by `@tailwindcss/vite` on build only) keeps just the last of the pair, and Chromium ignores the prefixed one — so with the standard property first, every hand-written blur in `main.css` (`.app-sidebar`, `.app-popover-surface`, `.sidebar-tab`) shipped as no blur at all while looking right in `npm run dev`, and a menu showed the card under it sharp through its 10% alpha. Tailwind's `backdrop-blur-*` utilities are emitted correctly and need nothing.
+
+### Brand layer
+
+A Cinna server can publish a brand theme that recolours the app for every profile signed in to it. The cascade layer order is declared at the top of `main.css`, before Tailwind's import: `@layer theme, base, brand, components, utilities;`. The order:
+
+- `base` holds the stock `--color-*` values and the stock mesh background.
+- `brand` comes after `base`, so a brand beats the stock values.
+- `components` and `utilities` come after `brand`, so a Tailwind utility still beats both.
+
+The brand sheet is generated at runtime into `<style id="brand-theme">` (`utils/brandThemeCss.ts`, mapping from `shared/brandTheme/roleMap.ts`). Its rules key on `[data-brand]` on `<html>`, and both are removed when there is no brand. The built CSS hoists layers in order of first appearance, so the sheet's `@layer brand` lands in the declared slot.
+
+- **A new `--color-*` variable must go into `roleMap.ts`**, either mapped from a role or on the derived list. `roleMap.test.ts` fails otherwise.
+- **A literal colour that stands in for a surface needs a static `[data-brand]` override.** This covers a hand-written `rgba(…)` or `#…` in `main.css` that assumes the stock palette or mesh. Put the override in the `@layer brand` block at the end of `main.css`, taken from the roles (`color-mix(in srgb, var(--color-bg-secondary) 82%, transparent)`, `var(--color-border)`). Relative tints such as a low-alpha white or black overlay, and shadows, can stay as they are.
+- **Under a brand the stock mesh never shows.** The sheet sets the body's `background-image` per mode to the brand's image, or to `none` (a flat `--color-bg`).
 
 ## Surface Materials
 

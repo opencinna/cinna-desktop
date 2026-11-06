@@ -43,7 +43,8 @@ import type {
 
 const logger = createLogger('team-library')
 
-const REFRESH_INTERVAL_MS = 5 * 60 * 1000
+/** How often the team library is listed again; brand themes refresh on the same cadence. */
+export const REFRESH_INTERVAL_MS = 5 * 60 * 1000
 
 /** The listing, under the profile's API. */
 export const CATALOG_ITEMS_PATH = '/api/v1/catalog/items'

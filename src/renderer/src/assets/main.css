@@ -1,3 +1,10 @@
+/* Cascade layer order, declared before Tailwind's own (`theme, base,
+   components, utilities`) so it wins: `brand` sits after `base`, where the
+   stock --color-* and the stock mesh live, and before `components` and
+   `utilities`. A server's brand theme (`<style id="brand-theme">`, built by
+   utils/brandThemeCss.ts) therefore beats the stock values, and a Tailwind
+   utility still beats both. See ui_guidelines_llm.md, "Brand layer". */
+@layer theme, base, brand, components, utilities;
 @import 'tailwindcss';
 /* The command output panel's terminal; in `base`, so utilities still win. */
 @import '@xterm/xterm/css/xterm.css' layer(base);
@@ -1819,5 +1826,50 @@
   }
   .managed-list-message {
     padding: 10px var(--ml-pad-x);
+  }
+}
+
+/* Brand themes: surfaces whose stock colour is a literal that assumes the
+   stock palette and mesh take it from the brand's roles instead, under
+   [data-brand] only. Stock renders exactly as before. The generated sheet
+   (the --color-* values and the body background per mode) is in the same
+   layer; these rules are static. Relative tints (a white or black overlay at
+   low alpha: nav highlight, sidebar tabs, glass-card lift in dark, scrims) and
+   shadows stay stock: they lighten or darken whatever is under them. */
+@layer brand {
+  /* The dark sidebar glass was black at 82 %; the brand's raised surface at
+     the same alpha, with the brand's hairline. */
+  [data-brand][data-theme="dark"] .app-sidebar,
+  [data-brand][data-theme="dark"] .app-sidebar.is-menu {
+    background-color: color-mix(in srgb, var(--color-bg-secondary) 82%, transparent);
+    border-color: var(--color-border);
+  }
+  /* Popovers: stock near-white / near-black at 90 % → the raised surface at 90 %. */
+  [data-brand] .app-popover-surface {
+    background-color: color-mix(in srgb, var(--color-bg-secondary) 90%, transparent);
+  }
+  [data-brand][data-theme="dark"] .app-popover-surface {
+    border-color: var(--color-border);
+  }
+  /* Light glass card: stock white at 55 % → the base surface at 55 %. */
+  [data-brand][data-theme="light"] .app-glass-card {
+    background-color: color-mix(in srgb, var(--color-bg) 55%, transparent);
+  }
+  /* Modal panel: stock near-black at 72 % (dark), near-white at 74 % (light). */
+  [data-brand][data-theme="dark"] .app-modal-panel {
+    background-color: color-mix(in srgb, var(--color-bg-secondary) 72%, transparent);
+  }
+  [data-brand][data-theme="light"] .app-modal-panel {
+    background-color: color-mix(in srgb, var(--color-bg) 74%, transparent);
+  }
+  /* Light ask/permission block: stock #f4f5f7 with a white cloud → the
+     brand's raised and base surfaces. Dark already reads the variables. */
+  [data-brand][data-theme="light"] .ambient-block {
+    background-color: var(--color-bg-secondary);
+    background-image:
+      radial-gradient(55% 90% at var(--mesh-x1) var(--mesh-y1), var(--color-bg), transparent 70%),
+      radial-gradient(50% 85% at var(--mesh-x2) var(--mesh-y2), var(--mesh-tint), transparent 70%),
+      radial-gradient(70% 100% at var(--mesh-x3) var(--mesh-y3), color-mix(in srgb, var(--color-bg) 90%, transparent), transparent 72%),
+      radial-gradient(45% 70% at calc(100% - var(--mesh-x1)) calc(100% - var(--mesh-y1)), rgba(110, 118, 132, 0.08), transparent 70%);
   }
 }

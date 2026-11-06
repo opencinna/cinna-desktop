@@ -45,11 +45,14 @@ import { registerCatalogSkillHandlers } from './catalogSkills.ipc'
 import { registerMarketplaceSkillHandlers } from './marketplaceSkills.ipc'
 import { registerAddonHandlers } from './addons.ipc'
 import { registerSkillPublishHandlers } from './skillPublish.ipc'
+import { registerBrandThemeHandlers } from './brandTheme.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
   registerAppHandlers()
   registerAuthHandlers()
+  // The active profile's server brand, asked for before a window's first paint.
+  registerBrandThemeHandlers()
   registerChatHandlers()
   registerProviderHandlers()
   registerMcpHandlers()

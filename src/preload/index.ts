@@ -99,6 +99,12 @@ import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../sh
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
 import {
+  BRAND_THEME_CHANGED_CHANNEL,
+  BRAND_THEME_GET_CHANNEL,
+  type BrandThemeChangedPayload,
+  type ResolvedBrandTheme
+} from '../shared/brandTheme/roles'
+import {
   SHARING_CHANGED_CHANNEL,
   type AdoptionBeginResult,
   type AdoptionFinishResult,
@@ -1890,6 +1896,21 @@ const api = {
       const listener = (_event: IpcRendererEvent, state: LocalDevState): void => handler(state)
       ipcRenderer.on(LOCAL_DEV_STATE_CHANNEL, listener)
       return () => ipcRenderer.off(LOCAL_DEV_STATE_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * The brand theme of the active profile's Cinna server (stock Cinna: null).
+   * `get` answers before activation too, for the profile the app is starting
+   * into; `onChanged` says which revision is current now, without the theme,
+   * so a window calls `get` only when it is not the one it shows.
+   */
+  brandTheme: {
+    get: (): Promise<ResolvedBrandTheme | null> => ipcRenderer.invoke(BRAND_THEME_GET_CHANNEL),
+    onChanged: (handler: (payload: BrandThemeChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: BrandThemeChangedPayload): void => handler(payload)
+      ipcRenderer.on(BRAND_THEME_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(BRAND_THEME_CHANGED_CHANNEL, listener)
     }
   },
 

@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from './stores/auth.store'
 import { TrayPanel } from './components/tray/TrayPanel'
 import { readThemePreference, resolveTheme } from './utils/theme'
+import { initBrandTheme } from './stores/brandTheme.store'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -66,10 +67,16 @@ window.addEventListener('storage', (e) => {
   if (e.key === 'cinna-theme') applyTheme()
 })
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <TrayRoot />
-    </QueryClientProvider>
-  </StrictMode>
-)
+// The brand's colours, never its background: the popup has no mesh and stays
+// transparent. Applied before mount, then kept in step with main.
+void initBrandTheme({ background: false })
+  .catch(() => undefined)
+  .then(() => {
+    createRoot(document.getElementById('root')!).render(
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <TrayRoot />
+        </QueryClientProvider>
+      </StrictMode>
+    )
+  })
