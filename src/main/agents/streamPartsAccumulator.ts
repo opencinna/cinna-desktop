@@ -538,6 +538,34 @@ export class StreamPartsAccumulator {
     this.boundary = this.parts.length
   }
 
+  /** The last part's text when it is the agent's own `text` (not a subagent's), else null. */
+  trailingText(): string | null {
+    const last = this.parts.at(-1)
+    return last && last.kind === 'text' && !last.parentToolId ? last.text : null
+  }
+
+  /**
+   * Cut the trailing `text` part back to `keep`, a prefix of its text; an
+   * empty `keep` removes the part. The answer text loses the same tail. For an
+   * engine's own notice the driver turns into the turn's error: nothing is
+   * posted, since the turn's rows are written from {@link snapshotParts}.
+   */
+  cutTrailingText(keep: string): void {
+    const index = this.parts.length - 1
+    const last = this.parts[index]
+    if (!last || last.kind !== 'text' || last.parentToolId || !last.text.startsWith(keep)) return
+    const removed = last.text.slice(keep.length)
+    if (!removed) return
+    if (keep.trim()) {
+      last.text = keep
+    } else {
+      this.parts.pop()
+      this.partSource.delete(index)
+      this.boundary = Math.min(this.boundary, this.parts.length)
+    }
+    if (this.answer.endsWith(removed)) this.answer = this.answer.slice(0, this.answer.length - removed.length)
+  }
+
   /**
    * `streaming` is for a read taken while the stream is still open — the quit
    * flush. It also hides an attach tag that has opened but not closed, as the

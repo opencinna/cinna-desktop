@@ -40,6 +40,7 @@ import { startAcpConnection } from './acpConnection'
 import type { AcpLaunchContext, AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
 import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpHandlerScript, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
 import { ACP_PROTOCOL_VERSION, type AcpConnection, type AcpLauncherId, type AcpProcessPool } from './types'
+import { antigravityQuotaNotice } from './antigravityLauncher'
 import type { SessionTrafficScope, SessionTrafficSink } from './acpSessionObserver'
 import type { SessionTelemetry, SessionTelemetryChange, SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
 import { applyTelemetryChange } from '../../telemetry/sessionTelemetryReducer'
@@ -154,7 +155,7 @@ interface WorldOptions {
   /** The launcher's own login report, for session telemetry (Codex). */
   telemetryAuth?: AcpLauncher['telemetryAuth']
   /** More launcher hooks (`authError`, `refusePrompt`). */
-  launcherExtra?: Partial<Pick<AcpLauncher, 'authError' | 'refusePrompt'>>
+  launcherExtra?: Partial<Pick<AcpLauncher, 'authError' | 'refusePrompt' | 'turnEndError'>>
   /** The plan's `firstPromptPreamble`. */
   preamble?: string
   /** The plan's `sessionCwd`. */
@@ -5005,5 +5006,82 @@ describe('an Antigravity folder agent’s asks under its folder policy', () => {
 
   it('reads the policy only for Antigravity', async () => {
     await parks(world({ launcher: 'codex', script: editAsk(join(folder, 'notes', 'probe.txt')), autoApprove: { folder, scriptRoots: [] } }))
+  })
+})
+
+describe('an Antigravity turn that ends on its exhausted-quota notice', () => {
+  // The recorded wire (1.4.5, 2026-11-06): one `agent_message_chunk` with the
+  // notice, then `end_turn` with no error, no `_meta` and no usage.
+  const NOTICE = 'Usage Limit Reached\n\nYou have reached your current quota for this period. Your limit will reset in 3 days, 20 hours.'
+  const ERROR = 'Usage Limit Reached. You have reached your current quota for this period. Your limit will reset in 3 days, 20 hours.'
+  const chunk = (text: string, messageId?: string): FakeAcpStep => ({
+    kind: 'update', update: { sessionUpdate: 'agent_message_chunk', ...(messageId ? { messageId } : {}), content: { type: 'text', text } }
+  })
+  const quota = { turnEndError: antigravityQuotaNotice }
+
+  it('fails the turn with the notice as its error, and keeps no answer text', async () => {
+    // Mutation: drop the driver's `engineTurnEndError` and the notice is the answer, with no error.
+    const w = world({ launcher: 'antigravity', launcherExtra: quota, script: { prompt: { emit: [chunk(NOTICE)], response: { stopReason: 'end_turn' } } } })
+    const result = await w.run({ handbackEligible: true })
+    expect(result.error?.message).toBe(ERROR)
+    expect(result.error?.code).toBeUndefined()
+    expect(result.stopReason).toBeUndefined()
+    expect(result.handback).toBeUndefined()
+    expect(result.text).toBe('')
+    expect(result.parts).toEqual([])
+  })
+
+  it('keeps the text and tool call the turn streamed before the quota ran out', async () => {
+    const w = world({ launcher: 'antigravity', launcherExtra: quota, script: { prompt: { emit: [
+      chunk('Let me look.', 'm1'),
+      { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'run_command', kind: 'execute', status: 'pending', rawInput: { CommandLine: 'ls' } } },
+      { kind: 'update', update: { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed', rawOutput: { formatted_output: 'a.txt' } } },
+      chunk('Found a.txt.', 'm2'),
+      chunk(NOTICE)
+    ], response: { stopReason: 'end_turn' } } } })
+    const result = await w.run()
+    expect(result.error?.message).toBe(ERROR)
+    expect(result.parts.some((part) => part.kind === 'tool' && part.toolId === 't1')).toBe(true)
+    expect(textOf(result)).toBe('Let me look.Found a.txt.')
+    expect(result.text).toBe('Let me look.Found a.txt.')
+    expect(JSON.stringify(result.parts)).not.toContain('Usage Limit Reached')
+  })
+
+  it('keeps an ordinary reply that only mentions the notice', async () => {
+    const reply = `The server said:\n\n${NOTICE}\n\nThat was yesterday; it has reset since.`
+    const w = world({ launcher: 'antigravity', launcherExtra: quota, script: { prompt: { emit: [chunk(reply)] } } })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(result.text).toBe(reply)
+  })
+
+  it('leaves another engine’s turn with the same text alone', async () => {
+    const w = world({ launcher: 'opencode', script: { prompt: { emit: [chunk(NOTICE)] } } })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(result.text).toBe(NOTICE)
+  })
+
+  it('does not turn a Stop into the quota error', async () => {
+    const controller = new AbortController()
+    const w = world({ launcher: 'antigravity', launcherExtra: quota, script: { prompt: { emit: [chunk(NOTICE), { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } } } })
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => w.events.some((event) => event.type === 'delta'), 'the notice to stream')
+    controller.abort()
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(result.stopReason).toBe('canceled')
+  })
+
+  it('fails a turn the agent started on its own the same way', async () => {
+    // Mutation: drop `engineTurnEndError` from `runFollowUp` and this one ends with no error.
+    const w = followUpWorld({ launcher: 'antigravity', launcherExtra: quota, deps: { followUpQuietMs: 200 },
+      script: thenOnItsOwn([say('Checking again.', 'm1'), say(NOTICE)]) })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const result = await request.run(followUpIo().io)
+    expect(result.error?.message).toBe(ERROR)
+    expect(result.error?.code).toBeUndefined()
+    expect(textOf(result)).toBe('Checking again.')
   })
 })

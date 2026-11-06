@@ -321,6 +321,15 @@ export interface AcpLauncher {
    * null. Antigravity's `/logout` signs every home on the computer out.
    */
   refusePrompt?(text: string): string | null
+  /**
+   * An error this engine reports only as the **last text of a turn** that
+   * ended `end_turn` — Antigravity's exhausted-quota notice is an
+   * `agent_message_chunk`, with no error and no `_meta` on the prompt answer.
+   * Given the turn's trailing text part, returns the turn's error sentence and
+   * the text before the notice (`''` when the notice is the whole part), or
+   * null for an ordinary answer. Must not throw.
+   */
+  turnEndError?(text: string): { error: string; before: string } | null
 }
 
 /* ------------------------------------------------------------------ OpenCode */

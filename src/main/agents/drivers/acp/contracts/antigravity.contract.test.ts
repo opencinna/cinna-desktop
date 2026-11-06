@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
-import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS, ANTIGRAVITY_ISOLATED_DISABLED_TOOLS, ANTIGRAVITY_NATIVE_DISABLED_TOOLS, antigravitySharedHome, createAntigravityLauncher, isAntigravityAuthError } from '../antigravityLauncher'
+import { ANTIGRAVITY_BUILTIN_TOOLS, ANTIGRAVITY_FILTER_TOOLS, ANTIGRAVITY_ISOLATED_DISABLED_TOOLS, ANTIGRAVITY_NATIVE_DISABLED_TOOLS, ANTIGRAVITY_QUOTA_BODY, ANTIGRAVITY_QUOTA_HEADER, antigravityQuotaNotice, antigravitySharedHome, createAntigravityLauncher, isAntigravityAuthError } from '../antigravityLauncher'
 import { ANTIGRAVITY_CONDUCTOR_TOOLS, applyConductorToolPolicy, cinnaToolName } from '../conductorToolPolicy'
 import { AcpMessageStream } from '../acpMessages'
 import { permissionAsQuestion, permissionQuestionAnswer } from '../acpQuestions'
@@ -147,6 +147,8 @@ const seen = {
     filters: {} as Record<string, string[] | null>,
     unauthenticated: null as AdapterMessage | null
   },
+  /** Scenario E: the gateway answers with an exhausted quota, at once and after a tool call. */
+  quota: { first: null as Step | null, later: null as Step | null },
   /** Scenario D: `workspace` chats, one per chat id, laid out as production lays them out. */
   workspace: [] as WorkspaceRun[],
   workspaceControl: null as WorkspaceRun | null,
@@ -527,6 +529,61 @@ async function workspaceScenario(binary: string, chatId: string, workspaceHome =
   return run
 }
 
+/* -------------------------------------------------------------- scenario E */
+
+/**
+ * The 429 the consumer backend sends for an exhausted per-user quota: a Google
+ * API error whose `ErrorInfo` reason is `QUOTA_EXHAUSTED`. The gateway path
+ * renders it into the same Go `%v` string the OAuth path does, so the
+ * server's `quota_errors.py` recognises it here too.
+ */
+const QUOTA_DELAY = '91h36m35.4s'
+const QUOTA_RESET = 'Your limit will reset in 3 days, 19 hours.'
+const QUOTA_ERROR: GatewayReply = { kind: 'error', status: 429, body: { error: {
+  code: 429, message: 'Resource has been exhausted (e.g. check quota).', status: 'RESOURCE_EXHAUSTED',
+  details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'QUOTA_EXHAUSTED', domain: 'cloudcode-pa.googleapis.com',
+    metadata: { quotaResetDelay: QUOTA_DELAY } }]
+} } }
+
+/** Two prompts on a gateway home: one whose first request is refused, one refused after a command ran. */
+async function quotaScenario(binary: string): Promise<void> {
+  const scratch = makeAntigravityScratch('cinna-contract-agy-quota-')
+  let gateway: FakeGateway | undefined
+  let connection: AdapterConnection | undefined
+  try {
+    let script: ((turn: GatewayTurn) => GatewayReply) | null = null
+    gateway = await startFakeGateway((turn) => script ? script(turn) : QUOTA_ERROR)
+    const home = join(scratch.root, 'gemini')
+    writeGatewayHome(home)
+    const cwd = join(scratch.root, 'work')
+    mkdirSync(cwd)
+    const permissions: AdapterMessage[] = []
+    connection = spawnAntigravity({ binary, cwd, env: { ...scratch.env, GEMINI_HOME: home, ...gatewayEnv(gateway.port, MODELS) },
+      geminiHome: home, answer: answerAsk(permissions) })
+    await connection.rpc('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'cinna-contract', version: '1' } })
+    const created = await connection.rpc('session/new', { cwd, mcpServers: [] })
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) return
+    const step = async (name: string): Promise<Step> => {
+      const at = connection!.updates.length, turnAt = gateway!.turns.length, permAt = permissions.length
+      const result = await connection!.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: `Do ${name}.` }] }, 60_000)
+      await sleep(500)
+      return { name, result, updates: connection!.updates.slice(at), turns: gateway!.turns.slice(turnAt), permissions: permissions.slice(permAt), calls: [] }
+    }
+    script = null
+    seen.quota.first = await step('quota')
+    // A command first, then the quota on the request that carries its result.
+    script = (turn) => turn.responses.length === 0
+      ? { kind: 'call', name: 'run_command', args: { CommandLine: `echo ${COMMAND_MARKER}`, Cwd: cwd, WaitMsBeforeAsync: 5000, toolAction: 'Echoing', toolSummary: 'Echo' } }
+      : QUOTA_ERROR
+    seen.quota.later = await step('quota-later')
+  } finally {
+    await connection?.close()
+    await gateway?.close()
+    scratch.dispose()
+  }
+}
+
 /* ---------------------------------------------------------------- snapshot */
 
 const folderStep = (name: string): Step | undefined => seen.folder.steps.find((step) => step.name === name)
@@ -640,6 +697,7 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     // the plain-chat home layout, under which the later one loses its cwd.
     for (const chatId of ['A1chat-workspace', 'zzchat-workspace']) seen.workspace.push(await workspaceScenario(binary, chatId))
     seen.workspaceControl = await workspaceScenario(binary, 'zzchat-workspace', false)
+    await quotaScenario(binary)
   }, 420_000)
 
   it(entry('antigravity.launch.version-flag'), () => {
@@ -990,6 +1048,29 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     // Nothing of the server's own: every request without a tool result opens a prompt Cinna sent.
     const prompts = seen.folder.steps.length + 2 /* both cancels */ + 1 /* after load */ + seen.chat.steps.length
     expect(all.filter((turn) => turn.responses.length === 0)).toHaveLength(prompts)
+  })
+
+  it(entry('antigravity.limits.quota-exhausted'), () => {
+    const notice = `${ANTIGRAVITY_QUOTA_HEADER}\n\n${ANTIGRAVITY_QUOTA_BODY} ${QUOTA_RESET}`
+    const messages = (step: Step | null): string[] => (step?.updates ?? [])
+      .filter((update) => update.sessionUpdate === 'agent_message_chunk')
+      .map((update) => String((update.content as Json | undefined)?.text ?? ''))
+    const first = seen.quota.first
+    expect(first?.turns.length).toBeGreaterThan(0)
+    expect(first?.result.error).toBeUndefined()
+    expect(first?.result.result).toEqual({ stopReason: 'end_turn' })
+    expect(messages(first)).toEqual([notice])
+    // What the driver turns into the turn's error.
+    expect(antigravityQuotaNotice(notice)).toEqual({
+      error: `${ANTIGRAVITY_QUOTA_HEADER}. ${ANTIGRAVITY_QUOTA_BODY} ${QUOTA_RESET}`, before: '' })
+
+    const later = seen.quota.later
+    expect(later?.result.error).toBeUndefined()
+    expect(later?.result.result?.stopReason).toBe('end_turn')
+    expect(later?.turns.some((turn) => turn.responses.some((response) => response.name === 'run_command'))).toBe(true)
+    const content = (later?.updates ?? []).filter((update) => ['agent_message_chunk', 'tool_call', 'tool_call_update'].includes(String(update.sessionUpdate)))
+    expect(content.some((update) => update.sessionUpdate === 'tool_call')).toBe(true)
+    expect(content.at(-1)).toMatchObject({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: notice } })
   })
 
   // Last on purpose: it reads what every scenario above observed. Not a registry entry.

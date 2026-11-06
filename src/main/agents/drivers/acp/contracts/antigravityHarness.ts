@@ -133,6 +133,8 @@ export type GatewayReply =
   | { kind: 'call'; name: string; args: Json }
   /** Hold the response open until the socket is closed — for cancellation. */
   | { kind: 'stall' }
+  /** An HTTP error with this JSON body (a Google API error) — for provider failures such as an exhausted quota. */
+  | { kind: 'error'; status: number; body: Json }
 
 export interface FakeGateway {
   port: number
@@ -180,6 +182,11 @@ export async function startFakeGateway(decide: (turn: GatewayTurn) => GatewayRep
       const reply: GatewayReply = turn.method === 'streamGenerateContent' || turn.method === 'generateContent'
         ? decide(turn) : { kind: 'text', text: 'x' }
       if (reply.kind === 'stall') return
+      if (reply.kind === 'error') {
+        res.writeHead(reply.status, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(reply.body))
+        return
+      }
       const parts = reply.kind === 'call' ? [{ functionCall: { name: reply.name, args: reply.args } }] : [{ text: reply.text }]
       const chunk = {
         candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP', index: 0 }],

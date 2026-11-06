@@ -213,3 +213,38 @@ describe('a tool call’s later input', () => {
     expect(accumulator.snapshotParts()[0]).toMatchObject({ text: 'Skill: a', toolInput: { skill: 'a' } })
   })
 })
+
+describe('cutTrailingText', () => {
+  const port = { postMessage: () => {} }
+  const text = (t: string) => ({ kind: 'text', text: t })
+  const tool = { kind: 'text', text: 'Run', metadata: { 'cinna.content_kind': 'tool', 'cinna.tool_name': 'bash', 'cinna.tool_id': 't1' } }
+
+  it('removes a trailing part that is the whole notice, from the parts and the answer', () => {
+    const accumulator = new StreamPartsAccumulator()
+    accumulator.ingestMessage({ messageId: 'a', parts: [text('Before.'), tool] }, port)
+    accumulator.ingestMessage({ messageId: 'b', parts: [text('NOTICE')] }, port)
+    expect(accumulator.trailingText()).toBe('NOTICE')
+    accumulator.cutTrailingText('')
+    expect(accumulator.snapshotParts().map((part) => part.text)).toEqual(['Before.', 'Run'])
+    expect(accumulator.answerText()).toBe('Before.')
+  })
+
+  it('shortens a part the notice was merged into', () => {
+    const accumulator = new StreamPartsAccumulator()
+    accumulator.ingestMessage({ messageId: 'a', parts: [text('Done.')] }, port)
+    accumulator.ingestMessage({ messageId: 'b', parts: [text('\n\nNOTICE')] }, port)
+    expect(accumulator.trailingText()).toBe('Done.\n\nNOTICE')
+    accumulator.cutTrailingText('Done.')
+    expect(accumulator.snapshotParts()).toEqual([{ kind: 'text', text: 'Done.' }])
+    expect(accumulator.answerText()).toBe('Done.')
+  })
+
+  it('reads and cuts nothing when the last part is not the agent’s text', () => {
+    const accumulator = new StreamPartsAccumulator()
+    accumulator.ingestMessage({ messageId: 'a', parts: [text('Before.'), tool] }, port)
+    expect(accumulator.trailingText()).toBeNull()
+    accumulator.cutTrailingText('')
+    expect(accumulator.snapshotParts()).toHaveLength(2)
+    expect(accumulator.answerText()).toBe('Before.')
+  })
+})

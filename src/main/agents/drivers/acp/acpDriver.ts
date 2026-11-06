@@ -2077,7 +2077,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       if (answer.stopReason === 'end_turn' && !turn.stopping && sessionId) {
         endSubagentsLeftRunning(deps, ctx.launcherId, { chatId, agentId: agent.id, sessionId }, spawnedThisTurn, liveBackground)
       }
-      const ending = turnEnding({ aborted: input.signal.aborted, hitCeiling, stopError, stopReason: answer.stopReason })
+      const ending = engineTurnEndError(deps, ctx, accumulator,
+        turnEnding({ aborted: input.signal.aborted, hitCeiling, stopError, stopReason: answer.stopReason }))
       return finish(ctx, accumulator, sessionId, ending.error, undefined, ending.completed, ending.canceled)
     } catch (err) {
       drainOpencodeChildren()
@@ -2667,13 +2668,13 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   */
   const stopReason = endedBy === 'exited' ? 'exited' : turn.stopping ? 'cancelled' : 'end_turn'
   if (cancelSent && endedBy !== 'exited') stopCodexSubagents(world.activity, world.launcherId, connection, sessionId)
-  const ending = turnEnding({
+  const ending = engineTurnEndError(deps, ctx, accumulator, turnEnding({
     aborted: canceled,
     hitCeiling,
     stopError: () => ceilingMessage(stalled ? stallMs : null),
     stopReason,
     reasonError: (reason) => reason === 'exited' ? ACP_FOLLOW_UP_EXITED : undefined
-  })
+  }))
   // No session to record: it is the one the chat already remembers. Its
   // telemetry is that session's, reported once, here.
   ctx.telemetry?.settle(sessionId)
@@ -3745,6 +3746,29 @@ function turnEnding(input: {
     completed: input.stopReason === 'end_turn',
     canceled: false
   }
+}
+
+/**
+ * An error the engine reported as the turn's last text instead of on the wire
+ * ({@link AcpLauncher.turnEndError} — Antigravity's exhausted quota). Only for
+ * a turn that ended `end_turn` cleanly: the notice leaves the trailing part
+ * (and the answer text), and becomes the turn's error. Earlier parts stay, as
+ * {@link finish} keeps them for any error. No longer `completed`, so no
+ * handback note is read; never a rate limit (no `budget`, no `rate_limit`
+ * code), since a quota's reset can be days away. Left alone under a trusted
+ * task control, whose outcome `finish` reports instead of any error.
+ */
+function engineTurnEndError(deps: AcpDriverDeps, ctx: TurnContext, accumulator: StreamPartsAccumulator, ending: TurnEnding): TurnEnding {
+  if (!ending.completed || ending.error || ending.canceled || ctx.conductorOutcome) return ending
+  const read = deps.launcher(ctx.launcherId)?.turnEndError
+  const text = read ? accumulator.trailingText() : null
+  if (!read || text === null) return ending
+  let found: { error: string; before: string } | null
+  try { found = read(text) } catch { return ending }
+  if (!found) return ending
+  logger.info('an ACP turn ended on an error the engine reported as text', { agentId: ctx.agent.id, launcher: ctx.launcherId })
+  accumulator.cutTrailingText(found.before)
+  return { error: found.error, completed: false, canceled: false }
 }
 
 function stopReasonError(stopReason: string): string | undefined {

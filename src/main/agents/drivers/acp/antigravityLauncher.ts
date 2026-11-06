@@ -37,6 +37,45 @@ export const ANTIGRAVITY_LOGOUT_REFUSED =
   'Cinna does not send /logout to Antigravity: it would sign you out of Antigravity everywhere on this computer, not only for this agent. Sign out in Antigravity itself if that is what you want.'
 
 /**
+ * The exhausted-quota notice, verbatim from the 1.4.5 server's
+ * `quota_errors.py` (`_HEADER`, `_BODY`): on a backend error whose `ErrorInfo`
+ * reason is `QUOTA_EXHAUSTED` the server sends `"<header>\n\n<body>"`,
+ * optionally followed by `" Your limit will reset in <N units>[, <M units>]."`
+ * or `" Your limit will reset on <Mon D, YYYY HH:MM> UTC."`, as one
+ * `agent_message_chunk`, and then answers the prompt `end_turn` with no error
+ * (`antigravity.limits.quota-exhausted`). Plain English, no locale.
+ */
+export const ANTIGRAVITY_QUOTA_HEADER = 'Usage Limit Reached'
+export const ANTIGRAVITY_QUOTA_BODY = 'You have reached your current quota for this period.'
+
+const QUOTA_NOTICE = `${ANTIGRAVITY_QUOTA_HEADER}\n\n${ANTIGRAVITY_QUOTA_BODY}`
+/** The notice from its start to the end of the text: the body, then at most the reset sentence. */
+const QUOTA_NOTICE_TAIL = /^ (Your limit will reset (?:in|on) [^\n]+\.)$/
+
+/**
+ * The quota notice at the **end** of a turn's trailing text, as the turn's
+ * error: the header and body joined into sentences, the reset sentence kept,
+ * and the text before it. Null unless the text ends with the notice — a reply
+ * that only mentions it, or carries anything after it, is an answer.
+ *
+ * The notice may follow earlier text in the same part with no separator (the
+ * quota can run out on a later model call of the turn, and its chunk names no
+ * message), so it is found by its last occurrence rather than at the start.
+ */
+export function antigravityQuotaNotice(text: string): { error: string; before: string } | null {
+  const trimmed = text.trimEnd()
+  const at = trimmed.lastIndexOf(QUOTA_NOTICE)
+  if (at < 0) return null
+  const rest = trimmed.slice(at + QUOTA_NOTICE.length)
+  const reset = rest === '' ? null : QUOTA_NOTICE_TAIL.exec(rest)?.[1]
+  if (reset === undefined) return null
+  return {
+    error: `${ANTIGRAVITY_QUOTA_HEADER}. ${ANTIGRAVITY_QUOTA_BODY}${reset ? ` ${reset}` : ''}`,
+    before: trimmed.slice(0, at).trimEnd()
+  }
+}
+
+/**
  * Every built-in function the 1.4.5 server declares to a model, by the name
  * the model sees. **Not** what `_meta.agy.enabledTools` / `disabledTools` take
  * (see {@link ANTIGRAVITY_FILTER_TOOLS}); kept so the contract notices a
@@ -372,6 +411,9 @@ export function createAntigravityLauncher(deps: AntigravityLauncherDeps): AcpLau
     refusePrompt(text) {
       return text.trim() === '/logout' ? ANTIGRAVITY_LOGOUT_REFUSED : null
     },
+    // An exhausted quota is not a rate limit: the reset can be days away, so
+    // it fails the turn rather than pausing the chat to retry.
+    turnEndError: antigravityQuotaNotice,
     async plan(ctx) {
       if (!ctx.folder) return { error: 'This launcher requires a local agent folder.' }
       let phase = 'executable'

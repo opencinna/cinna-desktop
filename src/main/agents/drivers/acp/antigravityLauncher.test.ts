@@ -12,6 +12,7 @@ import {
   ANTIGRAVITY_LOGOUT_REFUSED,
   ANTIGRAVITY_NOT_LOGGED_IN,
   antigravityIsolatedHome,
+  antigravityQuotaNotice,
   antigravitySkillsDir,
   installAntigravitySkill,
   createAntigravityLauncher,
@@ -418,5 +419,30 @@ describe('antigravitySharedHome', () => {
     for (const chatId of ['A1', 'zz', '__', '--', 'processes', 'zzzzzzzzzzzzzzzzzzzzz']) {
       expect([home, `/u/chat-conductors/${chatId}`].sort()[0]).toBe(`/u/chat-conductors/${chatId}`)
     }
+  })
+})
+
+describe('antigravityQuotaNotice', () => {
+  const NOTICE = 'Usage Limit Reached\n\nYou have reached your current quota for this period.'
+  const SENTENCES = 'Usage Limit Reached. You have reached your current quota for this period.'
+
+  it('reads each rendering the 1.4.5 server writes, reset sentence included', () => {
+    expect(antigravityQuotaNotice(`${NOTICE} Your limit will reset in 3 days, 20 hours.`))
+      .toEqual({ error: `${SENTENCES} Your limit will reset in 3 days, 20 hours.`, before: '' })
+    expect(antigravityQuotaNotice(`${NOTICE} Your limit will reset on Nov 10, 2026 07:00 UTC.\n`))
+      .toEqual({ error: `${SENTENCES} Your limit will reset on Nov 10, 2026 07:00 UTC.`, before: '' })
+    expect(antigravityQuotaNotice(NOTICE)).toEqual({ error: SENTENCES, before: '' })
+  })
+
+  it('keeps the text before a notice that followed it in the same part', () => {
+    expect(antigravityQuotaNotice(`Found a.txt.\n\n${NOTICE}`)).toEqual({ error: SENTENCES, before: 'Found a.txt.' })
+    expect(antigravityQuotaNotice(`Found a.txt.${NOTICE}`)).toEqual({ error: SENTENCES, before: 'Found a.txt.' })
+  })
+
+  it('is null for a reply that mentions the notice or goes on after it', () => {
+    expect(antigravityQuotaNotice('Hello.')).toBeNull()
+    expect(antigravityQuotaNotice(`${NOTICE}\n\nBut it has reset since.`)).toBeNull()
+    expect(antigravityQuotaNotice(`${NOTICE} Your limit will reset in 3 days.\nAnyway, here is the answer.`)).toBeNull()
+    expect(antigravityQuotaNotice('Usage Limit Reached is the header it shows.')).toBeNull()
   })
 })

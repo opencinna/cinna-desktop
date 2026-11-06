@@ -113,6 +113,35 @@ describe('runtime model catalog', () => {
     expect(antigravity.effortsByModel).toEqual({ 'gemini-3.8-flash-high': [] })
   })
 
+  it('Antigravity on a real login: the flat per-variant list, never the grouped picker that replaces it', async () => {
+    // The pinned 1.4.5 server's session/new on the user's Google login (recorded 2026-11-06, trimmed).
+    const grouped = { configOptions: [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'gemini-3.8-flash', options: [{ value: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }] },
+      { id: 'thinking_level', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: 'high', options: [
+        { value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }
+      ] },
+      { id: 'mode', name: 'Session Mode', category: 'mode', type: 'select', currentValue: 'default', options: [{ value: 'default', name: 'Default' }] }
+    ] }
+    const NEW = { ...grouped, models: { currentModelId: 'gemini-3.8-flash-high', availableModels: [
+      { modelId: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)', description: 'gemini-3.8-flash-high' },
+      { modelId: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)', description: 'gemini-3.8-flash-medium' },
+      { modelId: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)', description: 'gemini-3.8-flash-low' }
+    ] } }
+    recordRuntimeModelCatalog('p', 'antigravity', NEW)
+    const flat = ['gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low']
+    let catalog = await getRuntimeModelCatalog('p', 'antigravity')
+    expect(catalog.models.map((m) => m.id)).toEqual(flat)
+    expect(catalog.models[2].name).toBe('Gemini 3.8 Flash (Low)')
+    expect(catalog.effortsByModel).toEqual({ 'gemini-3.8-flash-high': [] })
+    // A config_option_update after a set carries the grouped options only.
+    recordRuntimeModelCatalog('p', 'antigravity', grouped)
+    catalog = await getRuntimeModelCatalog('p', 'antigravity')
+    expect(catalog.models.map((m) => m.id)).toEqual(flat)
+    // Another engine with the same shape keeps reading configOptions.
+    recordRuntimeModelCatalog('p', 'codex', NEW)
+    expect((await getRuntimeModelCatalog('p', 'codex')).models.map((m) => m.id)).toEqual(['gemini-3.8-flash'])
+  })
+
   it('survives a restart: the persisted catalogue is read back per profile and runtime', async () => {
     recordRuntimeModelCatalog('p1', 'claude', CLAUDE_NEW, { defaultModel: true })
     recordRuntimeModelCatalog('p2', 'claude', ANTIGRAVITY_NEW)

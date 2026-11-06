@@ -62,7 +62,7 @@ const record = (value: unknown): Record<string, unknown> | null =>
 const EFFORT_IDS = new Set(['effort', 'reasoning_effort', 'thought_level'])
 
 /** What one ACP answer or update says about models and efforts; null when it says nothing about models. */
-export function parseRuntimeModelCatalog(metadata: unknown): {
+export function parseRuntimeModelCatalog(metadata: unknown, engine?: AgentEngine): {
   models: RuntimeModelChoice[]
   /**
    * The efforts offered for {@link currentModel} — the only model an answer
@@ -92,6 +92,20 @@ export function parseRuntimeModelCatalog(metadata: unknown): {
   }
   const legacy = record(data.models)
   let currentModel: string | undefined
+  // **Antigravity: the flat per-variant list, not the grouped picker.** On a
+  // real login the 1.4.5 server folds `gemini-3.8-flash-low/-medium/-high`
+  // into one `model` value plus a `thought_level` option, and keeps the flat
+  // ids in the superseded `models` field; a concrete id set as `model` passes
+  // through. Cinna names Antigravity models by those ids (the tiers, the
+  // Advanced picker, which has no effort slot), so the flat list is the
+  // catalogue. A grouped answer with no flat list (`config_option_update`)
+  // says nothing in those terms and must not replace it.
+  if (engine === 'antigravity' && effortOption) {
+    if (!legacy || !Array.isArray(legacy.availableModels)) return null
+    addOptions(legacy.availableModels)
+    if (typeof legacy.currentModelId === 'string' && legacy.currentModelId) currentModel = legacy.currentModelId
+    return { models, efforts: [], ...(currentModel ? { currentModel } : {}) }
+  }
   if (modelOption && Array.isArray(modelOption.options)) {
     addOptions(modelOption.options)
     if (typeof modelOption.currentValue === 'string' && modelOption.currentValue) currentModel = modelOption.currentValue
@@ -128,7 +142,7 @@ export function recordRuntimeModelCatalog(
   metadata: unknown,
   options: { defaultModel?: boolean } = {}
 ): void {
-  const parsed = parseRuntimeModelCatalog(metadata)
+  const parsed = parseRuntimeModelCatalog(metadata, engine)
   if (!parsed) return
   const previous = storedCatalog(userId, engine)
   // Only the current model's entry moves: a turn on a model with no effort
@@ -311,7 +325,7 @@ export function refreshRuntimeModelCatalog(userId: string, engine: AgentEngine):
         let listed = false
         const answer = await probe(userId, engine, (metadata, first) => {
           if (first) {
-            listed = !!parseRuntimeModelCatalog(metadata)
+            listed = !!parseRuntimeModelCatalog(metadata, engine)
             recordRuntimeModelCatalog(userId, engine, metadata, { defaultModel: true })
           } else if (listed) recordRuntimeModelCatalog(userId, engine, metadata)
         })
