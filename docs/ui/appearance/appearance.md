@@ -2,11 +2,12 @@
 
 ## Purpose
 
-Let the user choose the app's color theme and whether chat switches and idle surfaces have decorative motion. These preferences apply across local profiles and app windows, so switching accounts does not unexpectedly change the interface.
+Let the user choose the app's color theme and whether chat switches and idle surfaces have decorative motion. The Dark/Light/System choice and the animation preference apply across local profiles and app windows, so switching accounts does not change them. The one thing an account can change is the look itself: a profile signed in to a Cinna server that publishes a [brand theme](../brand_themes/brand_themes.md) shows that brand.
 
 ## Core Concepts
 
 - **Theme preference** — System, Dark or Light. System follows the operating system; Dark and Light remain fixed. System is the default on a fresh install and whenever no valid preference is saved.
+- **Brand** — A Cinna server's published look. A profile signed in to a server that publishes one shows its colours for whichever mode is showing, its background, and the new-chat logo and heading; a guest or local profile shows stock Cinna. Dark/Light/System still picks the mode. Users cannot opt out; the server admin can unpublish. See [Brand Themes](../brand_themes/brand_themes.md).
 - **Resolved theme** — The current Dark or Light appearance after resolving System. The app surface, dock/window icon and tray popup use this result; the menu-bar glyph follows the OS separately.
 - **Extra UI animation** — One default-on preference for quick chat-switch transitions, the new-chat logo's draw and sweep, grid pulses, input/sidebar border glows, secondary-button border glows (which the sidebar's chat row summary borrows on some openings) and header-button background waves. These effects convey no readiness, progress or required action.
 - **New-chat logo** — A thin wireframe of the app icon's wordmark above "What can I help with?", in the resolved theme's icon colors. Hidden until its reserved space is clicked; the only decoration that responds to input.
@@ -51,6 +52,7 @@ Switching between chats in the main workspace (including its new-chat screen) sw
 
 - **The curtain moves; the text does not.** Chat selection updates immediately, then the old layout fades away before the new one reveals. No text translation, duplicate live chat or delayed navigation is introduced. Returning to a composer restores its [session draft](../../chat/conversation_ui/conversation_ui.md#leaving-and-returning-to-a-draft), whether animation is enabled or disabled.
 
+- **Mode is installation-wide; the brand is per account.** Dark/Light/System does not change with the account and works inside a brand, which supplies colours for both modes. The brand, not this preference, decides the palette, the background and the new-chat logo and heading; there is no setting to turn it off. See [Brand Themes](../brand_themes/brand_themes.md).
 - **Preferences belong to this installation's renderer storage.** They are shared across profiles and same-origin windows, survive restart, and do not enter profile/cloud sync or the main-process app-settings database.
 - **Grid bursts follow idleness, not a timer alone.** The first burst comes 2–6 s after the user goes idle, then one every 40–90 s while they stay idle. Blur or a hidden document is never idle, and coming back restarts the clock. Focus inside an HTML dashboard tile's frame counts as away, because its pointer and key events never reach this window and typing there would otherwise read as idle. Without this, a decorative burst played under someone reading or typing in a page.
 - **Reduced motion takes precedence.** The OS reduced-motion setting suppresses decorative effects and chat-switch motion without changing the saved Extra UI animation preference. Restoring motion or document visibility schedules fresh bursts; elapsed hidden time does not accumulate a queue.
@@ -80,6 +82,7 @@ Click on the reserved logo box → screen-local shown state → CSS stroke draw 
 
 - [Conversation UI](../../chat/conversation_ui/conversation_ui.md) — independent draft retention, message actions and transcript scrolling; animation never owns message or draft state.
 
+- [Brand Themes](../brand_themes/brand_themes.md) — a Cinna server's published colours, background, logo and heading, applied per mode; under a brand the new-chat logo is the server's image, shown at once.
 - [Technical details](appearance_tech.md) — storage, scheduler timing, rendering and cleanup contracts.
 - [Settings](../settings/settings.md) — Features hosts the theme group and animation switch.
 - [App Shell](../app_shell/app_shell.md) — sidebar shortcut, sidebar decoration, header wave and shared chat workspace.
