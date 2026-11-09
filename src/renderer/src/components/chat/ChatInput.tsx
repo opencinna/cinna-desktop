@@ -2309,7 +2309,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               ? `${listboxId}-opt-${triggerIndex}`
               : undefined
           }
-          className="w-full bg-transparent text-[var(--color-text)] placeholder-[var(--color-text-muted)]
+          className="w-full bg-transparent text-[var(--color-text)] placeholder-[var(--color-text-muted)] placeholder:opacity-40
             px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none"
         />
         {(pendingAttachments.length > 0 || pendingNotes.length > 0 || pathRefs.length > 0 || pastes.length > 0) && (
