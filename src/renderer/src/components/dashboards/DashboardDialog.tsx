@@ -37,7 +37,7 @@ export function DashboardDialog({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh]">
       <div aria-hidden className="app-modal-scrim absolute inset-0" />
-      <div ref={ref} role="dialog" aria-modal="true" aria-label={label} className={`relative w-full ${width} rounded-xl border app-modal-panel p-5`}>
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={label} className={`relative max-h-[84vh] w-full ${width} overflow-y-auto rounded-xl border app-modal-panel p-5`}>
         {children}
       </div>
     </div>,

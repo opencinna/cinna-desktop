@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LayoutDashboard, MessageSquare, MoreHorizontal, RefreshCw } from 'lucide-react'
-import { DASHBOARD_LEASE_RENEW_MS, TILE_SIZE_SPANS, type ComponentPrompt, type DashboardContext, type TileView } from '../../../../shared/dashboards'
-import { useDashboardList, useDashboardTiles, useDeleteDashboard, useMoveTile, useTileResult } from '../../hooks/useDashboards'
+import { DASHBOARD_LEASE_RENEW_MS, TILE_SPAN_LIMITS, enabledTilePrompts, tileSpan, type ComponentPrompt, type DashboardContext, type TileSpan, type TileView } from '../../../../shared/dashboards'
+import { useDashboardList, useDashboardTiles, useDeleteDashboard, useMoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
 import { useUIStore } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { ContextMenu, CONTEXT_MENU_ITEM } from '../ui/ContextMenu'
 import { ConfirmDialog } from './DashboardDialog'
 import { RenameDashboardDialog } from './DashboardsList'
 import { Tile, type TileChat } from './Tile'
-import { DashboardChatPanel, type ContextChip, type PendingPrompt } from './DashboardChatPanel'
+import { DashboardChatPanel, usePanelPresence, type ContextChip, type PendingPrompt } from './DashboardChatPanel'
 import { buildDashboardContext, coalescePerKey, contextIdentity, webContextFromCollected, type WebTileContext } from './dashboardContext'
 
 /** Grid row height, px. */
@@ -24,10 +24,16 @@ function columnsFor(width: number): number {
 
 /** The agent page header's Settings button (LocalAgentPage). */
 const HEADER_BUTTON =
-  'ambient-button flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-50'
+  'ambient-button flex h-[1.875rem] items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-50'
+/**
+ * The header's Chat button: pressed while the panel is open. Accent tint, accent
+ * text and a slight inset, colour and shadow only, so it moves nothing.
+ */
+const HEADER_TOGGLE_PRESSED =
+  'aria-pressed:border-[color-mix(in_srgb,var(--color-accent)_50%,transparent)] aria-pressed:bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] aria-pressed:text-[var(--color-accent)] aria-pressed:shadow-[inset_0_1px_2px_color-mix(in_srgb,var(--color-text)_18%,transparent)] aria-pressed:hover:bg-[color-mix(in_srgb,var(--color-accent)_20%,transparent)]'
 /** The agent page header's ⋯ button (AgentActionsMenu). */
 const HEADER_ICON_BUTTON =
-  'flex items-center rounded-md border border-[var(--color-border)] px-1.5 py-1.5 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]'
+  'flex h-[1.875rem] items-center rounded-md border border-[var(--color-border)] px-1.5 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]'
 
 /**
  * The visibility lease: while the window is shown and focused, the tiles on
@@ -145,12 +151,133 @@ function useTileDrag(tiles: TileView[], onDrop: (tileId: string, toIndex: number
   return { ordered, draggingId: drag?.tileId ?? null, onHandlePointerDown }
 }
 
+/** The new span for a tile dragged from `start` by (dx, dy) px, snapped to the grid's cells. */
+export function snapTileSpan(
+  start: TileSpan,
+  dx: number,
+  dy: number,
+  grid: { width: number; columns: number; rowHeight: number; gap: number }
+): TileSpan {
+  const cell = (grid.width - grid.gap * (grid.columns - 1)) / grid.columns + grid.gap
+  const row = grid.rowHeight + grid.gap
+  const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value))
+  return {
+    cols: clamp(start.cols + Math.round(dx / cell), Math.min(TILE_SPAN_LIMITS.minCols, grid.columns), grid.columns),
+    rows: clamp(start.rows + Math.round(dy / row), TILE_SPAN_LIMITS.minRows, TILE_SPAN_LIMITS.maxRows)
+  }
+}
+
+/**
+ * What a resize stores. A grid narrowed by the panel or the window shows fewer
+ * columns than the tile has: a drag that did not change them keeps the stored
+ * ones, so changing only the height there does not shrink it for good.
+ */
+export function tileSpanToStore(stored: TileSpan, shownBefore: TileSpan, shown: TileSpan): TileSpan {
+  return { cols: shown.cols === shownBefore.cols ? stored.cols : shown.cols, rows: shown.rows }
+}
+
+/**
+ * Pointer-event resize against the grid: the span shown while dragging, then
+ * one update on release, which makes the tile Custom. The tile keeps the new
+ * span until the tiles query brings it, so it never snaps back in between.
+ */
+function useTileResize(
+  tiles: TileView[],
+  gridRef: React.RefObject<HTMLDivElement | null>,
+  columns: number,
+  commit: (tileId: string, span: TileSpan, onError: () => void) => void
+) {
+  const [resize, setResize] = useState<{ tileId: string; span: TileSpan; dragging: boolean } | null>(null)
+  const shownSpan = useCallback((view: TileView): TileSpan => {
+    const span = tileSpan(view.tile)
+    return { cols: Math.min(span.cols, columns), rows: span.rows }
+  }, [columns])
+
+  useEffect(() => {
+    if (!resize || resize.dragging) return
+    const stored = tiles.find((view) => view.tile.id === resize.tileId)?.tile
+    if (!stored || (stored.size === 'custom' && stored.customSpan?.cols === resize.span.cols && stored.customSpan?.rows === resize.span.rows)) setResize(null)
+  }, [resize, tiles])
+
+  const finish = useCallback((view: TileView, span: TileSpan, before: TileSpan) => {
+    const tileId = view.tile.id
+    if (span.cols === before.cols && span.rows === before.rows) return setResize(null)
+    const stored = tileSpanToStore(tileSpan(view.tile), before, span)
+    setResize({ tileId, span: stored, dragging: false })
+    commit(tileId, stored, () => setResize(null))
+  }, [commit])
+
+  // A drag still going when the view goes: its listeners and cursor with it, and nothing committed.
+  const stopDrag = useRef<(() => void) | null>(null)
+  useEffect(() => () => stopDrag.current?.(), [])
+
+  const onPointerDown = useCallback((event: React.PointerEvent, tileId: string) => {
+    const view = tiles.find((t) => t.tile.id === tileId)
+    const node = gridRef.current
+    if (!view || !node) return
+    event.preventDefault()
+    event.stopPropagation()
+    // Captured, so a drag over a tile's frame still reaches this window.
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    const style = getComputedStyle(node)
+    const width = node.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0)
+    const start = shownSpan(view)
+    const [startX, startY] = [event.clientX, event.clientY]
+    let span = start
+    setResize({ tileId, span, dragging: true })
+    const move = (e: PointerEvent): void => {
+      const next = snapTileSpan(start, e.clientX - startX, e.clientY - startY, { width, columns, rowHeight: ROW_HEIGHT, gap: GAP })
+      if (next.cols === span.cols && next.rows === span.rows) return
+      span = next
+      setResize({ tileId, span, dragging: true })
+    }
+    const stop = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      document.body.style.cursor = ''
+      stopDrag.current = null
+    }
+    const up = (): void => {
+      stop()
+      finish(view, span, start)
+    }
+    const cancel = (): void => {
+      stop()
+      setResize(null)
+    }
+    stopDrag.current = stop
+    document.body.style.cursor = 'nwse-resize'
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
+  }, [tiles, gridRef, columns, shownSpan, finish])
+
+  const onResizeBy = useCallback((tileId: string, cols: number, rows: number) => {
+    const view = tiles.find((t) => t.tile.id === tileId)
+    if (!view) return
+    const shown = shownSpan(view)
+    const start = resize?.tileId === tileId ? { cols: Math.min(resize.span.cols, columns), rows: resize.span.rows } : shown
+    const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value))
+    finish(view, {
+      cols: clamp(start.cols + cols, Math.min(TILE_SPAN_LIMITS.minCols, columns), columns),
+      rows: clamp(start.rows + rows, TILE_SPAN_LIMITS.minRows, TILE_SPAN_LIMITS.maxRows)
+    }, start)
+  }, [tiles, resize, columns, shownSpan, finish])
+
+  return {
+    spanOf: (view: TileView): TileSpan => (resize?.tileId === view.tile.id ? { cols: Math.min(resize.span.cols, columns), rows: resize.span.rows } : shownSpan(view)),
+    onPointerDown,
+    onResizeBy
+  }
+}
+
 /**
  * Focus, selection and the chat panel's context (README D3, D7, D12). A click
  * focuses a tile; the panel's agent is the focused tile's, so focusing a tile
  * of the same agent changes only the context and one of another agent switches
  * the panel's chat. A removed chip stays removed until the focus or the
- * selection changes.
+ * selection changes, or the user presses Ask on the tile again.
  */
 /**
  * The focused tile and the panel's agent per dashboard, for this window
@@ -172,7 +299,7 @@ function withWebContext(all: Record<string, WebTileContext>, tileId: string, web
 
 const panelFocusByDashboard = new Map<string, { focusedTileId: string | null; panelAgentId: string | null }>()
 
-function useDashboardChat(dashboardId: string | null, dashboardName: string, tiles: TileView[]) {
+function useDashboardChat(dashboardId: string | null, dashboardName: string, tiles: TileView[], panelOpen: boolean) {
   const rememberedFor = (id: string | null) => {
     const remembered = id ? panelFocusByDashboard.get(id) : undefined
     return { dashboardId: id, focusedTileId: remembered?.focusedTileId ?? null, panelAgentId: remembered?.panelAgentId ?? null }
@@ -252,6 +379,10 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
   const sendable = context && identity !== removed ? context : null
   const latest = useRef(sendable)
   latest.current = sendable
+  // Removal is for what the chip showed then: coming back to that tile later brings the chip back.
+  useEffect(() => {
+    if (identity !== null) setRemoved((r) => (r === identity ? r : null))
+  }, [identity])
 
   const chip: ContextChip = !context
     ? { kind: 'none' }
@@ -283,6 +414,7 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
 
   const chatFor = (view: TileView): TileChat => ({
     focused: view.tile.id === focusedTileId,
+    panelClosed: !panelOpen,
     selected: selections[view.tile.id] ?? [],
     onFocus: () => focus(view),
     onPick: (key, additive) =>
@@ -297,14 +429,16 @@ function useDashboardChat(dashboardId: string | null, dashboardName: string, til
       setWebContexts((all) => withWebContext(all, view.tile.id, webContextFromCollected(collected, all[view.tile.id] ?? null))),
     // The focused tile's only: the others' pages are not asked, and do not re-render for it.
     collectRequest: view.tile.id === focusedTileId ? collectRequest : 0,
-    onAsk: () => ask(view),
+    // Asking about the tile says to send it, even if its chip was removed. Only the user's own Ask:
+    // a page's cinna.ask (onFill) needs no gesture, and must not bring back what the user took off.
+    onAsk: () => { setRemoved(null); ask(view) },
     onPrompt: (prompt) => sendPrompt(view, prompt),
     onFill: (text) => fillComposer(view, text)
   })
 
   const panelAgentView = tiles.find((view) => view.component?.agentId === panelAgentId)
   const panelAgentName = panelAgentView?.component?.agentName ?? panelAgentView?.agentName ?? ''
-  const starters = focused && focusedAgentId === panelAgentId ? (focused.component?.prompts ?? []) : []
+  const starters = focused?.component && focusedAgentId === panelAgentId ? enabledTilePrompts(focused.component.prompts, focused.tile.promptOverride) : []
 
   return {
     focusedTileId,
@@ -329,6 +463,7 @@ export function DashboardView(): React.JSX.Element {
   const list = useDashboardList()
   const tilesQuery = useDashboardTiles(dashboardId)
   const moveTile = useMoveTile()
+  const resizeTile = useUpdateTile()
   const deleteDashboard = useDeleteDashboard()
   const [editMode, setEditMode] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; anchor: HTMLElement } | null>(null)
@@ -349,10 +484,12 @@ export function DashboardView(): React.JSX.Element {
   const onVisibilityChange = useTileLease(dashboardId)
 
   const resetMove = moveTile.reset
+  const resetResize = resizeTile.reset
   useEffect(() => {
     setEditMode(false)
     resetMove()
-  }, [dashboardId, resetMove])
+    resetResize()
+  }, [dashboardId, resetMove, resetResize])
 
   useEffect(() => {
     const node = gridRef.current
@@ -365,11 +502,16 @@ export function DashboardView(): React.JSX.Element {
   const tiles = useMemo(() => tilesQuery.data?.tiles ?? [], [tilesQuery.data])
   const onDrop = useCallback((tileId: string, toIndex: number) => moveTile.mutate({ tileId, toIndex }), [moveTile])
   const { ordered, draggingId, onHandlePointerDown } = useTileDrag(tiles, onDrop)
+  const commitResize = useCallback((tileId: string, span: TileSpan, onError: () => void) => {
+    resizeTile.mutate({ tileId, size: 'custom', customSpan: span }, { onError })
+  }, [resizeTile])
+  const resize = useTileResize(tiles, gridRef, columns, commitResize)
 
   const dashboard = tilesQuery.data?.dashboard ?? list.data?.find((d) => d.id === dashboardId) ?? null
-  const chat = useDashboardChat(dashboardId, dashboard?.name ?? '', tiles)
   const panelOpen = useUIStore((s) => s.dashboardPanelOpen)
   const setPanelOpen = useUIStore((s) => s.setDashboardPanelOpen)
+  const panelPresence = usePanelPresence(panelOpen)
+  const chat = useDashboardChat(dashboardId, dashboard?.name ?? '', tiles, panelOpen)
   const { focus } = chat
   const tilesRef = useRef(tiles)
   tilesRef.current = tiles
@@ -421,29 +563,33 @@ export function DashboardView(): React.JSX.Element {
       <header className="flex items-start gap-2 px-6 pb-3 pt-6">
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-xl font-semibold text-[var(--color-text)]">{dashboard?.name ?? ''}</h1>
-          {/* A failed move says so under the title; the next move clears it (ux rule 6). */}
+          {/* A failed move or resize says so under the title; the next one clears it (ux rule 6). */}
           {moveTile.error && (
             <p role="alert" className="mt-0.5 text-xs text-[var(--color-danger)]">
               The tile could not be moved: {unwrapIpcError(moveTile.error, 'try again.')}
             </p>
           )}
+          {resizeTile.error && (
+            <p role="alert" className="mt-0.5 text-xs text-[var(--color-danger)]">
+              The tile could not be resized: {unwrapIpcError(resizeTile.error, 'try again.')}
+            </p>
+          )}
         </div>
-        {tiles.length > 0 && (
-          // Wide enough for both labels: pressing it never shrinks it under the pointer.
-          <button type="button" className={`${HEADER_BUTTON} min-w-[6.5rem] justify-center`} aria-pressed={editMode} onClick={() => setEditMode((v) => !v)}>
-            {editMode ? 'Done' : 'Edit layout'}
+        {/* Edit layout starts in the ⋯ menu; this is its way out, for as long as it lasts. */}
+        {editMode && (
+          <button type="button" className={HEADER_BUTTON} onClick={() => setEditMode(false)}>
+            Done
           </button>
         )}
         {tiles.length > 0 && (
-          <button type="button" className={HEADER_BUTTON} aria-pressed={panelOpen} onClick={togglePanel} title={panelOpen ? 'Close the chat panel' : 'Chat with the focused tile’s agent'}>
+          <button type="button" className={`${HEADER_BUTTON} ${HEADER_TOGGLE_PRESSED}`} aria-pressed={panelOpen} onClick={togglePanel} title={panelOpen ? 'Close the chat panel' : 'Open the chat panel'}>
             <MessageSquare size={12} />
             Chat
           </button>
         )}
         {tiles.length > 0 && (
-          <button type="button" className={HEADER_BUTTON} onClick={refreshAll} title="Recompute every tile now">
-            <RefreshCw size={12} />
-            Refresh
+          <button type="button" className={HEADER_ICON_BUTTON} onClick={refreshAll} title="Recompute every tile now" aria-label="Refresh all tiles">
+            <RefreshCw size={14} />
           </button>
         )}
         <button
@@ -477,16 +623,17 @@ export function DashboardView(): React.JSX.Element {
           style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: `${ROW_HEIGHT}px`, gap: `${GAP}px` }}
         >
           {ordered.map((view) => {
-            const preset = TILE_SIZE_SPANS[view.tile.size]
             return (
               <Tile
                 key={view.tile.id}
                 view={view}
                 dashboardName={dashboard?.name ?? ''}
-                span={{ cols: Math.min(preset.cols, columns), rows: preset.rows }}
+                span={resize.spanOf(view)}
                 editMode={editMode}
                 dragging={draggingId === view.tile.id}
                 onHandlePointerDown={onHandlePointerDown}
+                onResizePointerDown={resize.onPointerDown}
+                onResizeBy={resize.onResizeBy}
                 onVisibilityChange={onVisibilityChange}
                 chat={chat.chatFor(view)}
               />
@@ -498,6 +645,11 @@ export function DashboardView(): React.JSX.Element {
       {menu && dashboard && (
         <ContextMenu x={menu.x} y={menu.y} anchor={menu.anchor} label={`Actions for ${dashboard.name}`} onClose={() => setMenu(null)}>
           <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); setRenaming(true) }}>Rename…</button>
+          {tiles.length > 0 && (
+            <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); setEditMode((v) => !v) }}>
+              {editMode ? 'Done editing layout' : 'Edit layout'}
+            </button>
+          )}
           <div className="my-1 border-t border-[var(--color-border)]" />
           <button type="button" role="menuitem" className={`${CONTEXT_MENU_ITEM} text-[var(--color-danger)]`} onClick={() => { setMenu(null); setConfirmDelete(true) }}>Delete…</button>
         </ContextMenu>
@@ -516,8 +668,10 @@ export function DashboardView(): React.JSX.Element {
         />
       )}
     </div>
-    {panelOpen && dashboardId && (
+    {panelPresence.mounted && dashboardId && (
       <DashboardChatPanel
+        collapsed={panelPresence.collapsed}
+        sliding={panelPresence.sliding}
         dashboardId={dashboardId}
         agentId={chat.panelAgentId}
         agentName={chat.panelAgentName}

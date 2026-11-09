@@ -132,7 +132,9 @@ export function TopBar(): React.JSX.Element {
 
   return (
     <div
-      className={`app-drag-strip absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30 flex items-center ${TRAFFIC_LIGHT_GUTTER} pr-3`}
+      className={`app-drag-strip absolute top-2 left-2 h-[var(--topbar-h)] z-30 flex items-center ${TRAFFIC_LIGHT_GUTTER} pr-3`}
+      // Stops short of a dashboard's chat card, which reaches the top of the window (DashboardChatPanel).
+      style={{ right: 'calc(0.5rem + var(--dashboard-panel-inset, 0px))' }}
     >
       {/* The wave staggers by `nth-child`, so the buttons stay this box's direct children. */}
       <div

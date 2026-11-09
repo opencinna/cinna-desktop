@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { LayoutDashboard, MessageSquare, SquarePen, X } from 'lucide-react'
 import type { ComponentPrompt, DashboardContext, DashboardsErrorCode } from '../../../../shared/dashboards'
 import { useChatDetail } from '../../hooks/useChat'
@@ -37,10 +37,40 @@ export function panelLayout(
     return { width: Math.round(Math.max(PANEL_MIN_WIDTH, Math.min(stored, maxWidth))), maxWidth, overlay: false }
   }
   if (rowWidth < GRID_MIN_WIDTH + PANEL_MIN_WIDTH) {
-    return { width: Math.round(Math.min(Math.max(stored, PANEL_MIN_WIDTH), rowWidth)), maxWidth: rowWidth, overlay: true }
+    // At its minimum, whatever the stored width: what is left of the grid is the only way to pick another tile.
+    return { width: Math.min(PANEL_MIN_WIDTH, rowWidth), maxWidth: Math.min(PANEL_MIN_WIDTH, rowWidth), overlay: true }
   }
   const maxWidth = Math.max(PANEL_MIN_WIDTH, Math.min(rowWidth - GRID_MIN_WIDTH, windowWidth * PANEL_MAX_FRACTION))
   return { width: Math.round(Math.max(PANEL_MIN_WIDTH, Math.min(stored, maxWidth))), maxWidth, overlay: false }
+}
+
+/** The sidebar's slide (main.css `.app-sidebar-wrap`); how long a closing panel stays mounted. */
+export const PANEL_SLIDE_MS = 260
+
+type PanelPhase = 'closed' | 'in' | 'open' | 'out'
+
+/**
+ * The panel's slide, as the sidebar's collapse does it: mounted collapsed,
+ * animated out to its width, and kept mounted through the slide back. The
+ * transition is on only while sliding, so a drag on the panel's edge or a window
+ * resize follows the pointer. A panel already open when the view mounts (coming
+ * back to the dashboard) does not slide.
+ */
+export function usePanelPresence(open: boolean): { mounted: boolean; collapsed: boolean; sliding: boolean } {
+  const [phase, setPhase] = useState<PanelPhase>(open ? 'open' : 'closed')
+  useLayoutEffect(() => {
+    if (open && (phase === 'closed' || phase === 'out')) {
+      // Commit the collapsed style first, or there is nothing to transition from.
+      void document.body.offsetWidth
+      setPhase('in')
+    } else if (!open && (phase === 'open' || phase === 'in')) setPhase('out')
+  }, [open, phase])
+  useEffect(() => {
+    if (phase !== 'in' && phase !== 'out') return
+    const timer = setTimeout(() => setPhase(phase === 'in' ? 'open' : 'closed'), PANEL_SLIDE_MS + 20)
+    return () => clearTimeout(timer)
+  }, [phase])
+  return { mounted: open || phase !== 'closed', collapsed: phase === 'closed' || phase === 'out', sliding: phase === 'in' || phase === 'out' }
 }
 
 const HEADER_ICON_BUTTON =
@@ -84,9 +114,14 @@ export function DashboardChatPanel({
   onPromptSent,
   onClose,
   onComposerFocus,
-  rowWidth
+  rowWidth,
+  collapsed = false,
+  sliding = false
 }: {
   dashboardId: string
+  /** Slid away ({@link usePanelPresence}); nothing in it takes input. */
+  collapsed?: boolean
+  sliding?: boolean
   /** The width of grid plus panel, px, measured by the dashboard; null before it is. */
   rowWidth: number | null
   /** The focused tile's agent; null until a tile is focused. */
@@ -107,6 +142,16 @@ export function DashboardChatPanel({
   const storedWidth = useUIStore((s) => s.dashboardPanelWidth)
   const setWidth = useUIStore((s) => s.setDashboardPanelWidth)
   const { width, maxWidth, overlay } = panelLayout(rowWidth, storedWidth, window.innerWidth)
+  // The card reaches the top of the window, so the top bar's drag strip stops at its left edge:
+  // a drag region over the card's buttons would take their clicks, whatever the stacking.
+  useLayoutEffect(() => {
+    const root = document.documentElement.style
+    if (collapsed) root.removeProperty('--dashboard-panel-inset')
+    else root.setProperty('--dashboard-panel-inset', `${width}px`)
+    return () => {
+      root.removeProperty('--dashboard-panel-inset')
+    }
+  }, [collapsed, width])
   const key = agentId ? `${dashboardId}\u0000${agentId}` : null
   const [resolved, setResolved] = useState<{ key: string; chatId: string } | { key: string; error: string; code: DashboardsErrorCode | null } | null>(null)
   // Bumped by Retry on a refusal: the chat for the same (dashboard, agent) is asked for again.
@@ -118,7 +163,8 @@ export function DashboardChatPanel({
   const ownChats = useRef(new Set<string>())
 
   useEffect(() => {
-    if (!key || !agentId) return
+    // A focus change during the slide away is not a reason to open (or create) a chat.
+    if (!key || !agentId || collapsed) return
     const known = chatsByKey.current.get(key)
     if (known) {
       setResolved({ key, chatId: known })
@@ -140,7 +186,7 @@ export function DashboardChatPanel({
     return () => {
       cancelled = true
     }
-  }, [key, dashboardId, agentId, attempt])
+  }, [key, dashboardId, agentId, attempt, collapsed])
   const retryChat = (): void => {
     setResolved(null)
     setAttempt((n) => n + 1)
@@ -229,19 +275,24 @@ export function DashboardChatPanel({
   const extras = useMemo<ComposerSendExtras>(() => ({ dashboardContext: () => getContextRef.current() }), [])
 
   return (
+    // A card like the sidebar's, on its slide: the shell's padding keeps both off the window's edge.
+    <div
+      className={`dashboard-panel-wrap ${overlay ? 'is-overlay' : ''} ${collapsed ? 'is-collapsed' : ''} ${sliding ? 'is-sliding' : ''}`}
+      style={{ ['--dashboard-panel-width' as string]: `${width}px` }}
+      inert={collapsed || undefined}
+    >
+    {!overlay && <ResizeHandle width={width} maxWidth={maxWidth} onResize={setWidth} />}
     <aside
       aria-label="Dashboard chat"
       data-testid="dashboard-chat-panel"
       data-overlay={overlay || undefined}
-      className={`flex shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-bg)] pt-[var(--topbar-h)] ${
-        overlay ? 'absolute inset-y-0 right-0 z-30 shadow-xl' : 'relative'
-      }`}
-      style={{ width }}
+      // Not overflow-hidden: the composer's popovers open past a narrow card's edge.
+      className="app-sidebar flex flex-col"
       // The composer gaining focus, from a tile's page (where the owner selected text) or anywhere else.
       onFocus={(event) => { if (event.target instanceof HTMLTextAreaElement) onComposerFocus?.() }}
     >
-      <ResizeHandle width={width} maxWidth={maxWidth} onResize={setWidth} />
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--color-border)] px-3">
+      {/* Takes over the window drag the top bar's strip gives up here; its buttons are no-drag (main.css). */}
+      <div className="app-drag-strip flex h-9 shrink-0 items-center gap-1 border-b border-[var(--color-border)] px-3">
         <MessageSquare size={13} className="shrink-0 text-[var(--color-text-muted)]" />
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-text)]">{agentId ? agentName : 'Chat'}</span>
         <button type="button" className={HEADER_ICON_BUTTON} onClick={startFresh} disabled={!agentId || starting} title="New chat" aria-label="New chat">
@@ -254,7 +305,11 @@ export function DashboardChatPanel({
           <X size={13} />
         </button>
       </div>
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      {/*
+        No top bar over the card's chat: its header is above it, so the transcript does not leave room for one.
+        The composer's blur takes the card's corners (14 px, inside its 1 px border): the card cannot clip it, since it must not clip the composer's popovers.
+      */}
+      <div className="relative flex min-h-0 flex-1 flex-col" style={{ ['--topbar-h' as string]: '0px', ['--composer-dock-corner' as string]: '13px' }}>
         {!agentId ? (
           <p className="m-auto max-w-[16rem] px-4 text-center text-xs text-[var(--color-text-secondary)]">Click a tile to ask its agent about it.</p>
         ) : current && 'error' in current ? (
@@ -284,6 +339,7 @@ export function DashboardChatPanel({
         )}
       </div>
     </aside>
+    </div>
   )
 }
 
@@ -418,7 +474,7 @@ function ResizeHandle({ width, maxWidth, onResize }: { width: number; maxWidth: 
         window.addEventListener('pointerup', up)
         window.addEventListener('pointercancel', up)
       }}
-      className="absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none outline-none hover:bg-[var(--color-accent)]/20 focus-visible:bg-[var(--color-accent)]/20"
+      className="absolute inset-y-0 -left-1.5 z-20 w-2 cursor-col-resize touch-none outline-none hover:bg-[var(--color-accent)]/20 focus-visible:bg-[var(--color-accent)]/20"
     />
   )
 }

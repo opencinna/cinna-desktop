@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ComponentInfo, ComponentRefreshRule, TileRefreshOverride, TileView } from '../../../../shared/dashboards'
+import type { ComponentInfo, ComponentRefreshRule, TilePromptOverride, TileRefreshOverride, TileView } from '../../../../shared/dashboards'
 
 vi.mock('../../stores/logger.store', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
@@ -63,7 +63,7 @@ describe('Edit tile', () => {
   it('saves no override when nothing changed', async () => {
     show(view())
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: null }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: null, promptOverride: null }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
@@ -78,7 +78,8 @@ describe('Edit tile', () => {
       expect(updateTile).toHaveBeenCalledWith({
         tileId: 't1',
         title: null,
-        refreshOverride: { maxAge: '1h', whileOpenEvery: null, afterTurn: false, onAppStart: true }
+        refreshOverride: { maxAge: '1h', whileOpenEvery: null, afterTurn: false, onAppStart: true },
+        promptOverride: null
       })
     )
   })
@@ -89,7 +90,7 @@ describe('Edit tile', () => {
     expect(selectText('After a chat turn of its agent')).toBe('Off')
     fireEvent.change(screen.getByLabelText('While on screen, every'), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { afterTurn: false } }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { afterTurn: false }, promptOverride: null }))
   })
 
   it('Manual greys the rest out (nothing moves) and is saved with them kept', async () => {
@@ -102,7 +103,7 @@ describe('Edit tile', () => {
       expect(screen.getByLabelText(label).className).toContain('disabled:opacity-50')
     }
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { maxAge: '1d', manual: true } }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { maxAge: '1d', manual: true }, promptOverride: null }))
   })
 
   it('Manual ticked and unticked again leaves no override', async () => {
@@ -110,7 +111,7 @@ describe('Edit tile', () => {
     fireEvent.click(screen.getByLabelText('Only when I press Refresh'))
     fireEvent.click(screen.getByLabelText('Only when I press Refresh'))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: null }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: null, promptOverride: null }))
   })
 
   it('a refused save says why and closes nothing', async () => {
@@ -133,6 +134,68 @@ describe('Edit tile', () => {
     }
     fireEvent.click(screen.getByLabelText('Only when I press Refresh'))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { manual: true } }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { manual: true }, promptOverride: null }))
+  })
+
+  describe('suggested questions', () => {
+    const withPrompts = (override: TilePromptOverride | null = null): TileView => {
+      const v = view()
+      return { ...v, tile: { ...v.tile, promptOverride: override }, component: { ...v.component!, prompts: [{ label: 'Most urgent?', prompt: 'Which is the most urgent?' }, { label: 'Stalled?', prompt: 'What stalled?' }] } }
+    }
+    const saved = async (): Promise<unknown> => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(updateTile).toHaveBeenCalled())
+      return updateTile.mock.calls[0][0].promptOverride
+    }
+
+    it('turning the agent’s question off stores only that; on again stores nothing', async () => {
+      show(withPrompts())
+      const toggle = screen.getByRole('switch', { name: 'Offer Stalled?' })
+      expect(toggle.getAttribute('aria-checked')).toBe('true')
+      fireEvent.click(toggle)
+      expect(toggle.getAttribute('aria-checked')).toBe('false')
+      fireEvent.click(toggle)
+      fireEvent.click(toggle)
+      expect(await saved()).toEqual({ hidden: ['Stalled?'] })
+    })
+
+    it('a reworded question is stored under the agent’s label; the reset icon or the agent’s own words drop it', async () => {
+      show(withPrompts())
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Stalled?' }))
+      fireEvent.change(screen.getByLabelText('Question sent to the agent'), { target: { value: 'Which deal stalled?' } })
+      expect(screen.getByRole('button', { name: 'Use the agent’s wording for Stalled?' })).toBeTruthy()
+      fireEvent.change(screen.getByLabelText('Question sent to the agent'), { target: { value: 'What stalled?' } })
+      expect(screen.queryByRole('button', { name: 'Use the agent’s wording for Stalled?' })).toBeNull()
+      fireEvent.change(screen.getByLabelText('Question sent to the agent'), { target: { value: 'Which deal stalled?' } })
+      expect(await saved()).toEqual({ edited: { 'Stalled?': { label: 'Stalled?', prompt: 'Which deal stalled?' } } })
+    })
+
+    it('Add question opens an empty form, and its own question can be removed', async () => {
+      show(withPrompts())
+      fireEvent.click(screen.getByRole('button', { name: 'Add question' }))
+      fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Mine' } })
+      fireEvent.change(screen.getByLabelText('Question sent to the agent'), { target: { value: 'My question' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Mine' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Add question' }))
+      fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Other' } })
+      fireEvent.change(screen.getByLabelText('Question sent to the agent'), { target: { value: 'Other question' } })
+      expect(await saved()).toEqual({ added: [{ label: 'Other', prompt: 'Other question' }] })
+    })
+
+    it('a question left wholly empty is dropped on Save and blocks nothing', async () => {
+      show(withPrompts())
+      fireEvent.click(screen.getByRole('button', { name: 'Add question' }))
+      expect(await saved()).toBeNull()
+    })
+
+    it('a refused question keeps the dialog open and says why', async () => {
+      updateTile.mockResolvedValue({ ok: false, code: 'invalid_input', message: 'A suggested question needs a label.' })
+      show(withPrompts())
+      fireEvent.click(screen.getByRole('button', { name: 'Add question' }))
+      fireEvent.change(screen.getByLabelText('Label'), { target: { value: 'Half' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      expect((await screen.findByRole('alert')).textContent).toContain('A suggested question needs a label.')
+      expect(onClose).not.toHaveBeenCalled()
+    })
   })
 })

@@ -18,9 +18,11 @@ describe('panelLayout (the chat panel on every resize)', () => {
     expect(panelLayout(GRID_MIN_WIDTH + PANEL_MIN_WIDTH, 600, 900)).toMatchObject({ width: PANEL_MIN_WIDTH, overlay: false })
   })
 
-  it('lies over the grid when grid 360 + panel 300 do not fit, never wider than the space', () => {
-    expect(panelLayout(540, 400, 800)).toEqual({ width: 400, maxWidth: 540, overlay: true })
-    expect(panelLayout(500, 900, 800)).toMatchObject({ width: 500, overlay: true })
+  it('lies over the grid at its minimum when grid 360 + panel 300 do not fit, so the grid stays reachable', () => {
+    // Mutation: use the stored width here and a 400 px panel covers all but 108 px of a 508 px row.
+    expect(panelLayout(508, 400, 800)).toEqual({ width: PANEL_MIN_WIDTH, maxWidth: PANEL_MIN_WIDTH, overlay: true })
+    expect(panelLayout(500, 900, 800)).toMatchObject({ width: PANEL_MIN_WIDTH, overlay: true })
+    expect(panelLayout(280, 400, 400)).toMatchObject({ width: 280, overlay: true })
   })
 
   it('gives the stored width back when the window grows again', () => {

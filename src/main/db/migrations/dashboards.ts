@@ -85,5 +85,9 @@ export function migrateDashboards(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'dashboard_tiles', 'cloud_component_json')) {
     sqlite.exec('ALTER TABLE dashboard_tiles ADD COLUMN cloud_component_json TEXT')
   }
+  // The user's own cells (`size = 'custom'`) and changes to the component's suggested questions.
+  for (const [column, type] of [['custom_cols', 'INTEGER'], ['custom_rows', 'INTEGER'], ['prompt_override_json', 'TEXT']]) {
+    if (!hasColumn(sqlite, 'dashboard_tiles', column)) sqlite.exec(`ALTER TABLE dashboard_tiles ADD COLUMN ${column} ${type}`)
+  }
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_dashboard_tiles_remote_agent ON dashboard_tiles(remote_agent_id)')
 }

@@ -147,6 +147,42 @@ describe('tiles', () => {
     expect(order()).toEqual([ids[2], ids[1]])
   })
 
+  it('take a custom size with its cells, keep them under a preset, and refuse cells off the grid', () => {
+    const d = service.create('p1', 'Sales')
+    if (!d.ok) throw new Error()
+    const t = addDeals(d.dashboard.id)
+    if (!t.ok) throw new Error()
+    const update = (patch: object) => service.updateTile('p1', { tileId: t.tile.id, ...patch })
+    // Custom with no cells yet has nothing to draw.
+    expect(update({ size: 'custom' })).toMatchObject({ ok: false, code: 'invalid_input' })
+    expect(update({ size: 'custom', customSpan: { cols: 5, rows: 3 } })).toMatchObject({ ok: true, tile: { size: 'custom', customSpan: { cols: 5, rows: 3 } } })
+    expect(service.resolveTile('p1', t.tile.id)?.tile).toMatchObject({ size: 'custom', customSpan: { cols: 5, rows: 3 } })
+    expect(update({ size: 'wide' })).toMatchObject({ ok: true, tile: { size: 'wide', customSpan: { cols: 5, rows: 3 } } })
+    expect(update({ size: 'custom' })).toMatchObject({ ok: true, tile: { size: 'custom', customSpan: { cols: 5, rows: 3 } } })
+    for (const customSpan of [{ cols: 1, rows: 2 }, { cols: 13, rows: 2 }, { cols: 4, rows: 0 }, { cols: 4, rows: 13 }, { cols: 2.5, rows: 2 }, { cols: '4', rows: 2 }]) {
+      expect(update({ size: 'custom', customSpan })).toMatchObject({ ok: false, code: 'invalid_input' })
+    }
+    expect(update({ size: 'huge' })).toMatchObject({ ok: false, code: 'invalid_input' })
+    expect(service.addTile('p1', { dashboardId: d.dashboard.id, agentId: 'folder:m1', component: 'deals', size: 'custom' })).toMatchObject({ ok: false, code: 'invalid_input' })
+  })
+
+  it('take a change to the suggested questions from Edit tile, trimmed, and refuse an empty or oversized one', () => {
+    const d = service.create('p1', 'Sales')
+    if (!d.ok) throw new Error()
+    const t = addDeals(d.dashboard.id)
+    if (!t.ok) throw new Error()
+    const update = (promptOverride: object | null) => service.updateTile('p1', { tileId: t.tile.id, promptOverride: promptOverride as never })
+    expect(update({ hidden: ['A'], edited: { B: { label: ' B2 ', prompt: ' Text ' } }, added: [{ label: 'C', prompt: 'See', hidden: true }] })).toMatchObject({
+      ok: true, tile: { promptOverride: { hidden: ['A'], edited: { B: { label: 'B2', prompt: 'Text' } }, added: [{ label: 'C', prompt: 'See', hidden: true }] } }
+    })
+    expect(service.resolveTile('p1', t.tile.id)?.tile.promptOverride?.hidden).toEqual(['A'])
+    expect(update({ hidden: [], edited: {}, added: [] })).toMatchObject({ ok: true, tile: { promptOverride: null } })
+    for (const bad of [{ added: [{ label: '', prompt: 'x' }] }, { added: [{ label: 'x', prompt: '   ' }] }, { edited: { A: { label: 'x'.repeat(61), prompt: 'y' } } }, { added: [{ label: 'x', prompt: 'y'.repeat(1001) }] }, { hidden: [1] }, { hidden: 'A' }]) {
+      expect(update(bad)).toMatchObject({ ok: false, code: 'invalid_input' })
+    }
+    expect(update(null)).toMatchObject({ ok: true, tile: { promptOverride: null } })
+  })
+
   it('take the full refresh override from Edit tile, the interval at least 1m (D4)', () => {
     const d = service.create('p1', 'Sales')
     if (!d.ok) throw new Error()

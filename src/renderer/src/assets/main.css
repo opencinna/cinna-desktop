@@ -964,6 +964,67 @@
     width: var(--sidebar-page-width);
   }
 
+  /* The dashboard's chat panel: the sidebar's card and its slide, from the
+     right. The transition is on only while sliding (`usePanelPresence`), so a
+     drag on its edge follows the pointer. No `will-change`, for the same reason
+     as the floating sidebar: it would cut the dark card's blur off from what is
+     behind it. */
+  .dashboard-panel-wrap {
+    position: relative;
+    flex-shrink: 0;
+    width: var(--dashboard-panel-width);
+  }
+  .dashboard-panel-wrap.is-sliding {
+    transition:
+      width 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
+      transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
+      opacity 220ms ease-out;
+  }
+  .dashboard-panel-wrap.is-collapsed {
+    width: 0;
+    transform: translateX(var(--dashboard-panel-width));
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* Too narrow for grid and panel side by side: the card floats over the grid. */
+  .dashboard-panel-wrap.is-overlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    z-index: 30;
+  }
+  /* To the top of the space, unlike the sidebar: no buttons sit above it, since
+     the top bar's strip stops at its left edge (`--dashboard-panel-inset`). */
+  .dashboard-panel-wrap > .app-sidebar {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--dashboard-panel-width);
+  }
+  .dashboard-panel-wrap.is-overlay > .app-sidebar {
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+  }
+  [data-theme="dark"] .dashboard-panel-wrap.is-overlay > .app-sidebar {
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  }
+  /* Extra UI animation off, or reduced motion: it fades without sliding. */
+  [data-motion-fade] .dashboard-panel-wrap.is-sliding {
+    transition: opacity 220ms ease-out;
+  }
+  [data-motion-fade] .dashboard-panel-wrap.is-collapsed {
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dashboard-panel-wrap.is-sliding {
+      transition: opacity 220ms ease-out;
+    }
+    .dashboard-panel-wrap.is-collapsed {
+      transform: none;
+    }
+  }
+
   /* Draggable strips for the (windowless) macOS title-bar area. */
   .app-drag-strip {
     -webkit-app-region: drag;

@@ -26,7 +26,7 @@ vi.mock('../layout/ChatWorkspace', async () => {
   }
 })
 
-import { DashboardView } from './DashboardView'
+import { DashboardView, snapTileSpan, tileSpanToStore } from './DashboardView'
 import { SidebarTabs } from '../layout/SidebarTabs'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -164,13 +164,13 @@ async function panel() {
 }
 
 describe('the dashboard chat panel', () => {
-  it('Ask focuses the tile with a ring and opens the agent’s chat for this dashboard', async () => {
+  it('Ask focuses the tile with a soft ring and opens the agent’s chat for this dashboard', async () => {
     show()
     await screen.findByText('Acme')
     expect(tileEl('Deals pipeline').dataset.focused).toBeUndefined()
     await askAbout('Deals pipeline')
     expect(tileEl('Deals pipeline').dataset.focused).toBe('true')
-    expect(tileEl('Deals pipeline').className).toContain('ring-2')
+    expect(tileEl('Deals pipeline').className).toContain('ring-1')
     const aside = await panel()
     expect(within(aside).getByText('Sales Agent')).toBeTruthy()
     expect(panelChat).toHaveBeenCalledWith({ dashboardId: 'd1', agentId: 'folder:sales' })
@@ -309,7 +309,7 @@ describe('the dashboard chat panel', () => {
     expect(panelChat).toHaveBeenLastCalledWith({ dashboardId: 'd1', agentId: 'folder:sales', fresh: true })
 
     fireEvent.click(within(aside).getByRole('button', { name: 'Close chat panel' }))
-    expect(screen.queryByRole('complementary', { name: 'Dashboard chat' })).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Dashboard chat' })).toBeNull())
     expect(useChatStore.getState().activeChatId).toBe('chats-view-chat')
 
     fireEvent.click(screen.getByRole('button', { name: 'Chat' }))
@@ -438,6 +438,7 @@ describe('the dashboard chat panel', () => {
     fireEvent.click(within(tileEl('Deals pipeline')).getByRole('button', { name: 'What stalled?' }))
     await screen.findByRole('alert')
     fireEvent.click(within(await panel()).getByRole('button', { name: 'Close chat panel' }))
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Dashboard chat' })).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Chat' }))
     await waitFor(() => expect(screen.getByTestId('workspace').dataset.chatId).toBe('chat-folder:sales'))
     await act(async () => {})
@@ -461,13 +462,115 @@ describe('the dashboard chat panel', () => {
   })
 })
 
+describe('the removed chip', () => {
+  const chipRow = () => screen.getByTestId('dashboard-context-chip')
+  const removeChip = async () => {
+    await screen.findByText('Acme')
+    await askAbout('Deals pipeline')
+    await waitFor(() => expect(chipRow().textContent).toContain('Deals pipeline'))
+    fireEvent.click(within(chipRow()).getByRole('button', { name: "Don't send Deals pipeline" }))
+    expect(chipRow().textContent).toContain('Not sending Deals pipeline')
+  }
+
+  it('comes back when Ask is pressed on the same tile', async () => {
+    // Mutation: drop setRemoved(null) from ask and the row keeps saying "Not sending".
+    show()
+    await removeChip()
+    await askAbout('Deals pipeline')
+    await waitFor(() => expect(chipRow().textContent).not.toContain('Not sending'))
+    expect(within(chipRow()).getByRole('button', { name: "Don't send Deals pipeline" })).toBeTruthy()
+  })
+
+  it('stays removed when a page’s cinna.ask opens the panel: only the user brings it back', async () => {
+    // Mutation: clear the removal inside ask rather than onAsk and the chip comes back on its own.
+    const PAGE = tileView('t4', 'Weekly chart', info({ name: 'chart', view: 'html' }), 'm')
+    const api = window.api as unknown as { dashboards: Record<string, unknown> }
+    api.dashboards.tiles = async () => ({ ok: true, dashboard: { id: 'd1', name: 'Sales overview', sortOrder: 0, tileCount: 1, createdAt: 0, updatedAt: 0 }, tiles: [PAGE] })
+    api.dashboards.openFrame = async () => ({ ok: true, token: 'tok', url: 'cinna-preview://dash-h/t4/index.html' })
+    api.dashboards.releaseFrame = async () => {}
+    show()
+    const iframe = (await screen.findByTestId('dashboard-frame')) as HTMLIFrameElement
+    const win = iframe.contentWindow!
+    const posted: Array<Record<string, unknown>> = []
+    vi.spyOn(win, 'postMessage').mockImplementation(((message: unknown) => { posted.push(message as Record<string, unknown>) }) as never)
+    await askAbout('Weekly chart')
+    await waitFor(() => expect(within(chipRow()).getByRole('button', { name: "Don't send Weekly chart" })).toBeTruthy())
+    fireEvent.click(within(chipRow()).getByRole('button', { name: "Don't send Weekly chart" }))
+    const send = (data: Record<string, unknown>) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'null', source: win })) })
+    send({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {} })
+    const nonce = (posted[0].result as { _meta: { cinna: { nonce: string } } })._meta.cinna.nonce
+    send({ jsonrpc: '2.0', id: 2, method: 'ui/message', params: { role: 'user', content: [{ type: 'text', text: 'Why?' }], _meta: { cinna: { nonce } } } })
+    await waitFor(() => expect(posted.find((m) => m.id === 2)).toBeTruthy())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)) })
+    expect(chipRow().textContent).toContain('Not sending Weekly chart')
+  })
+
+  it('comes back when the focus leaves that tile and returns', async () => {
+    show()
+    await removeChip()
+    fireEvent.pointerDown(tileEl('Follow-ups'))
+    await waitFor(() => expect(chipRow().textContent).toContain('Follow-ups'))
+    fireEvent.pointerDown(tileEl('Deals pipeline'))
+    await waitFor(() => expect(within(chipRow()).getByRole('button', { name: "Don't send Deals pipeline" })).toBeTruthy())
+  })
+})
+
+describe('resizing a tile', () => {
+  const grid = { width: 1000, columns: 12, rowHeight: 110, gap: 12 }
+  const cell = (1000 - 12 * 11) / 12 + 12
+
+  it('snaps a drag to the grid’s cells', () => {
+    expect(snapTileSpan({ cols: 6, rows: 2 }, cell * 2, 122, grid)).toEqual({ cols: 8, rows: 3 })
+    // Less than half a cell moves nothing.
+    expect(snapTileSpan({ cols: 6, rows: 2 }, cell * 0.4, 60, grid)).toEqual({ cols: 6, rows: 2 })
+  })
+
+  it('a height-only drag on a narrowed grid keeps the stored columns; a real column change takes the shown ones', () => {
+    // Mutation: store the shown span as it is and a Wide tile comes back half width once the panel closes.
+    expect(tileSpanToStore({ cols: 12, rows: 2 }, { cols: 6, rows: 2 }, { cols: 6, rows: 3 })).toEqual({ cols: 12, rows: 3 })
+    expect(tileSpanToStore({ cols: 12, rows: 2 }, { cols: 6, rows: 2 }, { cols: 4, rows: 2 })).toEqual({ cols: 4, rows: 2 })
+  })
+
+  it('stays within the grid and the limits', () => {
+    expect(snapTileSpan({ cols: 6, rows: 2 }, 5000, 5000, grid)).toEqual({ cols: 12, rows: 12 })
+    expect(snapTileSpan({ cols: 6, rows: 2 }, -5000, -5000, grid)).toEqual({ cols: 2, rows: 1 })
+    expect(snapTileSpan({ cols: 3, rows: 2 }, 5000, 0, { ...grid, columns: 6 }).cols).toBe(6)
+  })
+
+  it('a preset tile has its corner only in edit mode; a key there makes it Custom', async () => {
+    const updateTile = vi.fn(async (input: { tileId: string }) => ({ ok: true, tile: { id: input.tileId } }))
+    ;(window.api as unknown as { dashboards: Record<string, unknown> }).dashboards.updateTile = updateTile
+    show()
+    await screen.findByText('Acme')
+    expect(within(tileEl('Follow-ups')).queryByRole('button', { name: 'Resize Follow-ups' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Sales overview' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit layout' }))
+    fireEvent.keyDown(within(tileEl('Follow-ups')).getByRole('button', { name: 'Resize Follow-ups' }), { key: 'ArrowDown' })
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't2', size: 'custom', customSpan: { cols: 12, rows: 3 } }))
+    // Held until the tiles query brings it: the tile does not snap back in between.
+    expect(tileEl('Follow-ups').style.gridRow).toContain('span 3')
+  })
+
+  it('a refused resize says why, and the tile goes back', async () => {
+    ;(window.api as unknown as { dashboards: Record<string, unknown> }).dashboards.updateTile = async () => ({ ok: false, code: 'not_found', message: 'That tile is gone.' })
+    show()
+    await screen.findByText('Acme')
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Sales overview' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit layout' }))
+    fireEvent.keyDown(within(tileEl('Follow-ups')).getByRole('button', { name: 'Resize Follow-ups' }), { key: 'ArrowDown' })
+    expect((await screen.findByRole('alert')).textContent).toContain('The tile could not be resized: That tile is gone.')
+    expect(tileEl('Follow-ups').style.gridRow).toContain('span 2')
+  })
+})
+
 describe('the dashboard header', () => {
   it('a failed tile move says why under the title; the next move clears it', async () => {
     const moveTile = vi.fn().mockResolvedValueOnce({ ok: false, code: 'not_found', message: 'That tile is gone.' }).mockResolvedValue({ ok: true })
     ;(window.api as unknown as { dashboards: Record<string, unknown> }).dashboards.moveTile = moveTile
     show()
     await screen.findByText('Acme')
-    fireEvent.click(screen.getByRole('button', { name: 'Edit layout' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Sales overview' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit layout' }))
     const drag = () => {
       const target = tileEl('Client emails')
       ;(document as unknown as { elementsFromPoint: () => Element[] }).elementsFromPoint = () => [target]
@@ -483,12 +586,42 @@ describe('the dashboard header', () => {
     expect(moveTile).toHaveBeenCalledTimes(2)
   })
 
-  it('Edit layout keeps one width as it turns into Done', async () => {
+  it('Edit layout is in the ⋯ menu under Rename; Done ends it, and only then is it on the header', async () => {
     show()
     await screen.findByText('Acme')
-    const button = screen.getByRole('button', { name: 'Edit layout' })
-    expect(button.className).toContain('min-w-[6.5rem]')
+    expect(screen.queryByRole('button', { name: 'Edit layout' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Done' })).toBeNull()
     expect(screen.getByRole('heading', { level: 1, name: 'Sales overview' }).className).toContain('text-xl')
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Sales overview' }))
+    const items = within(screen.getByRole('menu', { name: 'Actions for Sales overview' })).getAllByRole('menuitem').map((item) => item.textContent)
+    expect(items).toEqual(['Rename…', 'Edit layout', 'Delete…'])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit layout' }))
+    expect(within(tileEl('Deals pipeline')).getByRole('button', { name: 'Move Deals pipeline' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(within(tileEl('Deals pipeline')).queryByRole('button', { name: 'Move Deals pipeline' })).toBeNull()
+  })
+
+  it('Refresh is an icon named for what it does; Chat shows pressed while the panel is open', async () => {
+    show()
+    await screen.findByText('Acme')
+    const refresh = screen.getByRole('button', { name: 'Refresh all tiles' })
+    expect(refresh.textContent).toBe('')
+    const chat = screen.getByRole('button', { name: 'Chat' })
+    expect(chat.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(chat)
+    expect(chat.getAttribute('aria-pressed')).toBe('true')
+    expect(chat.className).toContain('aria-pressed:bg-')
+  })
+
+  it('a tile’s focus and row picks show only while the panel is open', async () => {
+    // Mutation: drop the panelClosed check on the ring and the first assertion fails.
+    show()
+    await screen.findByText('Acme')
+    fireEvent.pointerDown(tileEl('Deals pipeline'))
+    await waitFor(() => expect(tileEl('Deals pipeline').dataset.focused).toBe('true'))
+    expect(tileEl('Deals pipeline').className).not.toContain('ring-1')
+    fireEvent.click(screen.getByRole('button', { name: 'Chat' }))
+    expect(tileEl('Deals pipeline').className).toContain('ring-1')
   })
 
   it('a page’s cinna.ask focuses its tile, opens the panel and fills that chat’s composer, never sending', async () => {

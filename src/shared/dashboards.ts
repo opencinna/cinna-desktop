@@ -33,6 +33,53 @@ export function isTileSize(value: unknown): value is TileSize {
   return typeof value === 'string' && (TILE_SIZES as readonly string[]).includes(value)
 }
 
+/**
+ * What a tile on a dashboard can be sized as: a preset, or `custom`, the user's
+ * own cells from dragging its corner. Only a tile has `custom`: a component's
+ * `component.json` and the Add dialog name presets (`TileSize`), the kit's enum.
+ */
+export type TilePlacementSize = TileSize | 'custom'
+export const TILE_CUSTOM_LABEL = 'Custom'
+
+/** A tile's cells on the grid. */
+export interface TileSpan {
+  cols: number
+  rows: number
+}
+
+export const TILE_SPAN_LIMITS = { minCols: 2, maxCols: 12, minRows: 1, maxRows: 12 } as const
+
+export function isTileSpan(value: unknown): value is TileSpan {
+  if (!value || typeof value !== 'object') return false
+  const { cols, rows } = value as Partial<TileSpan>
+  return (
+    Number.isInteger(cols) && Number.isInteger(rows) &&
+    cols! >= TILE_SPAN_LIMITS.minCols && cols! <= TILE_SPAN_LIMITS.maxCols &&
+    rows! >= TILE_SPAN_LIMITS.minRows && rows! <= TILE_SPAN_LIMITS.maxRows
+  )
+}
+
+/** The cells a tile asks for; a narrower grid draws fewer columns. */
+export function tileSpan(tile: { size: TilePlacementSize; customSpan?: TileSpan | null }): TileSpan {
+  if (tile.size !== 'custom') return TILE_SIZE_SPANS[tile.size]
+  return tile.customSpan ?? TILE_SIZE_SPANS.m
+}
+
+/** The preset closest to a span: what a tile's page is told it is, since the bridge's `size` names presets. Rows weigh more; a tie goes to the larger. */
+export function nearestPresetSize(span: TileSpan): TileSize {
+  let best: TileSize = 'm'
+  let bestCost = Infinity
+  for (const size of TILE_SIZES) {
+    const preset = TILE_SIZE_SPANS[size]
+    const cost = Math.abs(preset.cols - span.cols) + 3 * Math.abs(preset.rows - span.rows)
+    if (cost < bestCost || (cost === bestCost && preset.cols * preset.rows > TILE_SIZE_SPANS[best].cols * TILE_SIZE_SPANS[best].rows)) {
+      best = size
+      bestCost = cost
+    }
+  }
+  return best
+}
+
 export const MAX_DASHBOARDS_PER_PROFILE = 20
 export const MAX_TILES_PER_DASHBOARD = 24
 export const MAX_DASHBOARD_NAME_LENGTH = 80
@@ -109,6 +156,52 @@ export interface ComponentRefreshRule {
 export interface ComponentPrompt {
   label: string
   prompt: string
+}
+
+/**
+ * The user's per-tile change to the component's suggested questions (Edit
+ * tile). A question the agent wrote is named by its `label` there: one the user
+ * did not touch follows the component, and one the agent removes goes.
+ */
+export interface TilePromptOverride {
+  /** The agent's questions turned off, by the agent's label. */
+  hidden?: string[]
+  /** The agent's questions reworded, by the agent's label. */
+  edited?: Record<string, ComponentPrompt>
+  /** The user's own questions, after the agent's. */
+  added?: Array<ComponentPrompt & { hidden?: boolean }>
+}
+
+/** The most questions of their own a tile holds. */
+export const MAX_TILE_OWN_PROMPTS = 10
+
+/** One row of Edit tile's question list. */
+export interface TilePromptRow extends ComponentPrompt {
+  /** The agent's label, or null for the user's own question. */
+  agentLabel: string | null
+  /** Index in `added`, for the user's own. */
+  addedIndex: number | null
+  enabled: boolean
+  edited: boolean
+}
+
+/** Every question of a tile, off ones included: the component's with the override applied, then the user's own. */
+export function tilePromptRows(prompts: ComponentPrompt[], override: TilePromptOverride | null | undefined): TilePromptRow[] {
+  const hidden = new Set(override?.hidden ?? [])
+  const edited = override?.edited ?? {}
+  const own = Object.prototype.hasOwnProperty
+  return [
+    ...prompts.map((prompt) => {
+      const change = own.call(edited, prompt.label) ? edited[prompt.label] : null
+      return { ...(change ?? prompt), agentLabel: prompt.label, addedIndex: null, enabled: !hidden.has(prompt.label), edited: !!change }
+    }),
+    ...(override?.added ?? []).map((prompt, index) => ({ label: prompt.label, prompt: prompt.prompt, agentLabel: null, addedIndex: index, enabled: !prompt.hidden, edited: false }))
+  ]
+}
+
+/** The questions a tile offers: on its bar, in its menu and as the panel's starters. */
+export function enabledTilePrompts(prompts: ComponentPrompt[], override: TilePromptOverride | null | undefined): ComponentPrompt[] {
+  return tilePromptRows(prompts, override).filter((row) => row.enabled).map(({ label, prompt }) => ({ label, prompt }))
 }
 
 /**
@@ -220,10 +313,14 @@ export interface TileDto {
   skill: string | null
   /** The user's title, or null for the component's own. */
   title: string | null
-  size: TileSize
+  size: TilePlacementSize
+  /** The cells of a `custom` size; kept while a preset is chosen, so Custom comes back as it was. Absent or null: never resized. */
+  customSpan?: TileSpan | null
   position: number
   params: Record<string, unknown>
   refreshOverride: TileRefreshOverride | null
+  /** The user's change to the component's suggested questions; absent or null: the component's as they are. Kept on this computer. */
+  promptOverride?: TilePromptOverride | null
 }
 
 /**
@@ -414,8 +511,11 @@ export interface AddTileInput {
 export interface UpdateTileInput {
   tileId: string
   title?: string | null
-  size?: TileSize
+  size?: TilePlacementSize
+  /** The cells for `custom`; without it, the tile's last custom cells. */
+  customSpan?: TileSpan
   refreshOverride?: TileRefreshOverride | null
+  promptOverride?: TilePromptOverride | null
 }
 
 /** Main pushes this when a tile's data or refresh state changed. */

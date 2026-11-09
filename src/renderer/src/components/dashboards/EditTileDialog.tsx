@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react'
-import type { ComponentRefreshRule, TileRefreshOverride, TileView } from '../../../../shared/dashboards'
+import { useEffect, useRef, useState } from 'react'
+import type { ComponentRefreshRule, TilePromptOverride, TileRefreshOverride, TileView } from '../../../../shared/dashboards'
 import { useUpdateTile } from '../../hooks/useDashboards'
 import { DashboardDialog, DIALOG_INPUT, DIALOG_LABEL, DIALOG_PRIMARY } from './DashboardDialog'
+import { TilePromptsEditor, withoutBlankQuestions } from './TilePromptsEditor'
 
 /** Max ages offered when the user changes a tile's refresh rule. */
 export const MAX_AGE_CHOICES = ['1m', '5m', '15m', '1h', '6h', '1d'] as const
@@ -165,16 +166,22 @@ function ruleOf(view: TileView): ComponentRefreshRule {
   )
 }
 
-/** Edit tile: its title and its refresh rule. Closes on success only (ux rule 6). */
+/** Edit tile: its title, its refresh rule and its suggested questions. Closes on success only (ux rule 6). */
 export function EditTileDialog({ view, onClose }: { view: TileView; onClose: () => void }): React.JSX.Element {
   const update = useUpdateTile()
   const inputRef = useRef<HTMLInputElement>(null)
   const componentTitle = view.component?.title ?? view.tile.component
   const [title, setTitle] = useState(view.tile.title ?? '')
   const [override, setOverride] = useState<TileRefreshOverride | null>(view.tile.refreshOverride)
+  const [prompts, setPrompts] = useState<TilePromptOverride | null>(view.tile.promptOverride ?? null)
+  // The dialog scrolls at its tallest, and the refusal is under the footer.
+  const errorRef = useRef<HTMLParagraphElement>(null)
+  useEffect(() => {
+    if (update.error) errorRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [update.error])
   const save = (): void => {
     update.mutate(
-      { tileId: view.tile.id, title: title.trim() === '' || title.trim() === componentTitle ? null : title.trim(), refreshOverride: override },
+      { tileId: view.tile.id, title: title.trim() === '' || title.trim() === componentTitle ? null : title.trim(), refreshOverride: override, promptOverride: withoutBlankQuestions(prompts) },
       { onSuccess: onClose }
     )
   }
@@ -187,11 +194,12 @@ export function EditTileDialog({ view, onClose }: { view: TileView; onClose: () 
           <input id="edit-tile-title" ref={inputRef} className={`${DIALOG_INPUT} mt-1`} value={title} placeholder={componentTitle} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
         </div>
         <RefreshOverrideFields rule={ruleOf(view)} value={override} onChange={setOverride} cloud={!!view.tile.cloud} />
+        {view.component && <TilePromptsEditor prompts={view.component.prompts} value={prompts} onChange={setPrompts} />}
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]" disabled={update.isPending} onClick={onClose}>Cancel</button>
           <button type="submit" className={DIALOG_PRIMARY} disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save'}</button>
         </div>
-        {update.error && <p role="alert" className="text-xs text-[var(--color-danger)]">{update.error.message}</p>}
+        {update.error && <p ref={errorRef} role="alert" className="text-xs text-[var(--color-danger)]">{update.error.message}</p>}
       </form>
     </DashboardDialog>
   )

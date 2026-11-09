@@ -25,11 +25,13 @@ Implementation reference for [Dashboard Chat](dashboard_chat.md).
 
 ### Renderer
 
-- `src/renderer/src/components/dashboards/DashboardChatPanel.tsx` — the panel, `panelLayout`, `ContextChipRow`, the resize handle.
-- `src/renderer/src/components/dashboards/DashboardView.tsx` — `useDashboardChat`: focus, selection, web contexts, chip, pending prompt.
+- `src/renderer/src/components/dashboards/DashboardChatPanel.tsx` — the panel, `panelLayout`, `usePanelPresence` (`mounted`/`collapsed`/`sliding` for the slide, `PANEL_SLIDE_MS` 260), `ContextChipRow`, the resize handle.
+- `src/renderer/src/components/dashboards/DashboardView.tsx` — `useDashboardChat`: focus, selection, web contexts, chip, pending prompt; it takes `panelOpen` and hands `TileChat.panelClosed` to each tile.
 - `src/renderer/src/components/dashboards/dashboardContext.ts` — `buildDashboardContext`, `summarizeTile`, `contextChipParts`, `contextIdentity`, `coalescePerKey`.
 - `src/renderer/src/components/chat/composerSendContext.ts` — `ComposerSendExtrasContext`; `hooks/useChatComposer.ts` reads it at send time; `hooks/useChatStream.ts` `startRun` forwards `dashboardContext` to `run:start`.
-- `src/renderer/src/components/layout/ChatWorkspace.tsx` — props `chatId`, `composerTop`, `onNewChatLike`.
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` — props `chatId`, `composerTop`, `onNewChatLike`; the composer's blur rounds its bottom corners by `--composer-dock-corner` (0 by default; the panel sets 13px inside its card).
+- `src/renderer/src/components/layout/TopBar.tsx` — its drag strip ends `--dashboard-panel-inset` short of the right edge; `DashboardChatPanel` sets the variable on `<html>` to the card's width while it is not collapsed and removes it on unmount.
+- `src/renderer/src/assets/main.css` — `.dashboard-panel-wrap` (`is-sliding`, `is-collapsed`, `is-overlay`), reusing the sidebar's `.app-sidebar` card; the transition is on only while sliding so a drag on the edge follows the pointer.
 - `src/renderer/src/components/chat/DashboardOriginPill.tsx` — the pill (`TopBar.tsx`) and `DashboardOriginRowMark` (`ChatItem.tsx`); `openDashboard(id)`.
 - `src/renderer/src/components/layout/SidebarTabs.tsx` — the Chats tab opens `dashboardChatsStash` when set.
 
@@ -81,7 +83,7 @@ For a Cinna-synced A2A agent the turn's `text` is always null and `payload` is `
 
 ## Renderer Components
 
-- **`useDashboardChat`** holds focus per dashboard in a module-level map (`panelFocusByDashboard`), so leaving a dashboard and returning finds the panel on the same chat; the focus state is replaced in the same render that brings a new dashboard so the panel never pairs a new dashboard with the old agent. It builds the context only while the focused tile's agent is the panel's agent. The chip's removal is remembered by `contextIdentity(tileId, selection)`, so a new focus or selection brings the context back.
+- **`useDashboardChat`** holds focus per dashboard in a module-level map (`panelFocusByDashboard`), so leaving a dashboard and returning finds the panel on the same chat; the focus state is replaced in the same render that brings a new dashboard so the panel never pairs a new dashboard with the old agent. It builds the context only while the focused tile's agent is the panel's agent. The chip's removal is remembered by `contextIdentity(tileId, selection)`; an effect forgets it when the identity changes, and `onAsk` and `sendPrompt` clear it explicitly while `fillComposer` (the page's `cinna.ask`) does not. The starters are `enabledTilePrompts(component.prompts, tile.promptOverride)`.
 - **`DashboardChatPanel`** resolves the chat for the key `dashboardId\0agentId` once and remembers it per key; **New chat** (`fresh: true`) answers into its own key even if focus moved meanwhile (`keyRef`). While it shows a chat it **sets the chat store's `activeChatId`** (the live run watch and the streamed projection follow that one id), records the Chats view's own selection as `dashboardChatsStash` (so the Chats tab opens it, not the panel's chat), and on unmount restores it unless the chat view is on screen, `Open in Chats` handed the chat off, or something else chose a chat in the meantime (only a chat the panel itself opened is replaced).
 - **`ChatWorkspace`** with `chatId` shows that chat instead of the store's selection and skips the one-shot "land on the new-chat screen" requests, which belong to the main view; `composerTop` carries the starters and the chip row; `onNewChatLike` replaces the prompt-cache notice's New chat.
 - **The chip row** has one fixed height (24 px) in every state, so the composer never moves; the title may be cut short, but " · Sep 2026 · 3 selected" is a separate span, always shown.
@@ -101,4 +103,4 @@ None. The panel width (default 400, minimum 300, at most 60% of the window) and 
 
 ## Tests
 
-`dashboardContext.test.ts` (main and renderer; `dashboardContextPayload` key order), `a2aDriver.test.ts`, `a2aStreamingService.test.ts`, `run.routing.test.ts` (metadata, no text block), `componentBridge.test.ts` (collect-context), `Tile.d5.test.tsx`, `panelChat.test.ts`, `runQueueService.test.ts`, `threadContextService.test.ts`, `conductorTranscript.test.ts`, `chatTitleService.test.ts`, `DashboardView.chat.test.tsx`, `DashboardChatPanel.layout.test.ts`, `DashboardOriginPill.test.tsx`; E2E `dashboard-panel.spec.ts`, the panel test of `dashboard-cloud.spec.ts`, the billed D3 test in `live-dashboards.spec.ts` and L3 of `live-dashboard-cloud.spec.ts`.
+`dashboardContext.test.ts` (main and renderer; `dashboardContextPayload` key order), `a2aDriver.test.ts`, `a2aStreamingService.test.ts`, `run.routing.test.ts` (metadata, no text block), `componentBridge.test.ts` (collect-context), `Tile.d5.test.tsx`, `panelChat.test.ts`, `runQueueService.test.ts`, `threadContextService.test.ts`, `conductorTranscript.test.ts`, `chatTitleService.test.ts`, `DashboardView.chat.test.tsx`, `DashboardChatPanel.layout.test.ts` (overlay at the minimum), `dashboard-layout-tuning.spec.ts` (E2E: resize, header controls, the card and its slide, ring, chip, narrow window, Edit tile questions), `DashboardOriginPill.test.tsx`; E2E `dashboard-panel.spec.ts`, the panel test of `dashboard-cloud.spec.ts`, the billed D3 test in `live-dashboards.spec.ts` and L3 of `live-dashboard-cloud.spec.ts`.

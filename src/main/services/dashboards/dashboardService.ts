@@ -23,6 +23,7 @@ import { COMPONENT_NAME_PATTERN, MIN_WHILE_OPEN_EVERY_MS } from '../../kit/dashb
 import { localScheduleRepo } from '../../db/localSchedules'
 import { readAgentManifest, readComponent, scanComponents, type ComponentAgent, type ComponentSkillFolder, type ScannedComponent } from './componentScanner'
 import { normalizeTileParams } from './tileParams'
+import { MAX_PROMPTS, MAX_PROMPT_LABEL, MAX_PROMPT_TEXT } from '../../kit/dashboardsProtocol'
 import { formatComponentReference, parseComponentReference } from '../../../shared/componentReference'
 import { coreDashboardsClient } from './remote/coreDashboardsClient'
 import { backingDashboards as defaultBacking, transportMessage, refreshToCore, type BackingDashboards } from './remote/backingDashboards'
@@ -36,11 +37,14 @@ import {
   TILE_SIZE_SPANS,
   MAX_DASHBOARD_NAME_LENGTH,
   MAX_TILES_PER_DASHBOARD,
+  MAX_TILE_OWN_PROMPTS,
   MAX_TILE_TITLE_LENGTH,
   isTileSize,
+  isTileSpan,
   parseDuration,
   type AddTileInput,
   type ComponentInfo,
+  type ComponentPrompt,
   type ComponentPlacement,
   type ComponentReferenceAgent,
   type ComponentReferenceMiss,
@@ -49,6 +53,8 @@ import {
   type DashboardsErrorCode,
   type DashboardsOutcome,
   type TileDto,
+  type TilePlacementSize,
+  type TilePromptOverride,
   type TileRefreshOverride,
   type TileScheduleState,
   type TileView,
@@ -293,8 +299,56 @@ export function toDashboardDto(row: DashboardRow & { tileCount?: number }): Dash
   }
 }
 
+/**
+ * A tile's change to its component's suggested questions, as Edit tile sends
+ * it: text trimmed and within the component's own caps, an empty change null.
+ */
+export function normalizePromptOverride(value: unknown): TilePromptOverride | null | 'invalid' {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object' || Array.isArray(value)) return 'invalid'
+  const raw = value as Record<string, unknown>
+  const question = (entry: unknown): ComponentPrompt | null => {
+    if (!entry || typeof entry !== 'object') return null
+    const { label, prompt } = entry as Record<string, unknown>
+    if (typeof label !== 'string' || typeof prompt !== 'string') return null
+    const [cleanLabel, cleanPrompt] = [label.trim(), prompt.trim()]
+    if (!cleanLabel || !cleanPrompt || cleanLabel.length > MAX_PROMPT_LABEL || cleanPrompt.length > MAX_PROMPT_TEXT) return null
+    return { label: cleanLabel, prompt: cleanPrompt }
+  }
+  const out: TilePromptOverride = {}
+  if (raw.hidden !== undefined) {
+    if (!Array.isArray(raw.hidden) || raw.hidden.length > MAX_PROMPTS || raw.hidden.some((label) => typeof label !== 'string')) return 'invalid'
+    if (raw.hidden.length > 0) out.hidden = raw.hidden as string[]
+  }
+  if (raw.edited !== undefined) {
+    if (!raw.edited || typeof raw.edited !== 'object' || Array.isArray(raw.edited)) return 'invalid'
+    const entries = Object.entries(raw.edited)
+    if (entries.length > MAX_PROMPTS) return 'invalid'
+    const edited: Record<string, ComponentPrompt> = {}
+    for (const [label, entry] of entries) {
+      const clean = question(entry)
+      if (!clean) return 'invalid'
+      edited[label] = clean
+    }
+    if (entries.length > 0) out.edited = edited
+  }
+  if (raw.added !== undefined) {
+    if (!Array.isArray(raw.added) || raw.added.length > MAX_TILE_OWN_PROMPTS) return 'invalid'
+    const added: NonNullable<TilePromptOverride['added']> = []
+    for (const entry of raw.added) {
+      const clean = question(entry)
+      if (!clean) return 'invalid'
+      added.push((entry as { hidden?: unknown }).hidden === true ? { ...clean, hidden: true } : clean)
+    }
+    if (added.length > 0) out.added = added
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
 export function toTileDto(row: DashboardTileRow, cloud?: CloudOrigin): TileDto {
   const override = normalizeRefreshOverride(parseJsonObject(row.refreshOverrideJson))
+  const prompts = normalizePromptOverride(parseJsonObject(row.promptOverrideJson))
+  const customSpan = { cols: row.customCols, rows: row.customRows }
   return {
     id: row.id,
     dashboardId: row.dashboardId,
@@ -303,10 +357,13 @@ export function toTileDto(row: DashboardTileRow, cloud?: CloudOrigin): TileDto {
     component: row.component,
     skill: row.skill ?? null,
     title: row.title,
-    size: isTileSize(row.size) ? row.size : 'm',
+    // `custom` only with its cells; a row without them reads as Medium, like any unknown size.
+    size: isTileSize(row.size) || (row.size === 'custom' && isTileSpan(customSpan)) ? (row.size as TilePlacementSize) : 'm',
+    customSpan: isTileSpan(customSpan) ? customSpan : null,
     position: row.position,
     params: parseJsonObject(row.paramsJson) ?? {},
-    refreshOverride: override === 'invalid' ? null : override
+    refreshOverride: override === 'invalid' ? null : override,
+    promptOverride: prompts === 'invalid' ? null : prompts
   }
 }
 
@@ -643,9 +700,25 @@ export function createDashboardService(deps: DashboardServiceDeps = { agents: de
           patch.title = title
         }
       }
+      if (value.customSpan !== undefined) {
+        if (!isTileSpan(value.customSpan)) return refuse('invalid_input', 'That is not a tile size.')
+        patch.customCols = value.customSpan.cols
+        patch.customRows = value.customSpan.rows
+      }
       if (value.size !== undefined) {
-        if (!isTileSize(value.size)) return refuse('invalid_input', 'That is not a tile size.')
+        if (value.size === 'custom') {
+          // Custom needs cells: these, or the ones the tile last had.
+          if (value.customSpan === undefined) {
+            const current = dashboardRepo.tile(userId, value.tileId)
+            if (current && !isTileSpan({ cols: current.customCols, rows: current.customRows })) return refuse('invalid_input', 'That is not a tile size.')
+          }
+        } else if (!isTileSize(value.size)) return refuse('invalid_input', 'That is not a tile size.')
         patch.size = value.size
+      }
+      if (value.promptOverride !== undefined) {
+        const prompts = normalizePromptOverride(value.promptOverride)
+        if (prompts === 'invalid') return refuse('invalid_input', `A suggested question needs a label of up to ${MAX_PROMPT_LABEL} characters and text of up to ${MAX_PROMPT_TEXT}.`)
+        patch.promptOverrideJson = prompts ? JSON.stringify(prompts) : null
       }
       if (value.refreshOverride !== undefined) {
         const override = normalizeRefreshOverride(value.refreshOverride)

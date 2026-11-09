@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, GripVertical, Info, Loader2, MoreHorizontal, RefreshCw } from 'lucide-react'
-import { TILE_SIZES, TILE_SIZE_LABELS, type CloudTileStatus, type CollectedPageContext, type ComponentPrompt, type TileScheduleState, type TileSize, type TileView } from '../../../../shared/dashboards'
+import { TILE_CUSTOM_LABEL, TILE_SIZES, TILE_SIZE_LABELS, enabledTilePrompts, nearestPresetSize, tileSpan, type CloudTileStatus, type CollectedPageContext, type ComponentPrompt, type TileScheduleState, type TileSize, type TileView } from '../../../../shared/dashboards'
 import { tileParamsShown } from './dashboardContext'
 import { useRemoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
 import { ContextMenu, CONTEXT_MENU_ITEM } from '../ui/ContextMenu'
@@ -16,6 +16,12 @@ import { drawnHighlights, revealFirstHighlight, revealHighlight, useTileHighligh
 /** What a tile on a dashboard with the chat panel gets (README D3); a tile without it has no Ask. */
 export interface TileChat {
   focused: boolean
+  /**
+   * The chat panel is closed: focus and row picks go nowhere, so neither is
+   * drawn and rows cannot be picked. Clicks still choose the tile the panel
+   * opens on. Absent: open.
+   */
+  panelClosed?: boolean
   /** The rows or items picked here (native views). */
   selected: string[]
   /** Click anywhere on the tile. */
@@ -163,6 +169,8 @@ export function Tile({
   editMode,
   dragging,
   onHandlePointerDown,
+  onResizePointerDown,
+  onResizeBy,
   onVisibilityChange,
   chat
 }: {
@@ -172,6 +180,10 @@ export function Tile({
   editMode: boolean
   dragging: boolean
   onHandlePointerDown: (event: React.PointerEvent, tileId: string) => void
+  /** The corner handle (a Custom tile on hover, any tile in edit mode); the view snaps it to the grid. */
+  onResizePointerDown?: (event: React.PointerEvent, tileId: string) => void
+  /** The corner handle's arrow keys: one cell. */
+  onResizeBy?: (tileId: string, cols: number, rows: number) => void
   /** The tile came on screen or left it (scrolled); the view keeps the lease and first loads. */
   onVisibilityChange: (tileId: string, visible: boolean) => void
   /** Focus, selection, Ask and suggested questions (the chat panel, D3). */
@@ -366,10 +378,10 @@ export function Tile({
   // its filters, Ask and Refresh stay where they are, disabled (ux rule 1).
   const gone = state === 'agent_missing' || state === 'wrong_server' || cloudMark?.code === 'agent_gone'
   const canAsk = !!chat && !!component && !gone
-  const prompts = canAsk ? component!.prompts : []
+  const prompts = canAsk ? enabledTilePrompts(component!.prompts, tile.promptOverride) : []
   const onBar = prompts.slice(0, promptsOnBar(span.cols))
   const inMenu = prompts.slice(onBar.length)
-  const selection: ViewSelection | undefined = chat
+  const selection: ViewSelection | undefined = chat && !chat.panelClosed
     ? { selected: chat.selected, onPick: (key, additive) => { highlight.clear(); chat.onPick(key, additive) } }
     : undefined
   // A page's setContext: a new non-empty selection is the owner's pick there, which ends the agent's highlight.
@@ -407,7 +419,7 @@ export function Tile({
       loading={result.isPending}
       frameTarget={{ tileId: tile.id }}
       // A cloud tile shows the params core computed with (`current`, `today` in the owner's server time zone).
-      meta={{ component: tile.component, title: displayTitle, params: tileParamsShown(tile, component, data), size: tile.size }}
+      meta={{ component: tile.component, title: displayTitle, params: tileParamsShown(tile, component, data), size: tile.size === 'custom' ? nearestPresetSize(tileSpan(tile)) : tile.size }}
       selection={selection}
       onContext={onPageContext}
       actions={{ onParams: setParams, onAsk: canAsk ? (text) => { chat!.onFill(text); return true } : undefined }}
@@ -443,7 +455,7 @@ export function Tile({
       // The focus ring is a box-shadow: focusing a tile moves nothing (ux rule 1).
       className={`@container group relative min-h-0 min-w-0 overflow-hidden rounded-lg border bg-[var(--color-bg)] outline-none ${
         dragging ? 'border-[var(--color-accent)] opacity-60' : 'border-[var(--color-border)]'
-      } ${chat?.focused ? 'ring-2 ring-[var(--color-accent)]' : ''}`}
+      } ${chat?.focused && !chat.panelClosed ? 'ring-1 ring-[color-mix(in_srgb,var(--color-accent)_55%,transparent)]' : ''}`}
       onContextMenu={(event) => {
         event.preventDefault()
         setMenu({ x: event.clientX, y: event.clientY, anchor: event.currentTarget })
@@ -504,8 +516,8 @@ export function Tile({
         </div>
       )}
 
-      {/* Corner marks: they sit over the content and never move it. */}
-      <div className="pointer-events-none absolute bottom-1.5 right-1.5 flex items-center gap-1">
+      {/* Corner marks: they sit over the content and never move it, and clear of the resize corner, whose tooltip would hide theirs. */}
+      <div className={`pointer-events-none absolute bottom-1.5 flex items-center gap-1 ${onResizePointerDown && (editMode || tile.size === 'custom') ? 'right-6' : 'right-1.5'}`}>
         {hasData && data?.notice && <span className={MARK} title={data.notice} aria-label={data.notice}><Info size={12} className="text-[var(--color-warning)]" /></span>}
         {hasData && data?.tooLarge && <span className={MARK} title="Too large to keep: shown until Cinna restarts." aria-label="Too large to keep"><Info size={12} className="text-[var(--color-text-muted)]" /></span>}
         {mark && <span className={MARK} title={mark} aria-label={`Last refresh failed: ${mark}`}><AlertTriangle size={12} className="text-[var(--color-danger)]" /></span>}
@@ -591,6 +603,27 @@ export function Tile({
         </div>
       </div>
 
+      {onResizePointerDown && (editMode || tile.size === 'custom') && (
+        <button
+          type="button"
+          aria-label={`Resize ${displayTitle}`}
+          title="Drag to resize"
+          data-testid="tile-resize-handle"
+          onPointerDown={(event) => onResizePointerDown(event, tile.id)}
+          onKeyDown={(event) => {
+            const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key]
+            if (!step) return
+            event.preventDefault()
+            onResizeBy?.(tile.id, step[0], step[1])
+          }}
+          className={`absolute bottom-0 right-0 z-10 flex h-5 w-5 cursor-nwse-resize touch-none items-end justify-end rounded-br-lg p-1 text-[var(--color-text-muted)] transition-opacity hover:text-[var(--color-accent)] ${
+            editMode ? '' : 'opacity-30 group-hover:opacity-100 focus-visible:opacity-100'
+          }`}
+        >
+          <span aria-hidden="true" className="block h-2 w-2 rounded-br-[3px] border-b-2 border-r-2 border-current" />
+        </button>
+      )}
+
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} anchor={menu.anchor} label={`Actions for ${displayTitle}`} error={updateTile.error?.message ?? null} onClose={() => setMenu(null)}>
           <div className="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Size</div>
@@ -607,6 +640,17 @@ export function Tile({
               {TILE_SIZE_LABELS[size]}
             </button>
           ))}
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={tile.size === 'custom'}
+            className={CONTEXT_MENU_ITEM}
+            // From the cells it has now; its corner then resizes it.
+            onClick={() => updateTile.mutate({ tileId: tile.id, size: 'custom', customSpan: tile.customSpan ?? tileSpan(tile) }, { onSuccess: () => setMenu(null) })}
+          >
+            <span className="w-3">{tile.size === 'custom' ? '✓' : ''}</span>
+            {TILE_CUSTOM_LABEL}
+          </button>
           {inMenu.length > 0 && (
             <>
               <div className="my-1 border-t border-[var(--color-border)]" />

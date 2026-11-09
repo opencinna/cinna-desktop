@@ -1456,9 +1456,14 @@ export const dashboardTiles = sqliteTable('dashboard_tiles', {
   skill: text('skill'),
   title: text('title'),
   size: text('size').notNull(),
+  /** The cells of a `custom` size, kept while a preset is chosen. */
+  customCols: integer('custom_cols'),
+  customRows: integer('custom_rows'),
   position: integer('position').notNull().default(0),
   paramsJson: text('params_json').notNull().default('{}'),
   refreshOverrideJson: text('refresh_override_json'),
+  /** The user's change to the component's suggested questions (`TilePromptOverride` JSON), or null. */
+  promptOverrideJson: text('prompt_override_json'),
   /** `local` (a folder agent; `agentManifestId`) or `remote` (a cloud agent, D6; `agentManifestId` is `''`). */
   source: text('source').notNull().default('local'),
   /** A cloud tile's core agent id. */

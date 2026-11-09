@@ -716,7 +716,10 @@ export function ChatWorkspace({
             WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 24px)',
             maskImage: 'linear-gradient(to bottom, transparent, black 24px)',
             backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)'
+            WebkitBackdropFilter: 'blur(12px)',
+            // A card around the chat (the dashboard's panel) rounds it to its own corners.
+            borderBottomLeftRadius: 'var(--composer-dock-corner, 0px)',
+            borderBottomRightRadius: 'var(--composer-dock-corner, 0px)'
           }}
         />
         <div
