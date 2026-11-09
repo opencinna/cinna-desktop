@@ -29,6 +29,7 @@ import { chatRunResultRepo } from '../db/chatRunResults'
 import { turnNotices } from './turnNotices'
 import type { ChatRunResult } from '../../shared/chatRunResult'
 import type { ChatListSummary } from '../../shared/chatListSummary'
+import { CHAT_SEARCH_CHAT_LIMIT, CHAT_SEARCH_MAX_QUERY, CHAT_SEARCH_PER_CHAT, type ChatSearchResult } from '../../shared/chatSearch'
 import { buildChatListSummaries } from './chatListSummary'
 import { appSettingsRepo } from '../db/appSettings'
 import { localAgentService } from './localAgents/localAgentService'
@@ -182,6 +183,27 @@ export const chatService = {
   listSummaries(userId: string): Record<string, ChatListSummary> {
     const owners = listOwners(userId)
     return Object.fromEntries(buildChatListSummaries(getSettingsScopeUserId(), userId, chatRepo.list(owners), owners))
+  },
+
+  /**
+   * All-chats search: exactly the chats `list` returns for the profile, in
+   * their user and assistant messages. A blank query finds nothing.
+   */
+  search(userId: string, query: unknown): ChatSearchResult {
+    if (typeof query !== 'string') throw new ChatError('invalid_value', 'Search needs some text.')
+    const text = query.trim().slice(0, CHAT_SEARCH_MAX_QUERY)
+    if (!text) return { groups: [], truncated: false }
+    const rows = chatRepo.searchMessages(listOwners(userId), text, {
+      perChat: CHAT_SEARCH_PER_CHAT,
+      chatLimit: CHAT_SEARCH_CHAT_LIMIT
+    })
+    return {
+      groups: rows.slice(0, CHAT_SEARCH_CHAT_LIMIT).map((row) => ({
+        ...row,
+        messages: row.messages.map((message) => ({ ...message, role: message.role === 'user' ? 'user' : 'assistant' }))
+      })),
+      truncated: rows.length > CHAT_SEARCH_CHAT_LIMIT
+    }
   },
 
   markResultRead(userId: string, chatId: string, runId: string): void {

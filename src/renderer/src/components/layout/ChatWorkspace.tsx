@@ -697,6 +697,7 @@ export function ChatWorkspace({
     >
       <MessageStream
         chatId={activeChatId}
+        searchable={!embedded && !hosted}
         bottomPadding={minimal.bottomPadding}
         // Minimal view: Jump to latest sits at the bottom edge, where the composer
         // was, or above the cloud while it shows (the wrapper's measured height).

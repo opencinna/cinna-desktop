@@ -5,6 +5,7 @@ import { agents, chatFiles, chats, chatOnDemandAgents, messages } from './schema
 import type { MessageRow } from './messages'
 import type { ChatRouter } from '../../shared/chatRouting'
 import type { ChatOrigin } from '../../shared/chatOrigin'
+import { likeContains } from '../../shared/chatSearch'
 
 export type ChatRow = typeof chats.$inferSelect
 export type { MessageRow }
@@ -159,6 +160,56 @@ export const chatRepo = {
       .orderBy(desc(chats.updatedAt), desc(chats.createdAt))
       .limit(1)
       .get()
+  },
+
+  /**
+   * All-chats search over the listed chats of `owners`: the user's and the
+   * assistant's messages whose `content` contains `query`, as SQLite's `LIKE`
+   * compares (case-insensitive for ASCII letters). Chats come newest match
+   * first, at most `chatLimit + 1` (the extra one says there were more), each
+   * with its match count and its `perChat` newest matches.
+   *
+   * No index serves a `%…%` pattern: every user/assistant row of the listed
+   * chats is read. On demand only, never from a polled path.
+   */
+  searchMessages(
+    owners: ChatOwners,
+    query: string,
+    { perChat, chatLimit }: { perChat: number; chatLimit: number }
+  ): { chatId: string; title: string; total: number; latestAt: Date; messages: { id: string; role: string; content: string; createdAt: Date }[] }[] {
+    const db = getDb()
+    const pattern = likeContains(query)
+    const matches = and(
+      inArray(messages.role, ['user', 'assistant']),
+      sql`${messages.content} LIKE ${pattern} ESCAPE '\\'`
+    )
+    const groups = db
+      .select({
+        chatId: messages.chatId,
+        title: chats.title,
+        total: sql<number>`count(*)`.mapWith(Number),
+        latestAt: max(messages.createdAt)
+      })
+      .from(messages)
+      .innerJoin(chats, eq(chats.id, messages.chatId))
+      .where(and(listedChats(owners), matches))
+      .groupBy(messages.chatId)
+      .orderBy(desc(max(messages.createdAt)), desc(chats.updatedAt), asc(messages.chatId))
+      .limit(chatLimit + 1)
+      .all()
+    return groups.map((group) => ({
+      chatId: group.chatId,
+      title: group.title,
+      total: group.total,
+      latestAt: group.latestAt ?? new Date(0),
+      messages: db
+        .select({ id: messages.id, role: messages.role, content: messages.content, createdAt: messages.createdAt })
+        .from(messages)
+        .where(and(eq(messages.chatId, group.chatId), matches))
+        .orderBy(desc(messages.createdAt), desc(messages.sortOrder))
+        .limit(perChat)
+        .all()
+    }))
   },
 
   listTrash(owners: ChatOwners): ChatRow[] {

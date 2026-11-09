@@ -26,7 +26,7 @@ import { useFrontmatter } from '../ui/FrontmatterTable'
  * Plugins, components and `urlTransform` are the chat's one shared
  * configuration (`chatMarkdown`), component references included.
  */
-const MarkdownContent = memo(function MarkdownContent({
+export const MarkdownContent = memo(function MarkdownContent({
   content,
   highlight,
   breaks = false,
@@ -265,6 +265,8 @@ export function MessageBubble({
       <div className="flex flex-col items-end gap-1">
         {showsPill && <div className="relative group max-w-[80%]">
           <div
+            // The persisted message, for chat search to find and scroll to.
+            data-message-id={messageId ?? undefined}
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] [--table-under:var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
             <FileRefContext.Provider value={fileRefs}>

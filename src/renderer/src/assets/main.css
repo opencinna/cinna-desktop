@@ -1973,6 +1973,200 @@
   .managed-list-message {
     padding: 10px var(--ml-pad-x);
   }
+
+  /* ---- Chat search: one chat's bar over its transcript, or all chats over the main area ---- */
+  .chat-search-glass {
+    background: color-mix(in srgb, var(--color-bg-secondary) 64%, transparent);
+    -webkit-backdrop-filter: blur(36px) saturate(180%);
+    backdrop-filter: blur(36px) saturate(180%);
+    border: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
+  }
+  [data-theme="light"] .chat-search-glass {
+    background: color-mix(in srgb, var(--color-bg) 58%, transparent);
+  }
+  .chat-search-root { position: absolute; inset: 0; z-index: 30; pointer-events: none; }
+  .chat-search-root[data-fixed] { position: fixed; }
+  .chat-search-scrim {
+    position: absolute; inset: 0; pointer-events: auto;
+    background: color-mix(in srgb, var(--color-bg) 35%, transparent);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: chat-search-fade-in 160ms ease;
+  }
+  @keyframes chat-search-fade-in { from { opacity: 0; } }
+  .chat-search-column {
+    position: absolute; left: 0; right: 0; margin: 0 auto;
+    width: min(768px, calc(100% - 32px));
+    display: flex; flex-direction: column; justify-content: flex-end; gap: 10px;
+    pointer-events: none;
+  }
+  .chat-search-bar {
+    pointer-events: auto;
+    display: flex; align-items: center; gap: 8px;
+    height: 40px; padding: 0 6px 0 12px; flex-shrink: 0;
+    border-radius: 999px;
+    box-shadow: 0 8px 28px -10px rgb(0 0 0 / 0.35);
+    animation: chat-search-bar-in 180ms cubic-bezier(.2, .8, .2, 1);
+  }
+  @keyframes chat-search-bar-in { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+  .chat-search-bar:focus-within { border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border)); }
+  .chat-search-icon { flex-shrink: 0; color: var(--color-text-muted); transition: color 160ms; }
+  .chat-search-root[data-pending] .chat-search-icon { color: var(--color-accent); animation: chat-search-pulse 900ms ease-in-out infinite; }
+  @keyframes chat-search-pulse { 50% { opacity: .45; } }
+  .chat-search-input {
+    flex: 1; min-width: 0; height: 100%;
+    background: transparent; border: 0; outline: 0;
+    font-size: 14px; color: var(--color-text);
+  }
+  .chat-search-input::placeholder { color: var(--color-text-muted); }
+  /* Fixed width: a count going from 9 to 12 never moves the buttons beside it. */
+  .chat-search-count {
+    flex-shrink: 0; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted); white-space: nowrap; overflow: hidden; transition: opacity 120ms;
+  }
+  .chat-search-root[data-pending] .chat-search-count { opacity: .5; }
+  .chat-search-btn {
+    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+    height: 28px; min-width: 28px; padding: 0 6px; border-radius: 999px;
+    color: var(--color-text-secondary); background: transparent; cursor: pointer;
+  }
+  .chat-search-btn:hover { color: var(--color-text); background: var(--color-bg-hover); }
+  .chat-search-sep { width: 1px; height: 18px; background: var(--color-border); flex-shrink: 0; }
+  .chat-search-scope {
+    flex-shrink: 0; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
+    border: 1px solid var(--color-border); color: var(--color-text-secondary); background: transparent; cursor: pointer;
+    white-space: nowrap;
+  }
+  .chat-search-scope:hover:not(:disabled) { color: var(--color-text); border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-border)); }
+  .chat-search-scope:disabled { cursor: default; opacity: .7; }
+
+  /* No scrollbar and no mask: a mask makes the list the backdrop root, and the cards' blur then sees nothing. */
+  .chat-search-listwrap { position: relative; display: flex; flex-direction: column; min-height: 0; pointer-events: none; }
+  .chat-search-list {
+    pointer-events: auto; overflow-y: auto; overscroll-behavior: contain;
+    display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; min-height: 0;
+    scrollbar-width: none;
+    animation: chat-search-swap 160ms ease;
+  }
+  .chat-search-list::-webkit-scrollbar { display: none; }
+  @keyframes chat-search-swap { from { opacity: .35; } }
+  .chat-search-empty { padding: 14px 16px; border-radius: 14px; font-size: 13px; color: var(--color-text-secondary); text-align: center; pointer-events: auto; }
+
+  .chat-search-hit {
+    display: block; width: 100%; text-align: left; cursor: pointer; flex-shrink: 0; color: var(--color-text);
+    border-radius: 14px; padding: 8px 14px 10px;
+    transition: border-color 120ms, box-shadow 120ms;
+  }
+  .chat-search-hit:hover { border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border)); }
+  .chat-search-hit[data-active] {
+    border-color: color-mix(in srgb, var(--color-accent) 70%, var(--color-border));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+  .chat-search-hit-meta {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+    font-size: 12px; color: var(--color-text-muted); white-space: nowrap;
+  }
+  .chat-search-hit-who { font-weight: 600; color: var(--color-text-secondary); }
+  .chat-search-role-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--color-accent); flex-shrink: 0; }
+  .chat-search-hit[data-role="user"] .chat-search-role-dot { background: var(--color-text-muted); }
+  .chat-search-hit-go { margin-left: auto; opacity: 0; transition: opacity 120ms; display: inline-flex; align-items: center; gap: 3px; }
+  .chat-search-hit:hover .chat-search-hit-go, .chat-search-hit[data-active] .chat-search-hit-go { opacity: 1; }
+
+  /* Five lines of the rendered message, scrolled so the first match is the middle one. */
+  .chat-search-snippet {
+    position: relative; max-height: calc(5 * 1.625em); overflow: hidden; pointer-events: none;
+  }
+  .chat-search-snippet[data-cut="top bottom"] {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 1.1em, black calc(100% - 1.1em), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, black 1.1em, black calc(100% - 1.1em), transparent 100%);
+  }
+  .chat-search-snippet[data-cut="top"] {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 1.1em);
+    mask-image: linear-gradient(to bottom, transparent 0, black 1.1em);
+  }
+  .chat-search-snippet[data-cut="bottom"] {
+    -webkit-mask-image: linear-gradient(to top, transparent 0, black 1.1em);
+    mask-image: linear-gradient(to top, transparent 0, black 1.1em);
+  }
+  .chat-search-snippet > :first-child { margin-top: 0 !important; }
+  .chat-search-snippet pre { margin: 4px 0 !important; }
+  .chat-search-snippet button, .chat-search-snippet [role="toolbar"] { display: none !important; }
+  .chat-search-hit[data-role="user"] .chat-search-snippet { color: var(--color-text-secondary); }
+
+  .chat-search-group { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  .chat-search-group-head {
+    display: flex; align-items: center; gap: 8px; padding: 2px 6px;
+    font-size: 13px; color: var(--color-text-secondary);
+  }
+  .chat-search-group-title { font-weight: 600; color: var(--color-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-search-group-n { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+  .chat-search-more {
+    align-self: flex-start; margin-left: 6px; font-size: 12px; color: var(--color-accent);
+    background: none; border: 0; cursor: pointer; padding: 0;
+  }
+  .chat-search-more:hover { text-decoration: underline; }
+  /* An agent with a chosen colour: its chats' results wear it as their border. */
+  .chat-search-group[data-tinted] .chat-search-hit { border-color: color-mix(in srgb, var(--chat-search-agent) 55%, transparent); }
+  .chat-search-group[data-tinted] .chat-search-hit:hover { border-color: var(--chat-search-agent); }
+  .chat-search-group[data-tinted] .chat-search-hit[data-active] {
+    border-color: var(--chat-search-agent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-search-agent) 20%, transparent);
+  }
+  .chat-search-group[data-tinted] .chat-search-role-dot { background: var(--chat-search-agent); }
+
+  /* No scrollbar: a dot per result beside the list, lit while on screen. */
+  .chat-search-rail {
+    position: absolute; top: 0; bottom: 0; right: -22px; width: 14px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: var(--rail-gap, 6px); pointer-events: auto;
+  }
+  .chat-search-dot {
+    width: var(--rail-dot, 6px); height: var(--rail-dot, 6px); border-radius: 999px; flex-shrink: 0; padding: 0;
+    background: color-mix(in srgb, var(--color-text-muted) 45%, transparent);
+    transition: background-color 140ms, transform 140ms; cursor: pointer;
+  }
+  .chat-search-dot:hover { transform: scale(1.5); }
+  .chat-search-dot[data-seen] { background: var(--color-accent); }
+  .chat-search-dot[data-group-end] { margin-bottom: calc(var(--rail-gap, 6px) + 5px); }
+
+  /* Agent chips: only after a search, only the agents it found. The composer's AgentChip, dimmed while unpressed. */
+  .chat-search-agents {
+    pointer-events: auto; flex-shrink: 0;
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; padding: 0 8px;
+  }
+  .chat-search-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 8px 4px 6px; border-radius: 8px; border: 1px solid;
+    font-size: 11px; line-height: 16px; font-weight: 500; white-space: nowrap; cursor: pointer;
+    user-select: none; opacity: .62; transition: opacity 120ms, box-shadow 120ms;
+  }
+  .chat-search-chip:hover { opacity: .9; }
+  .chat-search-chip[aria-pressed="true"] { opacity: 1; box-shadow: 0 0 0 1px var(--chip-border); }
+  .chat-search-chip-n { min-width: 2ch; text-align: right; opacity: .75; font-variant-numeric: tabular-nums; }
+  .chat-search-allchip {
+    display: inline-flex; align-items: center;
+    padding: 4px 8px; border-radius: 8px; font-size: 11px; line-height: 16px; font-weight: 500; cursor: pointer;
+    color: var(--color-text-secondary); border: 1px solid var(--color-border);
+    background: color-mix(in srgb, var(--color-bg-secondary) 64%, transparent);
+  }
+  .chat-search-allchip:hover { color: var(--color-text); }
+  .chat-search-allchip[aria-pressed="true"] { color: var(--color-text); border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+  /* The agent's chip in a chat's heading: smaller, and at full strength unless the filter is on without it. */
+  .chat-search-group-head .chat-search-chip { padding: 2px 7px 2px 5px; opacity: 1; }
+  .chat-search-group-head .chat-search-chip:hover { opacity: .85; }
+
+  /* In the transcript: every match, and the one a result jumped to. */
+  ::highlight(chat-search-all) { background-color: color-mix(in srgb, var(--color-accent) 26%, transparent); }
+  ::highlight(chat-search-snippet) { background-color: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+  ::highlight(chat-search-current) { background-color: color-mix(in srgb, var(--color-warning) 70%, transparent); color: var(--color-text); }
+  .chat-search-flash { animation: chat-search-flash 1.4s ease-out; border-radius: 8px; }
+  @keyframes chat-search-flash {
+    0%, 30% {
+      box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 22%, transparent);
+      background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+    }
+    100% { box-shadow: 0 0 0 6px transparent; background: transparent; }
+  }
 }
 
 /* Brand themes: surfaces whose stock colour is a literal that assumes the

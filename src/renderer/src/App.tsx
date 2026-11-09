@@ -38,6 +38,8 @@ import { useRuntimeSetupWatch } from './hooks/useRuntimeSetup'
 import { useAppShortcuts } from './hooks/useAppShortcuts'
 import { usePathMentions } from './hooks/usePathMentions'
 import { useSkillLinkIntents } from './hooks/useSkillLinkIntents'
+import { useChatSearchShortcut } from './components/chat/search/useChatSearchShortcut'
+import { AllChatsSearch } from './components/chat/search/AllChatsSearch'
 import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
 
 // Any Cinna-backed query/mutation that fails with a reauth-required code
@@ -161,6 +163,9 @@ function Shell(): React.JSX.Element {
   // skill offer on the composer on screen. Here for the same reason: main
   // holds the link through login and onboarding, and this takes it after.
   useSkillLinkIntents()
+  // ⌘F: this chat's search, or all chats when none is on screen. Here with the
+  // other shortcuts, so it does nothing on the login or onboarding screens.
+  useChatSearchShortcut()
   // TopBar overlays the content (absolute, inset by `pt-2`/`px-2`) so the chat
   // area can claim full window height instead of losing the bar's height. The
   // sidebar card offsets its top via CSS so it still sits below the buttons.
@@ -179,6 +184,7 @@ function Shell(): React.JSX.Element {
         <MainArea />
       </div>
       <TopBar />
+      <AllChatsSearch />
       <DesktopToast />
     </div>
   )

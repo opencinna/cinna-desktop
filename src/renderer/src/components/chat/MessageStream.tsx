@@ -56,6 +56,9 @@ import { useStickToBottom } from '../../hooks/useStickToBottom'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import { QueuedMessages, useQueuedMessages } from './QueuedMessages'
 import { holdCollapseAnchor } from './transcriptAnchor'
+import { useChatSearchStore } from '../../stores/chatSearch.store'
+import { ChatSearchInChat } from './search/ChatSearchInChat'
+import { jumpToMessage } from './search/jumpToMessage'
 import {
   type RenderNode,
   groupConsecutiveCollapsibles
@@ -260,11 +263,18 @@ function renderCommandToolPair(opts: {
   )
 }
 
+const NO_SEARCH_MESSAGES: never[] = []
+
 interface MessageStreamProps {
   chatId: string
   bottomPadding?: number
   /** Where the floating pills sit instead of over the composer's fade band (minimal view: the bottom edge). */
   pillBottom?: number
+  /**
+   * The chat view's transcript: ⌘F searches this chat, and a result picked in
+   * all-chats search scrolls here. Not a dashboard panel's.
+   */
+  searchable?: boolean
 }
 
 const PILL_CLASS = `pointer-events-auto inline-flex items-center gap-1.5
@@ -633,7 +643,7 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 const NO_FILE_REF_SCOPES: ReadonlyMap<string, FileRefScope> = new Map()
 const NO_ARTIFACT_CARDS: ArtifactCardDto[] = []
 
-export function MessageStream({ chatId, bottomPadding, pillBottom }: MessageStreamProps): React.JSX.Element {
+export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = false }: MessageStreamProps): React.JSX.Element {
   const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
@@ -696,6 +706,50 @@ export function MessageStream({ chatId, bottomPadding, pillBottom }: MessageStre
     return map
   }, [agents])
   const rootAgentId = chatData?.agentId ?? null
+
+  // Chat search. This transcript says which chat is on screen (another one
+  // closes a chat search), and takes a result picked in all-chats search once
+  // its message is drawn.
+  const searchOpen = useChatSearchStore((s) => searchable && s.scope === 'chat')
+  const searchJump = useChatSearchStore((s) => (searchable && s.jump?.chatId === chatId ? s.jump : null))
+  useEffect(() => {
+    if (!searchable) return
+    useChatSearchStore.getState().setSearchableChatId(chatId)
+    return () => {
+      if (useChatSearchStore.getState().searchableChatId === chatId) useChatSearchStore.getState().setSearchableChatId(null)
+    }
+  }, [searchable, chatId])
+  const searchMessagesLoaded = !!chatData?.messages
+  useEffect(() => {
+    if (!searchJump || !searchMessagesLoaded) return
+    const search = useChatSearchStore.getState()
+    if (searchJump.messageId === null) {
+      search.clearJump(searchJump.nonce)
+      search.setQuery(searchJump.query)
+      search.open('chat')
+      return
+    }
+    const { messageId, query, nonce } = searchJump
+    // After the frame that opened the chat at its bottom has laid out.
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        const container = containerRef.current
+        const content = contentRef.current
+        if (container && content) jumpToMessage(container, content, messageId, query)
+        useChatSearchStore.getState().clearJump(nonce)
+      })
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [searchJump, searchMessagesLoaded, containerRef, contentRef])
+  const searchAuthor = useCallback(
+    (message: { sourceAgentId?: string | null }): string =>
+      agentNameById.get(message.sourceAgentId ?? rootAgentId ?? '') ?? 'Assistant',
+    [agentNameById, rootAgentId]
+  )
   // Component references in this transcript resolve for the chat's agent; Ask to fix fills this chat's composer.
   const componentRefScope = useMemo(() => ({ chatId, agentId: rootAgentId }), [chatId, rootAgentId])
   // Inline file references in folder agents' bubbles, resolved per agent over
@@ -1859,14 +1913,25 @@ export function MessageStream({ chatId, bottomPadding, pillBottom }: MessageStre
       {/* A sibling of the scroll container, never inside it: useStickToBottom
           observes those boxes, and a pill mounting inside them would resize
           → settle → re-render → resize. */}
-      <TranscriptPills
-        store={expansionStore}
-        pinned={pinned}
-        onCollapse={collapseExpanded}
-        onJumpToLatest={scrollToBottom}
-        bottomPadding={bottomPadding}
-        pillBottom={pillBottom}
-      />
+      {/* Chat search takes the pills' place while it is open. */}
+      {searchOpen ? (
+        <ChatSearchInChat
+          messages={chatData?.messages ?? NO_SEARCH_MESSAGES}
+          containerRef={containerRef}
+          contentRef={contentRef}
+          bottom={pillBottom ?? Math.max(12, (bottomPadding ?? 0) - 8)}
+          authorOf={searchAuthor}
+        />
+      ) : (
+        <TranscriptPills
+          store={expansionStore}
+          pinned={pinned}
+          onCollapse={collapseExpanded}
+          onJumpToLatest={scrollToBottom}
+          bottomPadding={bottomPadding}
+          pillBottom={pillBottom}
+        />
+      )}
       {messageContextMenu.menu}
     </CommandScopeContext.Provider>
     </TranscriptExpansionContext.Provider>

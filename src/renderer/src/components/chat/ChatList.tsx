@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { ListFilter, Plus, Zap } from 'lucide-react'
+import { ListFilter, Plus, Search, Zap } from 'lucide-react'
 import { useChatList, useChatSummaries, useMoveChat } from '../../hooks/useChat'
 import { useAgents } from '../../hooks/useAgents'
 import { useChatModes } from '../../hooks/useChatModes'
@@ -20,6 +20,8 @@ import {
   pinnedRank, PINNED_GROUP, settleActiveIds, type DateBucket, type DateGroup
 } from './chatGroups'
 import { ChatsDragContext, type ChatsDrag } from './chatDragContext'
+import { useChatSearchStore } from '../../stores/chatSearch.store'
+import { findShortcutLabel } from './search/chatSearchText'
 
 type ChatRow = NonNullable<ReturnType<typeof useChatList>['data']>[number]
 
@@ -249,6 +251,7 @@ export function ChatList(): React.JSX.Element {
           Chats
         </span>
         <div className="flex items-center">
+          <SearchChatsButton />
           <GroupChatsMenu />
           <button
             onClick={startNewChat}
@@ -378,6 +381,26 @@ function usePointerOnList(): { inside: boolean; onMouseMove: (event: React.Mouse
     lastInsideMove.current = event.nativeEvent
   }, [])
   return { inside, onMouseMove }
+}
+
+/**
+ * All-chats search, beside the grouping menu and revealed like it: out of
+ * sight until the pointer is on the header or the button has focus.
+ */
+function SearchChatsButton(): React.JSX.Element {
+  const open = useChatSearchStore((s) => s.open)
+  const searching = useChatSearchStore((s) => s.scope === 'all')
+  return (
+    <button
+      type="button"
+      onClick={() => open('all')}
+      className={`p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-[color,background-color,opacity] focus-visible:opacity-100 group-hover/chats-header:opacity-100 ${searching ? 'opacity-100' : 'opacity-0'}`}
+      title={`Search chats (${findShortcutLabel()})`}
+      aria-label="Search chats"
+    >
+      <Search size={14} />
+    </button>
+  )
 }
 
 /**
