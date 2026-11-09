@@ -300,6 +300,9 @@ interface UIStore {
    * markdown files offer the panel, so it starts open.
    */
   previewContentsOpen: boolean
+  /** The file preview fills the window. One choice for every preview, until the app restarts. */
+  previewFullWindow: boolean
+  togglePreviewFullWindow: () => void
   theme: Theme
   themePreference: ThemePreference
   extraUIAnimation: boolean
@@ -517,6 +520,8 @@ export const useUIStore = create<UIStore>((set, get) => ({
       state.toggleSidebar()
     }
   },
+  previewFullWindow: false,
+  togglePreviewFullWindow: () => set((state) => ({ previewFullWindow: !state.previewFullWindow })),
   togglePreviewContents: () =>
     set((state) => {
       const next = !state.previewContentsOpen

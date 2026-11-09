@@ -1,6 +1,6 @@
 /**
  * In-app file preview for a small set of text-based attachment types
- * (`txt`, `csv`, `md`, `json`, `jsonl`/`ndjson`, `yaml`/`yml`, `py`, `xml` and its dialects)
+ * (`txt`, `csv`, `md`, `json`, `jsonl`/`ndjson`, `yaml`/`yml`, `py`, `diff`/`patch`, `xml` and its dialects)
  * and the common image formats (`png`, `jpg`, `gif`, `webp`, `bmp`, `svg`). Clicking a previewable
  * attachment badge opens a modal showing the decoded content instead of
  * going straight to a save dialog; non-previewable types still download.
@@ -10,7 +10,7 @@
  */
 
 /** How the preview modal should render a previewable file's text. */
-export type PreviewRenderKind = 'markdown' | 'json' | 'jsonl' | 'csv' | 'python' | 'xml' | 'text' | 'html' | 'image'
+export type PreviewRenderKind = 'markdown' | 'json' | 'jsonl' | 'csv' | 'python' | 'diff' | 'xml' | 'text' | 'html' | 'image'
 
 /**
  * Max bytes the main process reads for a preview. Large enough that a
@@ -54,6 +54,8 @@ const PREVIEW_KIND_BY_EXT: Record<string, PreviewRenderKind> = {
   yml: 'text',
   py: 'python',
   pyi: 'python',
+  diff: 'diff',
+  patch: 'diff',
   xml: 'xml',
   xsd: 'xml',
   xsl: 'xml',
@@ -93,6 +95,8 @@ const PREVIEW_KIND_BY_MIME: Record<string, PreviewRenderKind> = {
   'text/yaml': 'text',
   'text/x-python': 'python',
   'text/x-script.python': 'python',
+  'text/x-diff': 'diff',
+  'text/x-patch': 'diff',
   'application/xml': 'xml',
   'text/xml': 'xml',
   'text/html': 'html',

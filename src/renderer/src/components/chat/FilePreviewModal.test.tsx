@@ -15,6 +15,7 @@ import { FULL_TITLE_DELAY_MS } from './FilePreviewContents'
 import { MAX_HIGHLIGHT_CHARS } from './CodePreview'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
 import { useUIStore } from '../../stores/ui.store'
+import { forgetPreviewViews, rememberPreviewView as remember, rememberedPreviewView } from '../../utils/previewViewMemory'
 
 const csv: AgentFileRef = {
   text: 'data/omp.csv',
@@ -847,6 +848,7 @@ describe('the Contents panel', () => {
     )
     const header = screen.getByRole('button', { name: 'Close preview' }).parentElement!
     expect(Array.from(header.querySelectorAll('button')).map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual([
+      'Fill the window',
       'Contents',
       'More file actions',
       'Close preview'
@@ -1151,7 +1153,7 @@ describe('the ⋯ menu', () => {
 
     fireEvent.click(trigger())
     const menu = screen.getByRole('menu', { name: 'File actions' })
-    expect(Array.from(menu.querySelectorAll('[role="menuitem"]')).map((m) => m.textContent)).toEqual(['Open', 'Open folder'])
+    expect(Array.from(menu.querySelectorAll('[role="menuitem"]')).map((m) => m.textContent)).toEqual(['Open', 'Open folder', 'Copy content'])
     expect(card().contains(menu)).toBe(false)
     // The first item takes focus, for the keyboard.
     expect(document.activeElement).toBe(item('Open'))
@@ -1202,9 +1204,11 @@ describe('the ⋯ menu', () => {
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(item('Open folder'))
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(item('Copy content'))
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(item('Open'))
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' })
-    expect(document.activeElement).toBe(item('Open folder'))
+    expect(document.activeElement).toBe(item('Copy content'))
   })
 
   it('spins its trigger while an action runs, with both items disabled and the trigger usable', () => {
@@ -1218,8 +1222,8 @@ describe('the ⋯ menu', () => {
     act(() => trigger().focus())
     fireEvent.click(trigger())
     expect([item('Open').disabled, item('Open folder').disabled]).toEqual([true, true])
-    // Nothing usable to focus: it stays on the trigger.
-    expect(document.activeElement).toBe(trigger())
+    // Copy content waits for nothing, so the keyboard lands there.
+    expect(document.activeElement).toBe(item('Copy content'))
     act(() => useFilePreviewStore.setState({ pendingAction: null }))
     expect([item('Open').disabled, item('Open folder').disabled]).toEqual([false, false])
   })
@@ -1230,5 +1234,239 @@ describe('the ⋯ menu', () => {
     open({ target: { type: 'attachment', attachment }, attachment, kind: 'text', text: 'x' })
     expect(screen.queryByRole('button', { name: 'More file actions' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Download a.txt' })).toBeTruthy()
+  })
+})
+
+describe('FilePreviewModal: the view it remembers', () => {
+  const key = `agent-file:folder:a:${csv.path}`
+  const body = (): HTMLElement => document.querySelector<HTMLElement>('.overflow-auto')!
+  const fullWindowButton = (): HTMLElement => screen.getByRole('button', { name: 'Fill the window' })
+  const rememberPreviewView = (k: string, view: { scrollTop: number }): void =>
+    remember(k, { ...view, share: 0, width: 0 })
+  const text = (extra: OpenState = {}): OpenState => ({
+    target: agentTarget(),
+    kind: 'text',
+    text: 'some text',
+    isLoading: false,
+    ...extra
+  })
+
+  beforeEach(() => {
+    forgetPreviewViews()
+    useUIStore.setState({ previewFullWindow: false })
+    render(<FilePreviewModal />)
+  })
+
+  it('opens a file where the user left it, and a file with nothing remembered from the top', () => {
+    open(text())
+    body().scrollTop = 420
+    fireEvent.scroll(body())
+    expect(rememberedPreviewView(key)?.scrollTop).toBe(420)
+
+    act(() => useFilePreviewStore.getState().close())
+    open(text())
+    expect(body().scrollTop).toBe(420)
+
+    open(text({ target: agentTarget(goneFolder) }))
+    expect(body().scrollTop).toBe(0)
+  })
+
+  it('does not take the scroll to the top of a file still loading for where the user stopped', () => {
+    rememberPreviewView(key, { scrollTop: 300 })
+    open(text({ isLoading: true, text: '' }))
+    fireEvent.scroll(body())
+    expect(rememberedPreviewView(key)?.scrollTop).toBe(300)
+
+    act(() => useFilePreviewStore.setState({ isLoading: false, text: 'some text' }))
+    expect(body().scrollTop).toBe(300)
+  })
+
+  it('does not save where a restore clamped: only the user moving overwrites the place', () => {
+    rememberPreviewView(key, { scrollTop: 8000 })
+    open(text())
+    // The content came back shorter, so the restore landed short of 8000.
+    const pinnedTop = 120
+    Object.defineProperty(body(), 'scrollTop', { configurable: true, get: () => pinnedTop, set: () => undefined })
+    act(() => useFilePreviewStore.setState({ isLoading: true }))
+    act(() => useFilePreviewStore.setState({ isLoading: false }))
+    fireEvent.scroll(body())
+    expect(rememberedPreviewView(key)?.scrollTop).toBe(8000)
+
+    Object.defineProperty(body(), 'scrollTop', { configurable: true, get: () => 200, set: () => undefined })
+    fireEvent.scroll(body())
+    expect(rememberedPreviewView(key)?.scrollTop).toBe(200)
+    delete (body() as unknown as { scrollTop?: number }).scrollTop
+  })
+
+  it('fills the window on the button, and every preview opens that way until it is turned off', () => {
+    open(text())
+    expect(card().className).toContain('max-h-[80vh]')
+    fireEvent.click(fullWindowButton())
+    expect(fullWindowButton().getAttribute('aria-pressed')).toBe('true')
+    expect(card().className).not.toContain('max-h-[80vh]')
+    expect(card().className).toContain('h-full')
+
+    act(() => useFilePreviewStore.getState().close())
+    open(text())
+    expect(card().className).toContain('h-full')
+
+    open(text({ target: agentTarget(goneFolder) }))
+    expect(card().className).toContain('h-full')
+
+    fireEvent.click(fullWindowButton())
+    expect(card().className).toContain('max-h-[80vh]')
+  })
+
+  it('takes the share of the way down when the file was left at another width', () => {
+    remember(key, { scrollTop: 100, share: 0.5, width: 700 })
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, value: 1000 })
+    open(text())
+    expect(body().scrollTop).toBe(500)
+    delete (HTMLElement.prototype as unknown as { scrollHeight?: number }).scrollHeight
+  })
+
+  it('has nothing to fill the window with on a notice, and leaves a full-window choice for the next file', () => {
+    useUIStore.setState({ previewFullWindow: true })
+    open(text({ kind: null, notice: 'unsupported' }))
+    expect(screen.queryByRole('button', { name: 'Fill the window' })).toBeNull()
+    expect(card().className).toContain('max-h-[80vh]')
+    open(text())
+    expect(card().className).toContain('h-full')
+  })
+
+  it('swallows a press in the body right after the toggle: a double press lands where the button was', () => {
+    open(text())
+    fireEvent.click(fullWindowButton())
+    const onOutside = vi.fn()
+    const target = document.createElement('button')
+    target.onclick = onOutside
+    body().appendChild(target)
+    fireEvent.click(target, { detail: 1 })
+    expect(onOutside).not.toHaveBeenCalled()
+    // Enter or Space on a focused control is `detail` 0, and was meant.
+    fireEvent.click(target, { detail: 0 })
+    expect(onOutside).toHaveBeenCalledOnce()
+    target.remove()
+  })
+
+  it('stands in for the drag strip while it fills the window, so its buttons stay clickable by hand', () => {
+    open(text())
+    fireEvent.click(fullWindowButton())
+    expect(fullWindowButton().closest('.app-drag-strip')).not.toBeNull()
+  })
+
+  it('does not close on a second press where the button was, now outside the smaller card', () => {
+    vi.useFakeTimers()
+    open(text())
+    fireEvent.click(fullWindowButton())
+    act(() => vi.advanceTimersByTime(OPEN_PRESS_GUARD_MS + 1))
+    fireEvent.click(fullWindowButton())
+    fireEvent.mouseDown(backdrop())
+    expect(useFilePreviewStore.getState().target).not.toBeNull()
+    act(() => vi.advanceTimersByTime(OPEN_PRESS_GUARD_MS + 1))
+    fireEvent.mouseDown(backdrop())
+    expect(useFilePreviewStore.getState().target).toBeNull()
+  })
+})
+
+describe('FilePreviewModal: Copy content', () => {
+  let writeText: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<FilePreviewModal />)
+  })
+  afterEach(() => {
+    delete (navigator as { clipboard?: unknown }).clipboard
+  })
+
+  const copy = async (): Promise<void> => {
+    fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy content' }))
+    })
+  }
+
+  it('copies the text as read, with no row under the header', async () => {
+    open({ target: agentTarget(), kind: 'text', text: '-a\n+b\n', isLoading: false })
+    await copy()
+    expect(writeText).toHaveBeenCalledWith('-a\n+b\n')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByRole('status', { name: /Copied the first/ })).toBeNull()
+  })
+
+  it('says so when the clipboard refuses, and closes nothing', async () => {
+    writeText.mockRejectedValue(new Error('denied'))
+    open({ target: agentTarget(), kind: 'text', text: 'x', isLoading: false })
+    await copy()
+    expect(screen.getByRole('alert').textContent).toContain("Couldn't copy the content")
+    expect(useFilePreviewStore.getState().target).not.toBeNull()
+  })
+
+  it('says when only the part the preview read was copied', async () => {
+    open({ target: agentTarget(), kind: 'text', text: 'x', truncated: true, isLoading: false })
+    await copy()
+    expect(document.body.textContent).toContain('Copied the first 25 MB')
+  })
+
+  it('has nothing to copy from a notice', () => {
+    open({ target: agentTarget(), kind: null, notice: 'unsupported', isLoading: false })
+    fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+    expect(screen.getByRole('menuitem', { name: 'Copy content' })).toHaveProperty('disabled', true)
+  })
+})
+
+describe('FilePreviewModal: Copy content in the header', () => {
+  const attachment = { id: 'f1', filename: 'a.diff', size: 1, mimeType: 'text/x-diff' }
+  const copyButton = (): HTMLButtonElement => screen.getByRole('button', { name: 'Copy content of a.diff' }) as HTMLButtonElement
+  let writeText: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<FilePreviewModal />)
+  })
+  afterEach(() => {
+    delete (navigator as { clipboard?: unknown }).clipboard
+  })
+
+  it('copies an attachment beside Download, and marks it for a moment', async () => {
+    open({ target: { type: 'attachment', attachment }, attachment, kind: 'diff', text: '-a\n+b\n', isLoading: false })
+    await act(async () => {
+      fireEvent.click(copyButton())
+    })
+    expect(writeText).toHaveBeenCalledWith('-a\n+b\n')
+    expect(copyButton().querySelector('.lucide-check')).not.toBeNull()
+  })
+
+  it('copies a file still in the composer, which has no Download', async () => {
+    open({
+      target: { type: 'path', path: '/tmp/a.diff', filename: 'a.diff', mimeType: 'text/x-diff' },
+      kind: 'diff',
+      text: 'x',
+      isLoading: false
+    })
+    await act(async () => {
+      fireEvent.click(copyButton())
+    })
+    expect(writeText).toHaveBeenCalledWith('x')
+  })
+
+  it('waits for the text, and offers nothing for an image', () => {
+    open({ target: { type: 'attachment', attachment }, attachment, kind: 'diff', text: '', isLoading: true })
+    expect(copyButton().disabled).toBe(true)
+    const image = { ...attachment, filename: 'a.png', mimeType: 'image/png' }
+    open({
+      target: { type: 'attachment', attachment: image },
+      attachment: image,
+      kind: 'image',
+      image: { url: 'data:', width: 1, height: 1 },
+      isLoading: false
+    })
+    expect(screen.queryByRole('button', { name: /Copy content/ })).toBeNull()
+  })
+
+  it('leaves an agent file to its menu: no second copy button', () => {
+    open({ target: agentTarget(), kind: 'text', text: 'x', isLoading: false })
+    expect(screen.queryByRole('button', { name: /Copy content/ })).toBeNull()
   })
 })

@@ -14,7 +14,7 @@ import { AgentStatusButton } from '../agents/AgentStatusButton'
 import { UpdateStatusButton } from '../updater/UpdateStatusButton'
 
 // macOS traffic lights at x=15, y=10 (~58 px cluster). 76 px clears them.
-const TRAFFIC_LIGHT_GUTTER = 'pl-[76px]'
+export const TRAFFIC_LIGHT_GUTTER = 'pl-[76px]'
 
 // Slight-tint background at rest, solid background + subtle border on hover
 // so the icons stay legible over the main-area background.

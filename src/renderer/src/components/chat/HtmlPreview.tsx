@@ -23,7 +23,8 @@ export function HtmlPreview({
   inputKey,
   view,
   text,
-  title
+  title,
+  square = false
 }: {
   input: HtmlPreviewOpenInput
   /** Identifies `input`: a new key opens a new frame. */
@@ -31,11 +32,13 @@ export function HtmlPreview({
   view: HtmlPreviewView
   text: string
   title: string
+  /** The card fills the window: no rounded corners to follow. */
+  square?: boolean
 }): React.JSX.Element {
   return (
     <>
       <div className={view === 'rendered' ? 'h-full' : 'hidden'}>
-        <HtmlFrame input={input} inputKey={inputKey} title={title} />
+        <HtmlFrame input={input} inputKey={inputKey} title={title} square={square} />
       </div>
       {view === 'source' && <CodePreview text={text} language="xml" />}
     </>
@@ -47,11 +50,13 @@ type FrameState = { status: 'loading' } | { status: 'ready'; url: string } | { s
 function HtmlFrame({
   input,
   inputKey,
-  title
+  title,
+  square
 }: {
   input: HtmlPreviewOpenInput
   inputKey: string
   title: string
+  square: boolean
 }): React.JSX.Element {
   const [state, setState] = useState<FrameState>({ status: 'loading' })
   const latest = useRef(input)
@@ -103,7 +108,7 @@ function HtmlFrame({
       title={title}
       sandbox={HTML_PREVIEW_SANDBOX}
       referrerPolicy="no-referrer"
-      className="block h-full w-full border-0 rounded-b-xl bg-[var(--color-html-page)]"
+      className={`block h-full w-full border-0 bg-[var(--color-html-page)]${square ? '' : ' rounded-b-xl'}`}
     />
   )
 }

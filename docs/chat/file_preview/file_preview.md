@@ -5,7 +5,7 @@
 One read-only modal for looking at a file **in place**, reached three ways.
 
 **An attachment badge or thumbnail in a chat message.**
-- **What previews:** `txt`, `csv`, `md`, `json`, JSON Lines (`jsonl`, `ndjson`), `yaml`/`yml`, Python (`py`/`pyi`), XML and its dialects (`xml`, `xsd`, `xsl`/`xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml`), HTML (`html`, `htm`, `xhtml`), and images (`png`, `jpg`/`jpeg`, `gif`, `webp`, `bmp`, `svg`). These open the modal instead of the save dialog. An image attachment shows in the transcript as a 64×64 thumbnail rather than a badge ([File Attachments](../file_attachments/file_attachments.md#thumbnails)).
+- **What previews:** `txt`, `csv`, `md`, `json`, JSON Lines (`jsonl`, `ndjson`), `yaml`/`yml`, Python (`py`/`pyi`), diffs (`diff`, `patch`), XML and its dialects (`xml`, `xsd`, `xsl`/`xslt`, `plist`, `rss`, `atom`, `kml`, `gpx`, `csproj`, `xaml`), HTML (`html`, `htm`, `xhtml`), and images (`png`, `jpg`/`jpeg`, `gif`, `webp`, `bmp`, `svg`). These open the modal instead of the save dialog; a `.diff` or `.patch` attachment used to download. An image attachment shows in the transcript as a 64×64 thumbnail rather than a badge ([File Attachments](../file_attachments/file_attachments.md#thumbnails)).
 - **Download stays:** the modal header keeps a **Download** button, so previewing never replaces saving the file. An HTML attachment also gets **Open in browser** beside it.
 - **Everything else downloads:** PDF, HEIC, TIFF, Office binaries, archives and the rest still go straight to the save dialog. Preview is an extra shortcut, not a new gate.
 - **Both directions of attachment:**
@@ -13,20 +13,22 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - **Agent attachments** under an assistant reply ([Agent Attachments](../agent_attachments/agent_attachments.md)), always `cinna` source.
 
 **A [file reference](../file_references/file_references.md) in a folder agent's chat.** This is an inline code span, or a markdown link's destination, that names a real file.
-- **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**, and **Publish…** under a separator when the file can be published ([Artifacts](../artifacts/artifacts.md)).
+- **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**, **Copy content**, and **Publish** under a separator when the file can be published ([Artifacts](../artifacts/artifacts.md)).
 - **More types:** other code and config preview as plain text as well; Python is highlighted, as it is for an attachment.
 - **Not images.** An agent file is read as text, so an image it names opens in its system app, as before.
 
 **A file still in the composer**, not sent yet: a thumbnail or a previewable badge above the text box. It opens the same modal with **no Download** — the file is the user's own. A new chat's files are read from their path on disk, since no chat exists to hold them yet.
 
-**A long markdown file**, from either way in, also gets a **Contents** panel: its headings, beside the body or over its right edge, so the user can jump to a section and see where they are. **A Python file** with more than one definition gets the same panel as an outline: top-level functions and classes, and under each class its own methods (no nested functions, nested classes or constants). **An XML file** gets it as the document's sections: the elements that hold other elements, down to four levels below the root.
+**A long markdown file**, from either way in, also gets a **Contents** panel: its headings, beside the body or over its right edge, so the user can jump to a section and see where they are. **A Python file** with more than one definition gets the same panel as an outline: top-level functions and classes, and under each class its own methods (no nested functions, nested classes or constants). **An XML file** gets it as the document's sections: the elements that hold other elements, down to four levels below the root. **A diff** touching several files gets it as the list of those files.
+
+**A diff** (`.diff`, `.patch`) is read as a diff, not as a wall of `+` and `-` lines; see [Diffs](#diffs).
 
 **An HTML file** is shown the way a browser would show it, scripts and remote content included, inside a sandboxed frame that cannot reach the app; a **Rendered / Source** toggle switches to its highlighted markup. **Open in browser** hands it to the user's default web browser.
 
 ## Core Concepts
 
 - **Previewable type**: a filename or MIME type the modal knows how to render.
-  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `jsonl`, `csv`, `python`, `xml`, `html`, `image` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
+  - `previewKindFor(filename, mimeType)` (`src/shared/filePreview.ts`) maps it to a `PreviewRenderKind` (`markdown`, `json`, `jsonl`, `csv`, `python`, `diff`, `xml`, `html`, `image` or `text`), or `null` when it is not previewable and should download. The extension wins over the MIME type, because the stores' MIME type is only a best guess.
   - Agent files use `agentFilePreviewKindFor`, which adds other code and config as `text`, drops `image` (agent files are read as text), and leaves attachment behaviour unchanged. A `.py` file resolves to `python` through `previewKindFor` first, so it is highlighted in both places.
 - **Preview read path**: the IPC call that reads a file's bytes into memory and returns decoded UTF-8 plus a `truncated` flag.
   - Attachments use `files:read-preview`, and agent files use `agent-files:read-preview`.
@@ -47,6 +49,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - `jsonl` (`jsonl`/`ndjson`; MIME `application/jsonl`, `application/x-jsonlines`, `application/x-ndjson`) is a tree of records or a table, with a Tree/Table toggle; see [JSON Lines](#json-lines). A `.jsonl` attachment used to download; it now previews.
   - `csv`/`tsv` renders as a table: quoted fields are honoured (loosely following RFC 4180) and the first 500 rows are shown.
   - `python` is a wrapped `<pre>` highlighted by lowlight, the engine behind the chat's `rehype-highlight`, so a `.py` file is tokenised and coloured exactly like a fenced `python` block in a message (the same `.hljs-*` palette). If highlighting throws, it shows the plain text, so a file cut at the cap still previews. Over the [highlight limit](#large-text) it is plain from the start.
+  - `diff` (`diff`/`patch`; MIME `text/x-diff`, `text/x-patch`) is a reading of the diff: a card per file, tinted rows, word marks; see [Diffs](#diffs).
   - `xml` is a collapsible tree, falling back to highlighted source when it does not parse; see [XML tree](#xml-tree).
   - `html` is the page rendered in a sandboxed frame, or its highlighted source; see [HTML pages](#html-pages).
   - `image` is the picture, fitted inside the card and centred; see [Images](#images).
@@ -55,18 +58,21 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **Notice**: a body that is a sentence rather than content. For agent files it is either "Preview is off for credential files." or "No preview for this file type."
 - **Header actions**:
   - Attachments get an icon-only Download, except one opened from the composer. An HTML attachment also gets an icon-only **Open in browser** (a globe) before it.
-  - An agent file inside the agent's folder, other than a credential file, also gets **Publish…** as the last item of the **⋯** menu, below a separator, while the active profile can publish [artifacts](../artifacts/artifacts.md). It closes the preview and opens the Publish dialog, so the card lands in the chat; a file outside the folder never offers it. It was a header button until it became as occasional as Open.
+  - An attachment or a composer file (not an image) gets an icon-only **Copy content** (a copy icon) before Download; an agent file has the same action in its ⋯ menu. See [Copy content](#copy-content).
+  - Any preview that has content to show gets an icon-only **Fill the window** (a maximize icon) as the first control of the header; see [Filling the window](#filling-the-window).
+  - An agent file inside the agent's folder, other than a credential file, also gets **Publish** as the last item of the **⋯** menu, below a separator, while the active profile can publish [artifacts](../artifacts/artifacts.md). It closes the preview and opens the Publish dialog, so the card lands in the chat; a file outside the folder never offers it. It was a header button until it became as occasional as Open. The item carries no ellipsis because a menu's items name their action, not what follows it ([UX rule 8](../../development/ui_guidelines/ux_rules.md)); the transcript's right-click menu still says **Publish…**.
   - A script file gets a **Run…** button (a terminal icon and the word) before **⋯**. It closes the preview and opens the [Run Script window](../run_commands/run_commands.md) on the command Cinna chose for the file; nothing runs until Run is pressed there. See *Running a script* below
-  - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open in browser** for an HTML file, then **Open folder**, then **Publish…** when offered.
+  - Agent files get an icon-only **⋯** button ("More file actions"). Its menu holds **Open**, then **Open in browser** for an HTML file, then **Open folder**, then **Copy content**, then **Publish** when offered.
   - For `csv`, and for a JSON Lines file while its Table is showing, a **Filter** toggle reveals per-column controls. It is hidden while a notice shows. It sits left of the Tree/Table toggle so it appearing never moves the toggle under the pointer.
   - A JSON Lines file of records gets a **Tree / Table** icon toggle (`ListTree`, `Table2`) after it; see [JSON Lines](#json-lines).
   - Every header control is 26 px tall, the height of the agent chip under the composer; see [Header controls](#header-controls).
   - For `html` only, a **Rendered / Source** segmented toggle. It is hidden while the body is an error or a notice.
-  - For a long markdown file, a Python file with several definitions, or an XML file with several sections, a labelled **Contents** toggle, at the app-chrome type scale, shows and hides the Contents panel.
-- **Contents panel**: a 240 px column listing a markdown file's H1–H4 headings, a Python file's functions and classes (`name()` for a function or method, the bare name for a class) with methods one level in, or an XML file's sections (`tag · name`), indented by depth, with the current section in the accent colour. See [The Contents panel](#the-contents-panel).
+  - For a long markdown file, a Python file with several definitions, an XML file with several sections, or a diff of several files, a labelled **Contents** toggle, at the app-chrome type scale, shows and hides the Contents panel.
+- **Contents panel**: a 240 px column listing a markdown file's H1–H4 headings, a Python file's functions and classes (`name()` for a function or method, the bare name for a class) with methods one level in, an XML file's sections (`tag · name`), or a diff's files (file name first, folder after), indented by depth, with the current section in the accent colour. See [The Contents panel](#the-contents-panel).
 - **Note entry**: a muted, italic Contents line such as "… 12 more `<item>`" that stands for entries left out. It is text, not a link.
 - **Entrance**: the card expands from the point the user clicked.
 - **Exit**: closing plays the entrance backwards, towards the same point.
+- **Remembered place**: where the user last stopped scrolling in a file, kept until the app restarts; see [Remembered place](#remembered-place).
 - **Header path**: an agent file's display path, beside its name. A click copies it.
 - **CSV filter & sort**: when the filter toggle is on, two controls appear.
   - Each column header becomes a click-to-sort control. It cycles none → ascending → descending, and sorts numerically when the values are numbers.
@@ -157,7 +163,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 2. **Invalid bytes:** invalid byte sequences decode to the replacement character instead of failing, so the modal always shows *something*. Download or Open still gets the exact bytes.
 
 ### Closing
-1. Escape, the X button, or a press outside the card closes the modal. A press outside within 500 ms of opening, or of a Contents toggle, is ignored. While the **⋯** menu is open, Escape or a press outside closes only the menu. While focus is inside an HTML page, Escape goes to the page and closes nothing.
+1. Escape, the X button, or a press outside the card closes the modal, also while it fills the window: Escape does not first step back to the smaller card. A press outside within 500 ms of opening, or of a Contents or Fill-the-window toggle, is ignored. While the **⋯** menu is open, Escape or a press outside closes only the menu. While focus is inside an HTML page, Escape goes to the page and closes nothing.
 2. The card shrinks back towards where it opened while it and the backdrop fade out, as fast as they came in. The page under it takes clicks at once.
 3. **Focus:** after a keyboard open, focus returns to whatever held it before, once the fade has ended. After a click open, focus is released and not returned.
 
@@ -227,21 +233,62 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - a folder that has gone: "That folder is no longer there.";
   - a failed folder reveal: "Couldn't show it in its folder: …", or main's own sentence when that already names the action.
 - **A folder reaches the modal only when showing it failed.** It shows a folder icon, its name and path, and no file actions.
-- **Open, Open folder and Publish… are disabled while the body says the file has gone.** They could only fail, and their error would repeat the body, so a click would look like it did nothing. The **⋯** button itself stays enabled, so the user can still see what is unavailable.
+- **Open, Open folder and Publish are disabled while the body says the file has gone.** They could only fail, and their error would repeat the body, so a click would look like it did nothing. The **⋯** button itself stays enabled, so the user can still see what is unavailable.
 - **A failed header action** is named in a row under the header: "Couldn't open it: …", "Couldn't show it in its folder: …", or main's own sentence when that names the action already.
   - It closes nothing ([UX rule 6](../../development/ui_guidelines/ux_rules.md)).
   - The row is hidden when the body already shows the same failure.
 
 ### The ⋯ menu
-- **Open, Open folder and Publish… live in a menu, not the header.** They used to be labelled header buttons. The header now holds the Contents toggle, and these actions are occasional.
-- **Publish… is last, after a separator**, because it leaves the machine where the others only hand the file to the OS. Artifact Preview's own **Share…** stays in its header: that modal has no ⋯ menu.
+- **Open, Open folder, Copy content and Publish live in a menu, not the header.** They used to be labelled header buttons. The header now holds the Contents toggle, and these actions are occasional.
+- **Publish is last, after a separator**, because it leaves the machine where the others only hand the file to the OS. Artifact Preview's own **Share…** stays in its header: that modal has no ⋯ menu.
 - **The trigger never disables.** Its items do, while an action runs or the file has gone. A disabled trigger would hide what exists.
-- **The trigger shows the running action.** The menu has closed by the time an action runs, so the **⋯** icon becomes a spinner in place. Nothing moves ([UX rule 1](../../development/ui_guidelines/ux_rules.md)).
+- **The trigger shows the running action.** The menu has closed by the time an action runs, so the **⋯** icon becomes a spinner in place. After a copy it becomes a check mark for a moment, the same way. Nothing moves ([UX rule 1](../../development/ui_guidelines/ux_rules.md)).
 - **The menu is portaled out of the card**, like every menu ([UX rule 8](../../development/ui_guidelines/ux_rules.md)). A press on it still counts as inside the card, so picking an item never closes the preview.
 - **The menu takes the first dismissal.** While it is open, Escape, Tab or a press outside the card closes the menu and leaves the preview up. Only the next Escape or press closes the preview. Escape and Tab also return focus to the trigger.
 - **The keyboard reaches the items.** Opening the menu focuses the first enabled item. The arrow keys, Home and End move between enabled items. With none enabled, focus stays on the trigger.
 - **The menu closes with the preview.** A preview that starts fading out takes an open menu with it.
-- **Only agent files have it.** An attachment keeps its Download button, and a folder that failed to show has no file actions at all.
+- **Only agent files have it.** An attachment keeps its Download button and its own Copy content icon, and a folder that failed to show has no file actions at all.
+
+### Copy content
+- **It copies the text the preview read, exactly as decoded**, not what the view shows. A diff whose page fragments are shown rejoined copies the fragments as written; a JSON file copies its source, not the tree; a CSV its rows with their quotes. A user pasting it elsewhere gets the file.
+- **Where it is:** an icon in the header for an attachment or a composer file, **Copy content** in the ⋯ menu for an agent file (the menu has closed by the time the copy lands, so its trigger shows the check mark). An image has none: there is no text to copy.
+- **It is there but disabled while there is nothing to copy**: still loading, an error, or an empty file; a control that appeared once the file loaded would move the header ([UX rule 1](../../development/ui_guidelines/ux_rules.md)). The header icon is left out for a notice (a sentence, not content); the ⋯ item is disabled for one.
+- **It stays clickable while a menu action runs**, since it touches nothing the action does.
+- **A copy says so with a check mark for about a second**, in place of the icon; screen readers get "Copied".
+- **What a mark cannot say gets a row under the header.** A file cut at the 25 MB cap copies the cut text and says so ("Copied the first 25 MB: the file is larger than the preview reads."), because the clipboard would otherwise hold a file that looks whole. A refused clipboard says "Couldn't copy the content: the clipboard refused it." The rows belong to that open and go with it.
+- **It never reads the file again.** Only the preview's own text is copied; a file past the cap is not fetched whole to be copied.
+
+### Filling the window
+- **A button, first in the header, makes the card fill the window** and back. It exists so a wide table, a long diff or a page can use the room the window has, where the card is a centred column.
+- **One choice for every preview**, the file preview and the [Artifact Preview](../artifacts/artifacts.md) alike, kept until the app restarts. It starts as the smaller card on every launch.
+- **The card is solid.** With no surround left, the card's glass would only blur the app's shapes behind the text.
+- **The header takes the place of the window's drag strip**, so the window can still be moved by it, and it starts clear of the traffic lights on macOS, which stay on top of everything. The buttons in it remain clickable.
+- **Prose keeps the card's measure.** A markdown file stays as wide as the card was, centred, because lines of 150 characters are hard to read; tables, code, diffs, trees and pages take the room. An image fits the window's height instead of 80%.
+- **With Contents open it sits at the window's right edge** and the body takes what is left; the card does not widen, as there is nothing to widen into.
+- **Not offered for a notice or an error**, which are a sentence with nothing to fill the window with. Loading keeps the button, so it does not appear a moment later.
+- **The place in the file is kept by share across the change.** The text rewraps at the new width, so a pixel offset would land elsewhere; the share of the way down is kept.
+- **A second press where the button was does not close the preview.** The button moves with the card's size. A double press would land on whatever now sits there, or on the backdrop. For half a second after a toggle a pointer press elsewhere on the card is swallowed, and an outside press is ignored. A keyboard press always goes through: it was aimed.
+- **Escape closes the preview**, as always; it does not first step back to the smaller card.
+
+### Remembered place
+- **Reopening a file goes back to where the user left it**, until the app restarts. In memory only; nothing is stored, and only numbers are kept, under the preview's key (an attachment, a composer path, or an agent file). At most 200 files; the least recently touched is forgotten first.
+- **Exact at the same width, proportional otherwise.** The pixel offset is kept with the body's width. If the width differs (the card now fills the window, or the window was resized) the text has rewrapped and the share of the way down is used instead.
+- **A rendered HTML page is not remembered.** It scrolls inside its own frame, out of reach, and the body must not move. Its Source view is not remembered either: every open starts on Rendered.
+- **A file with nothing remembered starts at the top.** The body element outlives the file in it, so it is reset rather than left where the previous file was.
+- **Folds, filters and sorts are not remembered**, so on reopen the content can be shorter and the place lands elsewhere. That clamped landing is not saved as the new place: the browser's own scroll event from the restore is ignored, because saving it would lose where the user really was for good.
+
+### Diffs
+- **A `.diff` or `.patch` is read, not listed.** A diff full of `+` and `-` is hard to take in line by line; the preview shows which files changed, what was removed, and what replaced it.
+- **Two shapes are understood.** A unified diff (`git diff`, `diff -u`, a `format-patch` mail, a Python `difflib` output), and a bare list of changes where every line starts with `+`, `-` or a space and there are no headers at all. A hunk is counted by its `@@` header, so a removed line reading `-- x` is not taken for the next file's header. Anything else is not a diff.
+- **A file card per file**: its name (`old → new` when the diff compares two names), a label for a new, deleted, renamed, copied, binary or mode-only file, and its `+N` and `−N` counts; with several files, a summary line above all of them. A binary or contentless file says so instead of showing rows.
+- **Rows are tinted**: removals in the danger colour, additions in the success colour. Inside a removal and the line that replaced it, the words that actually changed are marked, but only when the two lines are alike enough for marks to help, and not past a size limit of the comparison. A hunk's heading line (the function it is in) shows when the diff names one; otherwise a gap between hunks is a `⋯` row.
+- **The line number is the new file's.** A removed line has no number: the old file's number placed among the new file's would point at the wrong line. Numbers and signs cannot be selected, so a selection copies the text alone.
+- **Text around the diff is kept**: a commit message or note before a file, and the text after it, shows as plain prose. A patch mail's `From <sha> Mon Sep 17` line and its `---` rule are dropped, as they say nothing to a reader.
+- **Flowing text mode.** Some tools diff the text nodes of a page, not its lines, so one sentence arrives as several rows (`+Traffic in 7 days: `, `+/sellers.json`, `+ 7,404 hits, `). Read row by row, that is unreadable. A diff in which a notable share of rows start or end in a single space, at least one row starts with one, and some neighbouring rows carry a sentence on, gets its fragments joined back into sentences and its HTML entities (`&amp;`, `&#8217;`) decoded. Any indented row rules it out: that is code, whose leading space means something. Copying the file still gets the bytes as written. The case that made it: Confluence page diffs.
+- **Contents lists the files**, name first and folder after, when the diff touches two or more. A long shared folder would otherwise cut every entry to the same words.
+- **Over 1M characters, or not a diff, it is text under a note.** Over the [highlight limit](#large-text): "This file is too large to format, so it is shown as plain text." Not parseable: "This doesn't read as a diff, so it is shown as text." An empty diff says "This diff is empty." A file cut at the 25 MB cap is always over the limit, so it shows as text.
+- **Artifact Preview shows diffs too**, with the same reader, and without a Contents panel (it has none).
+- **It does not apply anything.** A diff is read-only here like every preview.
 
 ### The Contents panel
 - **A markdown file offers it only when it is long.** It must have more than one H1 or more than one H2. A short note gets no panel, because a list of one or two headings is not worth the width it takes. Frontmatter is not counted: the headings are read from exactly the body the preview renders.
@@ -251,6 +298,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
   - **At most 50 entries per parent.** The rest become one note entry, "… N more", with the tag in mono when they all share one (`<item>`). A feed of ten thousand items would otherwise be a panel of ten thousand rows.
   - **A note entry is not a link.** Nothing scrolls to it and it is never marked current.
   - **A click reaches an element the tree is hiding.** The tree unfolds every folded ancestor and pages far enough down each long child list before the body scrolls, so a click on a section inside a folded branch still lands on it.
+- **A diff offers it with at least two files**, each by its card; a click scrolls to that file's card. A diff over the highlight limit is not parsed, so it offers none.
 - **An HTML file never offers it.** The page scrolls inside its own frame, where the panel cannot see or move it.
 - **It is not offered until the preview has loaded.** While loading, or when the body is an error or a notice, the header has no Contents button.
 - **Entries are H1 to H4.** H5 and H6 are left out. A lone H1 is the document's title, so it is left out too, and its H2s become the top level. Several H1s are all listed.
@@ -359,7 +407,7 @@ One read-only modal for looking at a file **in place**, reached three ways.
 - **Full images are cached too**, the last 20 in the session, so opening the same image twice reads it once.
 
 ### Large text
-- **Over 1M characters (`MAX_HIGHLIGHT_CHARS`), code is shown plain, not highlighted.** That covers Python, an XML file shown as source (malformed or cut), an HTML file's Source view, and an HTML file previewed from the composer. A muted line above it says "This file is too large to highlight, so it is shown as plain text." An XML file shown as source already has its own line (cut, or could not be parsed), and shows only that one. Highlighting builds every token in one synchronous pass; once the read cap rose to 25 MB, a multi-MB file stalled the window for seconds and tens of MB ran it out of memory.
+- **Over 1M characters (`MAX_HIGHLIGHT_CHARS`), code is shown plain, not highlighted.** That covers Python, a diff (shown as written under the "format" note), an XML file shown as source (malformed or cut), an HTML file's Source view, and an HTML file previewed from the composer. A muted line above it says "This file is too large to highlight, so it is shown as plain text." An XML file shown as source already has its own line (cut, or could not be parsed), and shows only that one. Highlighting builds every token in one synchronous pass; once the read cap rose to 25 MB, a multi-MB file stalled the window for seconds and tens of MB ran it out of memory.
 - **A Python file over the limit keeps its Contents panel.** The plain text still gets a marker at the start of each listed definition's line, so a click lands where it did when highlighted.
 - **Markdown over the limit is shown as written.** Its frontmatter card stays on top, then "This file is too large to format, so it is shown as plain text.", then the raw body in a `<pre>`, with no Contents panel. Rendering markdown costs more than highlighting, so the limit is the same one, measured on the body after the frontmatter.
 - **A CSV stops parsing at the row cap.** The parser reads only as far as the 501st non-blank record, which is enough to know the table is clipped; a 25 MB file is not split into millions of cells to show 500 rows. Blank lines are skipped as they are read, so they never count towards the cap.
@@ -391,8 +439,10 @@ Badge or thumbnail click (MessageBubble user badge | AgentAttachment):
                               cinna : cinnaFileService.readBytes (GET /files/{id}/download, capped)
                            → decodePreviewText → { text, truncated }
                      image → imageDataCache.loadImage → files:read-image → data: URL (sniffed, ≤ 25 MB) → decode()
-                     → FilePreviewModal renders by kind (markdown|json|csv|python|xml|html|image|text)
+                     → FilePreviewModal renders by kind (markdown|json|jsonl|csv|python|diff|xml|html|image|text)
                         header Download → useFileDownloadStore.download (full file)
+                        header Copy content → navigator.clipboard (the text read, no new IPC)
+                        header Fill the window → useUIStore.previewFullWindow (shared with Artifact Preview)
                         header Open in browser (html) → files:open-in-browser
                            → copy under userData/html-open-in-browser → default web browser
 
@@ -413,6 +463,7 @@ Long markdown (either way in):
   markdownToc(body after frontmatter) → several H1s or H2s? → header Contents toggle
                                        (skipped when the body is over MAX_HIGHLIGHT_CHARS)
   pythonOutline(text) → more than one def/class? → header Contents toggle (CodePreview marks each line)
+  parseDiff(text) → diffOutline → two or more files? → header Contents toggle (DiffPreview file cards carry the lines)
   parseXml(text) → xmlOutline → two or more sections? → header Contents toggle (XmlTree rows carry the ids)
                  → null (malformed / cut) → highlighted source under a note
     → FilePreviewContents beside the body (card widens) or over it (narrow window / slow load)
@@ -440,7 +491,7 @@ For file paths, IPC signatures and method-level detail see [File Preview — Tec
 - [File Attachments](../file_attachments/file_attachments.md): user-uploaded badges and thumbnails route through `useAttachmentOpen`, and preview reuses the same `cinna`/`local` source split. The composer's files, pasted ones included, open here through `useComposerAttachmentOpen`, and the inline thumbnails share this feature's image read and cache.
 - [Agent Attachments](../agent_attachments/agent_attachments.md): agent-attached badges preview too; they used to be download-only.
 - [File References](../file_references/file_references.md): the second way into this modal. It covers resolution, consent, credential files and the Open strategy. An HTML page's assets go through the same containment, consent and credential checks, and its right-click menu offers Open in browser.
-- [Artifacts](../artifacts/artifacts.md): the header's **Publish…** for an agent file. The preview target remembers the persisted message the reference was in (`messageId` on `useFilePreviewStore`'s `agentFile` target) so the card is placed after it.
+- [Artifacts](../artifacts/artifacts.md): the ⋯ menu's **Publish** for an agent file; and the **Fill the window** choice, which its Preview shares. The preview target remembers the persisted message the reference was in (`messageId` on `useFilePreviewStore`'s `agentFile` target) so the card is placed after it.
 - [Run Commands](../run_commands/run_commands.md): the header's **Run…** hands a script to the Run Script window; main builds the command and the window is the same one a clicked command opens. The window's ⋯ menu *Preview source* goes the other way.
 - [Note Attachments](../note_attachments/note_attachments.md): a separate preview surface, `NotePreviewModal`, which shows a live note body at the composer stage. This feature previews files already sent or on disk.
 
@@ -449,9 +500,8 @@ For file paths, IPC signatures and method-level detail see [File Preview — Tec
 - **PDF preview**: render PDF pages inline. Today a PDF downloads, or opens in its system app for an agent file.
 - **Image preview for agent files**: an image a folder agent names still opens in its system app; the agent-file read is text only.
 - **Syntax highlighting for more code** (`.ts`, `.sh`, …): those attachments still download, and agent files show them as plain text. `CodePreview` registers only the grammars its kinds need (python, and xml with css and javascript for HTML source); another language is a new `PreviewRenderKind` plus its grammar, not a switch to lowlight's whole `common` set.
-- **Copying the file's content** from the preview modal: only an agent file's header path copies today.
 - **A dialog role and a focus trap**: today, Shift+Tab from the card walks back into the page, and Tab walks out of an HTML page's frame the same way.
 
 ---
 
-*Last updated: 2026-09-30*
+*Last updated: 2026-11-09*

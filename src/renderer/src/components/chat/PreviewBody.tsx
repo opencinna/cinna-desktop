@@ -8,6 +8,7 @@ import { previewMarkdownComponents } from './FilePreviewContents'
 import { JsonLinesTree, JsonTree, JsonTreeBoundary, jsonLinesShape, useParsedJson } from './JsonTree'
 import { MAX_TABLE_COLUMNS, MAX_TABLE_RECORDS, jsonLinesTable } from '../../utils/jsonLinesTable'
 import { CodePreview, MAX_HIGHLIGHT_CHARS, PreviewNote, plainTextNote } from './CodePreview'
+import { DiffPreview } from './DiffPreview'
 import { XmlTree, type XmlReveal } from './XmlTree'
 import { MAX_PREVIEW_BYTES, type PreviewRenderKind } from '../../../../shared/filePreview'
 import { parseDelimited } from '../../utils/textTable'
@@ -54,6 +55,10 @@ export function PreviewBody({
 
   if (kind === 'python') {
     return <CodePreview text={text} language="python" anchorLines={anchorLines} />
+  }
+
+  if (kind === 'diff') {
+    return <DiffPreview text={text} />
   }
 
   // Only a composer file not sent yet gets here as `html`: no frame serves it.

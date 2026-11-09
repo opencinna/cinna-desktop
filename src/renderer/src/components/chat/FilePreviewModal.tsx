@@ -1,4 +1,6 @@
 import {
+  Check,
+  Copy,
   Download,
   FileText,
   Filter,
@@ -18,12 +20,17 @@ import { createPortal } from 'react-dom'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 import { markdownToc } from '../../utils/markdownToc'
 import { pythonOutline } from '../../utils/pythonOutline'
+import { diffOutline, parseDiff } from '../../utils/diffDocument'
+import { rememberPreviewView, rememberedPreviewView } from '../../utils/previewViewMemory'
 import { parseXml } from '../../utils/xmlDocument'
 import { xmlOutline } from '../../utils/xmlOutline'
 import { useUIStore } from '../../stores/ui.store'
 import { FileActionsMenu, PREVIEW_POPOVER_ATTR } from './FileActionsMenu'
 import { CONTENTS_PANEL_ID, CONTENTS_PANEL_WIDTH, FilePreviewContents } from './FilePreviewContents'
 import { MAX_HIGHLIGHT_CHARS } from './CodePreview'
+import { DiffPreview } from './DiffPreview'
+import { FULL_WINDOW_CARD_STYLE, PreviewFullWindowButton, usePreviewFullWindow } from './PreviewFullWindow'
+import { TRAFFIC_LIGHT_GUTTER } from '../layout/TopBar'
 import type { XmlReveal } from './XmlTree'
 import { MarkdownPreview, PreviewBody, XmlPreview, type JsonLinesView } from './PreviewBody'
 import { jsonLinesShape } from './JsonTree'
@@ -61,6 +68,8 @@ const OVERLAY_PADDING_X_REM = 2
 const CARD_BORDER_X = 2
 /** The text read cap, as the truncation notices name it. */
 const MAX_PREVIEW_MB = MAX_PREVIEW_BYTES / (1024 * 1024)
+/** How long the ⋯ trigger says "copied". */
+const COPIED_MARK_MS = 1200
 
 /**
  * Where the Contents panel goes, from the window width alone.
@@ -288,6 +297,11 @@ export function FilePreviewModal(): React.JSX.Element | null {
   // XML is parsed once, here: the outline and the tree share the document.
   const xml = useMemo(() => (kind === 'xml' ? parseXml(text) : null), [kind, text])
   const xmlReveal = useRef<XmlReveal | null>(null)
+  // A diff too: the Contents list and the body share the reading.
+  const diff = useMemo(
+    () => (kind === 'diff' && !isLoading && text.length <= MAX_HIGHLIGHT_CHARS ? parseDiff(text) : null),
+    [kind, isLoading, text]
+  )
   const toc = useMemo(
     () =>
       kind === 'markdown'
@@ -299,8 +313,10 @@ export function FilePreviewModal(): React.JSX.Element | null {
           ? pythonOutline(text)
           : kind === 'xml'
             ? xmlOutline(xml)
-            : null,
-    [kind, markdown.body, text, xml]
+            : kind === 'diff'
+              ? diffOutline(diff)
+              : null,
+    [kind, markdown.body, text, xml, diff]
   )
   const anchorLines = useMemo(() => toc?.entries.map((entry) => entry.line), [toc])
   const targetKey = !target
@@ -310,6 +326,10 @@ export function FilePreviewModal(): React.JSX.Element | null {
       : target.type === 'path'
         ? `path:${target.path}`
         : `agent-file:${target.agentId}:${target.ref.path}`
+  const canFillWindow = error === null && !notice
+  const fill = usePreviewFullWindow(canFillWindow)
+  const fullWindow = fill.on
+  const { justToggled } = fill
   // CSV-only: toggles the per-column filter/sort controls. Reset whenever a
   // different file opens so the controls don't carry over between previews.
   const [filtersEnabled, setFiltersEnabled] = useState(false)
@@ -370,12 +390,48 @@ export function FilePreviewModal(): React.JSX.Element | null {
     const timer = setTimeout(() => setSlowOpenFor(openSeq), ENTRANCE_WAIT_MS)
     return () => clearTimeout(timer)
   }, [isLoading, openSeq])
+  // Where the reader is, as a share of the body, across a change that rewraps
+  // the text: the pixel offset would land somewhere else.
+  const pendingScrollShare = useRef<number | null>(null)
+  const holdScrollShare = (): void => {
+    const body = bodyRef.current
+    if (!body) return
+    const range = body.scrollHeight - body.clientHeight
+    pendingScrollShare.current = range > 0 ? body.scrollTop / range : 0
+  }
+  const toggleFullWindow = (): void => {
+    holdScrollShare()
+    setAnimateWidthFor(null)
+    fill.toggle()
+  }
   const toggleContents = (): void => {
+    // Filling the window, the body takes what the panel leaves, so its text rewraps.
+    if (fullWindow) holdScrollShare()
     setSlowOpenFor(null)
     toggledAt.current = Date.now()
     setAnimateWidthFor(openSeq)
     setClosingFor(contentsOpen ? openSeq : null)
     togglePreviewContents()
+  }
+
+  // Copy content's answer, for this open only: the mark on the trigger, or a
+  // row under the header for what a mark cannot say.
+  const [copyFor, setCopyFor] = useState<{ openSeq: number; result: 'copied' | 'partial' | 'failed' } | null>(null)
+  const copyResult = copyFor?.openSeq === openSeq ? copyFor.result : null
+  const [copiedMarkFor, setCopiedMarkFor] = useState<number | null>(null)
+  useEffect(() => {
+    if (copiedMarkFor === null) return
+    const timer = setTimeout(() => setCopiedMarkFor(null), COPIED_MARK_MS)
+    return () => clearTimeout(timer)
+  }, [copiedMarkFor])
+  const copyContent = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopyFor({ openSeq, result: truncated ? 'partial' : 'copied' })
+      setCopiedMarkFor(openSeq)
+    } catch {
+      setCopyFor({ openSeq, result: 'failed' })
+    }
   }
 
   // When the current preview opened, for the press guard below.
@@ -404,7 +460,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
       if (Date.now() - openedAt.current < OPEN_PRESS_GUARD_MS) return
       // Toggling Contents moves the card's edge from under the pointer: a
       // second press on the spot must not land on the backdrop and close.
-      if (Date.now() - toggledAt.current < OPEN_PRESS_GUARD_MS) return
+      if (Date.now() - toggledAt.current < OPEN_PRESS_GUARD_MS || justToggled()) return
       // A press on the backdrop would otherwise move focus to the page after
       // close has handed it back to the element that opened the preview.
       if (overlayRef.current?.contains(e.target as Node)) e.preventDefault()
@@ -416,9 +472,44 @@ export function FilePreviewModal(): React.JSX.Element | null {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mousedown', onMouse, true)
     }
-  }, [targetKey, exiting, close])
+  }, [targetKey, exiting, close, justToggled])
 
   useCardEntrance({ cardRef, backdropRef, open: target !== null, openSeq, settled: !isLoading, exiting })
+
+  // Back to where the user left this file, before anything paints. The body
+  // element outlives the file in it, so a file with nothing remembered starts
+  // from the top rather than wherever the last one was. A rendered HTML page
+  // scrolls inside its own frame, out of reach, and its body must not move.
+  const scrollKnownFor = useRef<string | null>(null)
+  // The position the restore landed on. Its own scroll event is not the user
+  // moving: where the content came back shorter (folds and filters reset on
+  // reopen) it clamped, and saving that would lose where they were for good.
+  const restoredTop = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    scrollKnownFor.current = null
+    if (!body || !targetKey || exiting) return
+    body.scrollTop = 0
+    if (isLoading || kind === null || kind === 'html') return
+    const view = rememberedPreviewView(targetKey)
+    body.scrollTop = !view
+      ? 0
+      : view.width === body.clientWidth
+        ? view.scrollTop
+        : view.share * (body.scrollHeight - body.clientHeight)
+    restoredTop.current = body.scrollTop
+    scrollKnownFor.current = targetKey
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetKey, openSeq, isLoading, kind])
+
+  // After the body took its new width (Contents is laid out by then too).
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    const share = pendingScrollShare.current
+    if (!body || share === null) return
+    pendingScrollShare.current = null
+    body.scrollTop = share * (body.scrollHeight - body.clientHeight)
+  })
 
   // The exit: the entrance played backwards, from the same origin and at the
   // same speed, holding its last frame until the modal unmounts. A card closed
@@ -472,19 +563,22 @@ export function FilePreviewModal(): React.JSX.Element | null {
     agentFile && isRunnableScriptRef(agentFile.ref, text)
       ? previewRunSource(target, activeChatId, activeChatAgentId)
       : null
+  const nothingToCopy = isLoading || error !== null || notice !== null || text === ''
   const TitleIcon = agentFile?.ref.kind === 'dir' ? Folder : kind === 'image' ? ImageIcon : FileText
 
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
   const geometry = contentsGeometry(windowWidth, rem)
   const { closedWidth } = geometry
-  const sideBySide = geometry.sideBySide && slowOpenFor !== openSeq
-  const widened = panelOpen && sideBySide
+  const sideBySide = fullWindow || (geometry.sideBySide && slowOpenFor !== openSeq)
+  const widened = panelOpen && sideBySide && !fullWindow
   const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
   const widthTransition = 'width 170ms cubic-bezier(0.2, 0, 0, 1)'
   // Explicit only while the Contents button exists, so opening the panel is a
   // change between two pixel widths that can animate; `flexShrink` keeps the
   // widened card from being squeezed back into the overlay's padding.
-  const cardStyle: React.CSSProperties | undefined = showContents
+  const cardStyle: React.CSSProperties | undefined = fullWindow
+    ? FULL_WINDOW_CARD_STYLE
+    : showContents
     ? {
         width: widened ? closedWidth + CONTENTS_PANEL_WIDTH : closedWidth,
         maxWidth: 'none',
@@ -501,22 +595,27 @@ export function FilePreviewModal(): React.JSX.Element | null {
     // user just pressed.
     <div
       ref={overlayRef}
-      className={`fixed inset-0 z-50 flex items-start justify-center px-4 pt-[10vh]${exiting ? ' pointer-events-none' : ''}`}
+      className={`fixed inset-0 z-50 flex items-start justify-center${fullWindow ? '' : ' px-4 pt-[10vh]'}${exiting ? ' pointer-events-none' : ''}`}
     >
       <div ref={backdropRef} aria-hidden className="app-modal-scrim absolute inset-0" />
       <div
         ref={cardRef}
         tabIndex={-1}
         style={cardStyle}
+        onClickCapture={fill.onClickCapture}
         className={
-          'relative w-full max-h-[80vh] flex flex-col rounded-xl border ' +
-          'app-modal-panel focus:outline-none ' +
-          (html ? 'max-w-6xl h-[80vh]' : 'max-w-3xl')
+          'relative w-full flex flex-col app-modal-panel focus:outline-none ' +
+          (fullWindow
+            ? 'h-full'
+            : 'max-h-[80vh] rounded-xl border ' + (html ? 'max-w-6xl h-[80vh]' : 'max-w-3xl'))
         }
       >
         <div
-          className="flex items-center justify-between gap-2 px-5 py-3 border-b
-            border-[var(--color-border)]"
+          // Clear of the traffic lights, which stay on top of everything.
+          className={
+            'flex items-center justify-between gap-2 py-3 pr-5 border-b border-[var(--color-border)] ' +
+            (fullWindow ? `app-drag-strip ${TRAFFIC_LIGHT_GUTTER}` : 'pl-5')
+          }
         >
           <div className="flex items-center gap-2 min-w-0">
             <TitleIcon size={16} className="text-[var(--color-text-muted)] shrink-0" />
@@ -535,6 +634,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
             )}
           </div>
           <div className={`flex items-center shrink-0 ${agentFile ? 'gap-1.5' : 'gap-1'}`}>
+            {canFillWindow && <PreviewFullWindowButton on={fullWindow} onToggle={toggleFullWindow} />}
             {(kind === 'csv' || (jsonLinesRecords && jsonLinesView === 'table')) && !notice && (
               <button
                 type="button"
@@ -652,6 +752,9 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 onOpen={() => void openAgentFileExternally()}
                 onReveal={() => void revealAgentFile()}
                 onOpenInBrowser={html ? () => void openInBrowser() : undefined}
+                onCopy={() => void copyContent()}
+                copyDisabled={nothingToCopy}
+                copied={copiedMarkFor === openSeq}
                 onPublish={
                   canPublish && agentFile.ref.inside && !isCredentialFileRef(agentFile.ref)
                     ? () => {
@@ -683,6 +786,27 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 {pendingAction === 'browser' ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
               </button>
             )}
+            {/* An agent file has this in its ⋯ menu. */}
+            {!agentFile && kind !== null && kind !== 'image' && !notice && (
+              <button
+                type="button"
+                onClick={() => void copyContent()}
+                disabled={nothingToCopy}
+                className={MODAL_HEADER_ICON + ` text-[var(--color-text-muted)]
+                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-50`}
+                title="Copy content"
+                aria-label={`Copy content of ${filename}`}
+              >
+                {copiedMarkFor === openSeq ? (
+                  <Check size={14} className="text-[var(--color-success)]" />
+                ) : (
+                  <Copy size={14} />
+                )}
+              </button>
+            )}
+            <span aria-live="polite" className="sr-only">
+              {copiedMarkFor === openSeq ? 'Copied' : ''}
+            </span>
             {attachmentTarget && downloadable && (
               <button
                 type="button"
@@ -720,6 +844,22 @@ export function FilePreviewModal(): React.JSX.Element | null {
             {actionErrorText(actionError)}
           </div>
         )}
+        {copyResult === 'failed' && (
+          <div
+            role="alert"
+            className="px-5 py-2 text-xs text-[var(--color-danger)] border-b border-[var(--color-border)]"
+          >
+            Couldn't copy the content: the clipboard refused it.
+          </div>
+        )}
+        {copyResult === 'partial' && (
+          <div
+            role="status"
+            className="px-5 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)]"
+          >
+            Copied the first {MAX_PREVIEW_MB} MB: the file is larger than the preview reads.
+          </div>
+        )}
 
         {/* The body, and beside it (or over its right edge) the Contents
             panel. The body keeps the closed card's width whether the panel is
@@ -729,7 +869,28 @@ export function FilePreviewModal(): React.JSX.Element | null {
               inside so it does not cover the header's rule. */}
           <div
             ref={bodyRef}
-            style={showContents ? { width: closedWidth - CARD_BORDER_X, flex: 'none' } : undefined}
+            onScroll={(event) => {
+              if (!targetKey || scrollKnownFor.current !== targetKey) return
+              const { scrollTop } = event.currentTarget
+              if (restoredTop.current === scrollTop) return
+              restoredTop.current = null
+              const { scrollHeight, clientHeight, clientWidth } = event.currentTarget
+              const range = scrollHeight - clientHeight
+              rememberPreviewView(targetKey, {
+                scrollTop,
+                share: range > 0 ? scrollTop / range : 0,
+                width: clientWidth
+              })
+            }}
+            style={
+              !showContents
+                ? undefined
+                : fullWindow
+                  ? panelOpen
+                    ? { width: windowWidth - CONTENTS_PANEL_WIDTH, flex: 'none' }
+                    : undefined
+                  : { width: closedWidth - CARD_BORDER_X, flex: 'none' }
+            }
             className={
               (htmlRendered
                 ? 'overflow-hidden'
@@ -756,9 +917,17 @@ export function FilePreviewModal(): React.JSX.Element | null {
             ) : kind ? (
               <>
                 {kind === 'image' ? (
-                  image && <ImagePreview image={image} alt={filename} />
+                  image && <ImagePreview image={image} alt={filename} fullWindow={fullWindow} />
                 ) : kind === 'markdown' ? (
-                  <MarkdownPreview key={targetKey} card={markdown.card} body={markdown.body} />
+                  <div
+                    // Prose stays at the card's measure: filling a wide window, its lines would run to 150 characters.
+                    className={fullWindow ? 'mx-auto' : undefined}
+                    style={fullWindow ? { maxWidth: closedWidth } : undefined}
+                  >
+                    <MarkdownPreview key={targetKey} card={markdown.card} body={markdown.body} />
+                  </div>
+                ) : kind === 'diff' ? (
+                  <DiffPreview key={targetKey} text={text} parsed={diff} />
                 ) : kind === 'xml' ? (
                   <XmlPreview key={targetKey} text={text} parsed={xml} truncated={truncated} revealRef={xmlReveal} />
                 ) : html && targetKey ? (
@@ -779,6 +948,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
                     view={htmlView}
                     text={text}
                     title={filename}
+                    square={fullWindow}
                   />
                 ) : (
                   <PreviewBody
@@ -803,13 +973,13 @@ export function FilePreviewModal(): React.JSX.Element | null {
               </>
             ) : null}
           </div>
-          {showContents && toc && (panelOpen || (closingFor === openSeq && animateWidth && sideBySide && !reduceMotion)) && (
+          {showContents && toc && (panelOpen || (closingFor === openSeq && animateWidth && sideBySide && !fullWindow && !reduceMotion)) && (
             <FilePreviewContents
               key={targetKey}
               entries={toc.entries}
               bodyRef={bodyRef}
               overlay={!sideBySide}
-              left={closedWidth - CARD_BORDER_X}
+              left={fullWindow ? windowWidth - CONTENTS_PANEL_WIDTH : closedWidth - CARD_BORDER_X}
               onBeforeGo={kind === 'xml' ? (line) => xmlReveal.current?.(line) : undefined}
             />
           )}
@@ -831,7 +1001,15 @@ const IMAGE_CHROME_REM = 6
  * (the store settles after `decode()`), and with its natural size as `width`
  * and `height` so the box is final on the first paint.
  */
-function ImagePreview({ image, alt }: { image: { url: string; width: number; height: number }; alt: string }): React.JSX.Element {
+function ImagePreview({
+  image,
+  alt,
+  fullWindow
+}: {
+  image: { url: string; width: number; height: number }
+  alt: string
+  fullWindow: boolean
+}): React.JSX.Element {
   return (
     <img
       data-testid="image-preview"
@@ -841,7 +1019,7 @@ function ImagePreview({ image, alt }: { image: { url: string; width: number; hei
       height={image.height || undefined}
       draggable={false}
       className="block max-w-full object-contain"
-      style={{ width: 'auto', height: 'auto', maxHeight: `calc(80vh - ${IMAGE_CHROME_REM}rem)` }}
+      style={{ width: 'auto', height: 'auto', maxHeight: `calc(${fullWindow ? 100 : 80}vh - ${IMAGE_CHROME_REM}rem)` }}
     />
   )
 }

@@ -15,6 +15,8 @@ import { parseXml } from '../../utils/xmlDocument'
 import type { XmlReveal } from '../chat/XmlTree'
 import { MODAL_HEADER_ACTION, MODAL_HEADER_ICON } from '../ui/modalHeader'
 import { MarkdownPreview, PreviewBody, XmlPreview } from '../chat/PreviewBody'
+import { FULL_WINDOW_CARD_STYLE, PreviewFullWindowButton, usePreviewFullWindow } from '../chat/PreviewFullWindow'
+import { TRAFFIC_LIGHT_GUTTER } from '../layout/TopBar'
 
 /** The file preview's entrance: short enough to never be waited on. */
 const ENTRANCE: KeyframeAnimationOptions = { duration: 170, easing: 'cubic-bezier(0.2, 0, 0, 1)' }
@@ -139,6 +141,9 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
   const backdropRef = useRef<HTMLDivElement>(null)
   const openedAt = useRef(Date.now())
   const Icon = artifact.kind === 'site' ? Globe : FileText
+  // One choice with the file preview. A deleted or failed artifact is only a sentence.
+  const fill = usePreviewFullWindow(state.status === 'loading' || state.status === 'ready')
+  const { justToggled } = fill
 
   // Ask main for a view; the token is released when this preview closes.
   useEffect(() => {
@@ -205,7 +210,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
     const onMouse = (event: MouseEvent): void => {
       if (!cardRef.current || cardRef.current.contains(event.target as Node)) return
       if (shareOpen.current) return
-      if (Date.now() - openedAt.current < OPEN_PRESS_GUARD_MS) return
+      if (Date.now() - openedAt.current < OPEN_PRESS_GUARD_MS || justToggled()) return
       event.preventDefault()
       onClose()
     }
@@ -215,7 +220,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mousedown', onMouse, true)
     }
-  }, [onClose])
+  }, [onClose, justToggled])
 
   const openInBrowser = async (): Promise<void> => {
     setMessage(null)
@@ -236,7 +241,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
   const headerPath = ready && !panelOpen && ready.files.length > 1 && shownPath !== ready.entry ? shownPath : null
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[10vh]">
+    <div className={`fixed inset-0 z-50 flex items-start justify-center${fill.on ? '' : ' px-4 pt-[10vh]'}`}>
       <div ref={backdropRef} aria-hidden className="app-modal-scrim absolute inset-0" />
       <div
         ref={setCard}
@@ -245,9 +250,20 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
         aria-modal="true"
         aria-label={`Preview of ${artifact.title}`}
         data-artifact-preview={artifact.id}
-        className="relative flex h-[80vh] w-full max-w-6xl flex-col rounded-xl border app-modal-panel focus:outline-none"
+        style={fill.on ? FULL_WINDOW_CARD_STYLE : undefined}
+        onClickCapture={fill.onClickCapture}
+        className={
+          'relative flex w-full flex-col app-modal-panel focus:outline-none ' +
+          (fill.on ? 'h-full' : 'h-[80vh] max-w-6xl rounded-xl border')
+        }
       >
-        <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-5 py-3">
+        <div
+          // Clear of the traffic lights, which stay on top of everything.
+          className={
+            'flex items-center justify-between gap-2 border-b border-[var(--color-border)] py-3 pr-5 ' +
+            (fill.on ? `app-drag-strip ${TRAFFIC_LIGHT_GUTTER}` : 'pl-5')
+          }
+        >
           <div className="flex min-w-0 items-center gap-2">
             {/* There from the first frame, disabled until the view is in, so the title never shifts. */}
             <button
@@ -285,6 +301,17 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
                 <Share2 size={12} aria-hidden />
                 Share…
               </button>
+            )}
+            {/* After Share…, so that one appearing does not move it. */}
+            {(state.status === 'loading' || state.status === 'ready') && (
+              <PreviewFullWindowButton
+                on={fill.on}
+                onToggle={() => {
+                  // Its trigger is about to move, and the popover only measures on open.
+                  share.setOpen(false)
+                  fill.toggle()
+                }}
+              />
             )}
             <button type="button" onClick={() => void openInBrowser()} className={HEADER_ACTION_CLASS} aria-label={`Open ${artifact.title} in the browser`}>
               <ExternalLink size={12} aria-hidden />
@@ -343,6 +370,7 @@ function PreviewCard({ artifact, onClose }: { artifact: PublishedArtifact; onClo
               panelOpen={panelOpen}
               panelId={panelId}
               onOpenInBrowser={() => void openInBrowser()}
+              fullWindow={fill.on}
             />
           ) : null}
         </div>
@@ -363,7 +391,8 @@ function FilesView({
   onSelect,
   panelOpen,
   panelId,
-  onOpenInBrowser
+  onOpenInBrowser,
+  fullWindow
 }: {
   title: string
   token: string
@@ -376,6 +405,7 @@ function FilesView({
   panelOpen: boolean
   panelId: string
   onOpenInBrowser: () => void
+  fullWindow: boolean
 }): React.JSX.Element {
   const file = files.find((candidate) => candidate.path === selected) ?? null
   const shown = file ? artifactFileView(baseUrl, file) : null
@@ -385,7 +415,7 @@ function FilesView({
     if (path === selected) setReload((n) => n + 1)
     else onSelect(path)
   }
-  const corner = panelOpen ? 'rounded-br-xl' : 'rounded-b-xl'
+  const corner = fullWindow ? '' : panelOpen ? 'rounded-br-xl' : 'rounded-b-xl'
   return (
     <>
       {panelOpen && <ul id={panelId} aria-label="Files" className="w-64 shrink-0 overflow-auto border-r border-[var(--color-border)] py-2">
@@ -416,7 +446,7 @@ function FilesView({
       </ul>}
       <div className="min-w-0 flex-1">
         {file && shown?.type === 'text' ? (
-          <TextFile key={file.path} token={token} path={file.path} kind={shown.kind} corner={corner} />
+          <TextFile key={file.path} token={token} path={file.path} kind={shown.kind} corner={corner} fullWindow={fullWindow} />
         ) : file && shown?.type === 'frame' ? (
           <iframe
             key={`${file.path}#${reload}`}
@@ -452,8 +482,27 @@ type TextState =
  * another file starts over at loading; an answer for a file no longer shown is
  * dropped.
  */
-function TextFile({ token, path, kind, corner }: { token: string; path: string; kind: TextKind; corner: string }): React.JSX.Element {
+function TextFile({
+  token,
+  path,
+  kind,
+  corner,
+  fullWindow
+}: {
+  token: string
+  path: string
+  kind: TextKind
+  corner: string
+  fullWindow: boolean
+}): React.JSX.Element {
   const [state, setState] = useState<TextState>({ status: 'loading' })
+  // The text rewraps when the card changes size: keep the reader's share of the way down.
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const scrollShare = useRef(0)
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current
+    if (scroller) scroller.scrollTop = scrollShare.current * (scroller.scrollHeight - scroller.clientHeight)
+  }, [fullWindow])
   useEffect(() => {
     let cancelled = false
     window.api.htmlPreview
@@ -471,7 +520,16 @@ function TextFile({ token, path, kind, corner }: { token: string; path: string; 
   }, [token, path])
 
   return (
-    <div data-testid="artifact-preview-text" className={`h-full overflow-auto ${corner} px-5 py-4`}>
+    <div
+      ref={scrollerRef}
+      data-testid="artifact-preview-text"
+      onScroll={(event) => {
+        const { scrollTop, scrollHeight, clientHeight } = event.currentTarget
+        const range = scrollHeight - clientHeight
+        if (range > 0) scrollShare.current = scrollTop / range
+      }}
+      className={`h-full overflow-auto ${corner} px-5 py-4`}
+    >
       {state.status === 'loading' ? (
         <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
           <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden />
@@ -481,7 +539,10 @@ function TextFile({ token, path, kind, corner }: { token: string; path: string; 
         <div className="text-xs text-[var(--color-danger)]">{state.message}</div>
       ) : (
         <>
-          <TextBody kind={kind} text={state.text} truncated={state.truncated} />
+          {/* Prose stays at the card's measure: filling a wide window, its lines would run to 150 characters. */}
+          <div className={fullWindow && kind === 'markdown' ? 'mx-auto max-w-3xl' : undefined}>
+            <TextBody kind={kind} text={state.text} truncated={state.truncated} />
+          </div>
           {state.truncated && (
             <div className="mt-3 text-[10px] italic text-[var(--color-text-muted)]">
               Preview truncated — open it in the browser to see the full file.

@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentFileRef } from '../../../../shared/agentFiles'
 
+import { rememberPreviewView } from '../../utils/previewViewMemory'
+
 vi.mock('../../stores/logger.store', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -79,6 +81,14 @@ afterEach(() => {
 })
 
 describe('the rendered page', () => {
+  it('does not move a body it scrolls inside its own frame, whatever was remembered', async () => {
+    rememberPreviewView(`agent-file:folder:a:${agentTarget().ref.path}`, { scrollTop: 300, share: 0, width: 0 })
+    render(<FilePreviewModal />)
+    open({ target: agentTarget(), kind: 'html', text: SOURCE })
+    await settle()
+    expect(frame()!.closest<HTMLElement>('.overflow-hidden')!.scrollTop).toBe(0)
+  })
+
   it('loads the served URL in a frame with exactly the preview sandbox', async () => {
     render(<FilePreviewModal />)
     open({ target: agentTarget(), kind: 'html', text: SOURCE })
@@ -223,7 +233,8 @@ describe('Open in browser', () => {
     expect(Array.from(menu.querySelectorAll('[role="menuitem"]')).map((m) => m.textContent)).toEqual([
       'Open',
       'Open in browser',
-      'Open folder'
+      'Open folder',
+      'Copy content'
     ])
     fireEvent.click(screen.getByRole('menuitem', { name: 'Open in browser' }))
     expect(openInBrowser).toHaveBeenCalledTimes(1)

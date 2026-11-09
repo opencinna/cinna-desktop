@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ArtifactPreviewModal, artifactFileView } from './ArtifactPreviewModal'
 import { useArtifactPreviewStore } from '../../stores/artifactPreview.store'
 import { useAuthStore } from '../../stores/auth.store'
+import { useUIStore } from '../../stores/ui.store'
 import type { ArtifactDetail, PublishedArtifact } from '../../../../shared/artifacts'
 
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
@@ -273,5 +274,41 @@ describe('the artifact preview', () => {
     expect(artifactFileView(BASE, { path: 'c.svg', size: 1, mime: 'image/svg+xml' })).toEqual({ type: 'frame', url: `${BASE}c.svg` })
     expect(artifactFileView(BASE, { path: 'clip.mp4', size: 1, mime: 'video/mp4' })).toEqual({ type: 'frame', url: `${BASE}clip.mp4` })
     expect(artifactFileView(BASE, { path: 'r.pdf', size: 1, mime: 'application/pdf' })).toEqual({ type: 'none' })
+  })
+})
+
+describe('filling the window', () => {
+  const card = (): HTMLElement => screen.getByRole('dialog')
+  const fill = (): HTMLElement => screen.getByRole('button', { name: 'Fill the window' })
+
+  beforeEach(() => {
+    useUIStore.setState({ previewFullWindow: false })
+    openArtifact.mockResolvedValue({ ok: true, token: 'art-tok', baseUrl: BASE, revision: 2, entry: null, files: [] })
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ArtifactPreviewModal />
+      </QueryClientProvider>
+    )
+  })
+
+  it('fills on the button, in the choice the file preview shares, and gives way to the drag strip', async () => {
+    act(() => useArtifactPreviewStore.getState().open(files, 'Acme', null))
+    await waitFor(() => expect(fill()).toBeTruthy())
+    expect(card().className).toContain('max-w-6xl')
+    fireEvent.click(fill())
+    expect(useUIStore.getState().previewFullWindow).toBe(true)
+    expect(card().className).not.toContain('max-w-6xl')
+    expect(fill().closest('.app-drag-strip')).not.toBeNull()
+    fireEvent.click(fill())
+    expect(useUIStore.getState().previewFullWindow).toBe(false)
+  })
+
+  it('offers nothing to fill for a deleted artifact, and keeps the card', async () => {
+    useUIStore.setState({ previewFullWindow: true })
+    openArtifact.mockResolvedValue({ ok: false, code: 'gone', message: 'gone' })
+    act(() => useArtifactPreviewStore.getState().open(files, 'Acme', null))
+    await waitFor(() => expect(screen.getByText(/was deleted/)).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Fill the window' })).toBeNull()
+    expect(card().className).toContain('max-w-6xl')
   })
 })

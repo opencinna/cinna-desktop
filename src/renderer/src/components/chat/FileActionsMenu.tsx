@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal, Upload } from 'lucide-react'
+import { Check, Copy, ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal, Upload } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
 import { MODAL_HEADER_ICON } from '../ui/modalHeader'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
@@ -20,16 +20,22 @@ interface FileActionsMenuProps {
   onReveal: () => void
   /** Offered for an HTML file: Open in browser, between Open and Open folder. */
   onOpenInBrowser?: () => void
-  /** Offered when the file can be published: Publish…, after a separator below Open folder. */
+  /** Copy content, after Open folder. Copies what the preview read, so it stays clickable while an action runs. */
+  onCopy: () => void
+  /** There is no text to copy: still loading, or the body is a notice or an error. */
+  copyDisabled: boolean
+  /** Just copied: the trigger says so for a moment, since the menu has closed by then. */
+  copied: boolean
+  /** Offered when the file can be published: Publish, after a separator below Copy content. */
   onPublish?: () => void
   /** The preview is fading out: an open menu goes with it. */
   dismissed: boolean
 }
 
 /**
- * The file preview's ⋯ menu: Open, Open in browser (HTML only) and Open folder
- * for a file an agent named, then Publish… under a separator when the file
- * can be published (it was a header button; it is as occasional as these).
+ * The file preview's ⋯ menu: Open, Open in browser (HTML only), Open folder and
+ * Copy content for a file an agent named, then Publish under a separator when
+ * the file can be published (it was a header button; it is as occasional as these).
  *
  * They used to be labelled header buttons; the header now holds the Contents
  * toggle, and these two are occasional. The trigger stays enabled while the
@@ -49,6 +55,9 @@ export function FileActionsMenu({
   onOpen,
   onReveal,
   onOpenInBrowser,
+  onCopy,
+  copyDisabled,
+  copied,
   onPublish,
   dismissed
 }: FileActionsMenuProps): React.JSX.Element {
@@ -142,7 +151,13 @@ export function FileActionsMenu({
         className={MODAL_HEADER_ICON + ` text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]
           hover:text-[var(--color-text)]`}
       >
-        {pendingAction !== null ? <Loader2 size={14} className="animate-spin" /> : <MoreHorizontal size={14} />}
+        {pendingAction !== null ? (
+          <Loader2 size={14} className="animate-spin" />
+        ) : copied ? (
+          <Check size={14} className="text-[var(--color-success)]" />
+        ) : (
+          <MoreHorizontal size={14} />
+        )}
       </button>
       {open &&
         menu.style &&
@@ -181,6 +196,16 @@ export function FileActionsMenu({
               <FolderOpen size={12} />
               Open folder
             </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={MENU_ITEM}
+              disabled={copyDisabled}
+              onClick={() => run(onCopy)}
+            >
+              <Copy size={12} />
+              Copy content
+            </button>
             {onPublish && (
               <>
                 <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
@@ -192,7 +217,7 @@ export function FileActionsMenu({
                   onClick={() => run(onPublish)}
                 >
                   <Upload size={12} />
-                  Publish…
+                  Publish
                 </button>
               </>
             )}
