@@ -40,7 +40,9 @@ function fakeCore(assets: Map<string, Buffer>) {
     reply: { status: 204 } as Reply,
     calls: [] as Array<{ url: string; ifNoneMatch?: string }>,
     /** Held theme responses, released by the test. */
-    gate: null as Promise<void> | null
+    gate: null as Promise<void> | null,
+    /** Answer 200 even to a matching If-None-Match: the same revision arriving as a full response. */
+    ignoreEtag: false
   }
   const fetch = async (url: string, init: RequestInit): Promise<Response> => {
     const headers = (init.headers ?? {}) as Record<string, string>
@@ -56,7 +58,7 @@ function fakeCore(assets: Map<string, Buffer>) {
     if (reply.status === 200) {
       const doc = reply.doc as { revision?: number }
       const etag = `"${doc.revision}"`
-      if (headers['If-None-Match'] === etag) return new Response(null, { status: 304 })
+      if (!state.ignoreEtag && headers['If-None-Match'] === etag) return new Response(null, { status: 304 })
       return new Response(reply.text ?? JSON.stringify(reply.doc), { status: 200, headers: { ETag: etag } })
     }
     return new Response(null, { status: reply.status })
@@ -74,6 +76,7 @@ const SERVERS: Record<string, { origin: string; base: string } | null> = {
 function setup(assets: Map<string, Buffer>, startup = 'local') {
   const core = fakeCore(assets)
   const emitted: BrandThemeChangedPayload[] = []
+  const adopted: string[] = []
   // Like getProfileScopeUserId(): the guest until an activation sets a profile.
   let active = 'local'
   const service = createBrandThemeService({
@@ -82,13 +85,14 @@ function setup(assets: Map<string, Buffer>, startup = 'local') {
     serverOf: (id) => SERVERS[id] ?? null,
     fetch: core.fetch,
     publish: (payload) => emitted.push(payload),
+    themeAvailable: (userId) => adopted.push(userId),
     intervalMs: 60_000
   })
   const activate = (id: string): void => {
     active = id
     service.applyForProfile(id)
   }
-  return { core, emitted, service, activate }
+  return { core, emitted, adopted, service, activate }
 }
 
 beforeEach(() => {
@@ -269,5 +273,78 @@ describe('brandThemeService against a fake core', () => {
     await service.refresh('acme-1')
     expect(service.get()?.logo).toBeUndefined()
     expect(holder.current!.sqlite.prepare('SELECT COUNT(*) AS n FROM brand_theme_assets').get()).toEqual({ n: 0 })
+  })
+})
+
+describe('the default mode\u2019s one-time adoption', () => {
+  const full = fixture('valid', 'full')
+
+  it('a new revision on the active origin offers it to the active profile, once per revision', async () => {
+    const { core, adopted, service, activate } = setup(full.assets)
+    activate('acme-1')
+    core.state.reply = { status: 200, doc: full.doc }
+    await service.refresh('acme-1')
+    expect(adopted).toEqual(['acme-1'])
+    await service.refresh('acme-1') // 304
+    expect(adopted).toEqual(['acme-1'])
+    core.state.ignoreEtag = true // the same revision as a full response
+    await service.refresh('acme-1')
+    expect(adopted).toEqual(['acme-1'])
+    core.state.reply = { status: 200, doc: withRevision(full.doc, 2) }
+    await service.refresh('acme-1')
+    expect(adopted).toEqual(['acme-1', 'acme-1'])
+  })
+
+  it('a profile switch mid-fetch offers nothing, and the origin\u2019s cache offers it on the next call', async () => {
+    const { core, adopted, service, activate } = setup(full.assets)
+    // The profile switched to has a brand of its own, which the theme landing is not.
+    core.state.reply = { status: 200, doc: full.doc }
+    activate('other')
+    await service.refresh('other')
+    activate('acme-1')
+    adopted.length = 0
+    let release = () => {}
+    core.state.gate = new Promise<void>((resolve) => { release = resolve })
+    const refreshing = service.refresh('acme-1')
+    await Promise.resolve()
+    activate('other')
+    release()
+    await refreshing
+    expect(adopted).toEqual([])
+    service.adoptDefaultMode('acme-1')
+    expect(adopted).toEqual(['acme-1'])
+  })
+
+  it('offers nothing without a brand: no server, no theme, a removed theme, or a refused one', async () => {
+    const { core, adopted, service, activate } = setup(full.assets)
+    service.adoptDefaultMode('local')
+    activate('acme-1')
+    service.adoptDefaultMode('acme-1') // a Cinna server with nothing cached
+    core.state.reply = { status: 204 }
+    await service.refresh('acme-1')
+    core.state.reply = { status: 200, doc: withRevision(fixture('invalid', 'color-css-injection').doc, 9) }
+    await service.refresh('acme-1')
+    expect(adopted).toEqual([])
+    core.state.reply = { status: 200, doc: full.doc }
+    await service.refresh('acme-1')
+    adopted.length = 0
+    core.state.reply = { status: 204 }
+    await service.refresh('acme-1')
+    service.adoptDefaultMode('acme-1')
+    expect(adopted).toEqual([])
+  })
+
+  it('never throws', async () => {
+    const core = fakeCore(full.assets)
+    const service = createBrandThemeService({
+      startupProfileId: () => 'acme-1', activeProfileId: () => 'acme-1', serverOf: (id) => SERVERS[id] ?? null,
+      fetch: core.fetch, publish: () => {}, intervalMs: 60_000,
+      themeAvailable: () => { throw new Error('no database') }
+    })
+    service.applyForProfile('acme-1')
+    core.state.reply = { status: 200, doc: full.doc }
+    await service.refresh('acme-1')
+    expect(() => service.adoptDefaultMode('acme-1')).not.toThrow()
+    expect(service.get()?.revision).toBe(1)
   })
 })

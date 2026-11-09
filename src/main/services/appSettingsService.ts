@@ -169,6 +169,24 @@ const VALUE_CHECKS: {
       }
     }
   },
+  /**
+   * A JSON object of `{ "<userId>": true }`, or empty. Written by
+   * `chatModeService.applyThemeDefaultOnce`, whose read tolerates anything else;
+   * this keeps the generic `settings:set` channel from storing another shape.
+   */
+  brandedDefaultModeProfiles: (value) => {
+    if (value.trim() === '') return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(value)
+    } catch {
+      throw new AppSettingsError('invalid_value', 'The branded default mode list must be JSON.')
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)
+      || Object.values(parsed as Record<string, unknown>).some((entry) => entry !== true)) {
+      throw new AppSettingsError('invalid_value', 'The branded default mode list maps a profile id to true.')
+    }
+  },
 
   localAgentsEnginePath: (value) => {
     const trimmed = value.trim()

@@ -55,6 +55,8 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsHomeAcknowledged: '',
   // JSON `{ "<host>": boolean }`. Empty = nobody has been asked yet.
   localDevConsent: '',
+  // JSON `{ "<userId>": true }`. Empty = no profile's default mode has adopted the theme colour.
+  brandedDefaultModeProfiles: '',
   // Undecided until `capabilityService` decides it once; read as off until then.
   notesCapability: 'unset',
   dashboardsCapability: 'unset'

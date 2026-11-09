@@ -133,7 +133,7 @@ test('Settings lists every runtime with its status; Add credential readies OpenC
     await reset.click()
     const dialog = page.getByRole('dialog', { name: 'Reset to defaults', exact: true })
     await expect(dialog.locator('p')).toHaveText(
-      'Reset OpenCode to its defaults? It sets Effort to Medium. It stays your default mode. This cannot be undone.'
+      'Reset OpenCode to its defaults? It sets Effort to Medium. It stays your default mode.'
     )
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(dialog).toHaveCount(0)

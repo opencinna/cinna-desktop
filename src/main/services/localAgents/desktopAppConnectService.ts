@@ -22,6 +22,7 @@
 import { appSettingsService } from '../appSettingsService'
 import { chatModeService } from '../chatModeService'
 import { appSettingsRepo } from '../../db/appSettings'
+import { runtimeModeDefaults, THEME_COLOR_PRESET_ID } from '../../../shared/chatModeRuntime'
 import { getSettingsScopeUserId } from '../../auth/scope'
 import { createLogger } from '../../logger/logger'
 import { localAgentService } from './localAgentService'
@@ -95,7 +96,8 @@ export function adoptDesktopEngine(engine: EngineLoginId): void {
     toolPolicy: runtimeMode.toolPolicy,
     complexity: runtimeMode.complexity ?? null,
     mcpProviderIds: runtimeMode.mcpProviderIds ?? [],
-    colorPreset: runtimeMode.colorPreset,
+    // Becoming the default takes the theme's colour, unless the user picked their own.
+    colorPreset: runtimeMode.colorPreset === runtimeModeDefaults(engine).colorPreset ? THEME_COLOR_PRESET_ID : runtimeMode.colorPreset,
     isDefault: true
   })
   logger.info('made the runtime mode the default', { modeId: runtimeMode.id, engine })

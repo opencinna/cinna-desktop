@@ -21,6 +21,7 @@ import {
   prependSelfHostedHistory
 } from '../../constants/selfHostedHistory'
 import { pickDefaultModelId } from '../../../../shared/modelDefaults'
+import { THEME_COLOR_PRESET_ID } from '../../../../shared/chatModeRuntime'
 import type { ConnectIntent } from '../../../../shared/connectIntent'
 import { ConnectIntentPanel } from './ConnectIntentPanel'
 import { useConnectIntentStore } from '../../stores/connectIntent.store'
@@ -63,7 +64,6 @@ interface ProviderOption {
   type: ProviderType
   name: string
   description: string
-  colorPreset: string
   pricingUrl?: string
   apiKeyUrl?: string
 }
@@ -73,7 +73,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     type: 'anthropic',
     name: 'Anthropic',
     description: 'Claude models (Opus, Sonnet, Haiku)',
-    colorPreset: 'amber',
     pricingUrl: 'https://claude.com/pricing#api',
     apiKeyUrl: 'https://platform.claude.com/settings/keys'
   },
@@ -81,7 +80,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     type: 'openai',
     name: 'OpenAI',
     description: 'ChatGPT (pro, mini, reasoning)',
-    colorPreset: 'emerald',
     pricingUrl: 'https://openai.com/api/pricing/',
     apiKeyUrl: 'https://platform.openai.com/api-keys'
   },
@@ -89,7 +87,6 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     type: 'gemini',
     name: 'Google Gemini',
     description: 'Gemini (pro, flash)',
-    colorPreset: 'sky',
     pricingUrl: 'https://ai.google.dev/gemini-api/docs/pricing',
     apiKeyUrl: 'https://aistudio.google.com/app/api-keys'
   }
@@ -224,7 +221,7 @@ export function OnboardingScreen({
         providerId,
         modelId,
         mcpProviderIds: [],
-        colorPreset: selectedProvider.colorPreset,
+        colorPreset: THEME_COLOR_PRESET_ID,
         isDefault: true
       })
     } catch (err) {

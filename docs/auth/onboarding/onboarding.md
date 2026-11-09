@@ -36,7 +36,7 @@ A `cinna://connect` deep link opens the same screen on a **confirm** step instea
 5. Editing the API key clears any stale test result so a previous ✓ can't slip through
 6. User clicks **Save & start**:
    - App creates the provider (enabled, with chosen default model) — blocking step
-   - App creates a chat mode named "Default" bound to that provider, marked `isDefault: true`, with a provider-themed color preset (Anthropic→amber, OpenAI→emerald, Gemini→sky) — non-blocking step
+   - App creates a chat mode named "Default" bound to that provider, marked `isDefault: true`, with the Theme Default color (it follows the accent, a server brand's when there is one) — non-blocking step
 7. Dismissed flag is set; onboarding screen unmounts; the new-chat screen renders with the default mode pre-applied (existing mode auto-apply behavior — see [Chat Modes](../../chat/chat_modes/chat_modes.md))
 
 ### Cinna Server Path
@@ -103,7 +103,7 @@ A `cinna://connect` deep link opens the same screen on a **confirm** step instea
 - The `cinna-confirm` step is unreachable by navigation. There is no button anywhere that leads to it; it exists only for an intent that arrived.
 - Detection uses **provider count, not user type** — Cinna users start with zero providers too (providers are default-scoped, see [Settings Scope](../../core/settings_scope/settings_scope.md)), so a freshly created Cinna user would re-trigger the gate. The dismissed flag prevents that re-prompt because it's set when the Cinna path completes.
 - A successful API-key path **attempts** to create a default chat mode but doesn't block on it. The provider is the load-bearing step; the chat mode is convenience and a failure is non-fatal.
-- The chat mode's `colorPreset` is chosen per provider type for visual distinction; the name is hard-coded as "Default" and the MCP list is empty.
+- The chat mode's `colorPreset` is `theme` whatever the provider: the composer then wears the accent instead of a per-provider colour that would clash with a brand. The name is hard-coded as "Default" and the MCP list is empty.
 - The API key must pass `provider:test-key` before **Save & start** enables — no "save anyway" escape hatch. Editing the key clears the previous test result.
 - Model names in the "Default model" dropdown are the **canonical names** returned by each provider's SDK (Anthropic `display_name`, Gemini `displayName`, OpenAI humanized from the id). No version-stripping transforms are applied to real model data; only static marketing copy on the provider-pick cards uses version-less labels.
 - The Cinna-server step's URL history is shared with `RegisterForm` via the same constants module so onboarding and the in-app "Add Account" flow stay in sync.

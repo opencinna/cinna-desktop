@@ -36,6 +36,7 @@ Let a Cinna server give every desktop signed in to it its own look: colours for 
 - **The tray popup gets colours only.** It has no mesh and stays transparent, so the brand's background is never written there.
 - **The first-run welcome screen stays stock.** It appears before any server is chosen, so no brand can apply to it.
 - **Dashboard pages follow the brand.** An HTML tile's frame gets the app's variables through the host context, and re-reads them when the brand moves, as it does for a theme change.
+- **The brand reaches the composer through the Theme Default chat-mode color.** A default chat mode whose color is `theme` is tinted by the accent, so it follows the brand. The first time a profile has a brand (cached is enough, after an account-config sync and when a new revision lands) its default mode adopts that color, once: a color the user picks afterwards is never overwritten, even if the brand is unpublished and republished. A profile with no default at that moment counts as done. See [Chat Modes](../../chat/chat_modes/chat_modes.md).
 - **Unlock controls use the brand's on-accent colour.** Under a brand the lock's avatar initial and unlock button draw their text in `accent.on`, not fixed white.
 
 ## Architecture Overview

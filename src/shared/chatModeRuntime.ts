@@ -64,6 +64,13 @@ export const RUNTIME_MODE_TAKES_CREDENTIAL: Record<AgentEngine, boolean> = {
   opencode: true
 }
 
+/**
+ * The chat-mode colour that follows the theme instead of naming a colour: the
+ * active accent, a server brand's when the profile has one. Default modes take
+ * it; a non-default runtime mode keeps its engine's identity colour.
+ */
+export const THEME_COLOR_PRESET_ID = 'theme'
+
 const RUNTIME_MODE_COLORS: Record<AgentEngine, string> = {
   claude: 'orange',
   codex: 'sky',
@@ -95,12 +102,21 @@ export function runtimeModeDefaults(engine: AgentEngine): RuntimeModeDefaults {
  * Everything Reset to defaults writes on a runtime mode (its star is kept):
  * shared by main's `chatModeService.reset` and the card, which shows the
  * result without waiting for the list and compares against it to know whether
- * there is anything to reset.
+ * there is anything to reset. Both the engine's colour and the theme's count as
+ * a default one and are kept, so moving the star does not make a mode resettable;
+ * any other colour goes to the one that mode would be given now.
  */
-export function runtimeModeResetFields(engine: AgentEngine): RuntimeModeDefaults & {
+export function runtimeModeResetFields(
+  engine: AgentEngine,
+  current: { isDefault: boolean; colorPreset: string }
+): RuntimeModeDefaults & {
   engine: AgentEngine; providerId: null; modelId: null; mcpProviderIds: string[]
 } {
-  return { ...runtimeModeDefaults(engine), engine, providerId: null, modelId: null, mcpProviderIds: [] }
+  const defaults = runtimeModeDefaults(engine)
+  const colorPreset = current.colorPreset === THEME_COLOR_PRESET_ID || current.colorPreset === defaults.colorPreset
+    ? current.colorPreset
+    : current.isDefault ? THEME_COLOR_PRESET_ID : defaults.colorPreset
+  return { ...defaults, colorPreset, engine, providerId: null, modelId: null, mcpProviderIds: [] }
 }
 
 /**

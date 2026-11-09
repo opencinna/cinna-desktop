@@ -136,6 +136,15 @@ export const chatModeRepo = {
     db.update(chatModes).set({ name }).where(and(eq(chatModes.id, id), eq(chatModes.userId, userId))).run()
   },
 
+  /** Set a row's colour alone: the one write that may touch a managed mode's. */
+  setColorPreset(ownerUserId: string, id: string, colorPreset: string, db: DbOrTx = getDb()): boolean {
+    const result = db.update(chatModes)
+      .set({ colorPreset })
+      .where(and(eq(chatModes.id, id), eq(chatModes.userId, ownerUserId)))
+      .run()
+    return result.changes > 0
+  },
+
   /**
    * Insert a runtime mode unless the user already has one for its engine. The
    * partial unique index on `(user_id, builtin_engine)` is what makes two

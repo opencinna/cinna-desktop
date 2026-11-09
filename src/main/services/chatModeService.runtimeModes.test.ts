@@ -20,6 +20,7 @@ vi.mock('../logger/logger', () => ({
 
 const { chatModeService } = await import('./chatModeService')
 const { chatModeRepo } = await import('../db/chatModes')
+const { appSettingsRepo } = await import('../db/appSettings')
 
 const USER = '__default__'
 
@@ -133,8 +134,22 @@ describe('reset', () => {
     chatModeService.reset(USER, runtimeMode('opencode').id)
     expect(runtimeMode('opencode')).toMatchObject({
       name: 'OpenCode', engine: 'opencode', providerId: null, modelId: null, complexity: 'medium', toolPolicy: 'workspace',
-      systemPrompt: '', colorPreset: 'emerald', mcpProviderIds: [], isDefault: true
+      systemPrompt: '', colorPreset: 'theme', mcpProviderIds: [], isDefault: true
     })
+  })
+
+  it('gives a mode that is not the default its engine\u2019s colour back', () => {
+    save(runtimeMode('opencode'), { colorPreset: 'rose' })
+    chatModeService.reset(USER, runtimeMode('opencode').id)
+    expect(runtimeMode('opencode')).toMatchObject({ colorPreset: 'emerald', isDefault: false })
+  })
+
+  it.each(['emerald', 'theme'])('keeps %s, a default colour, whether or not the mode is starred', (color) => {
+    for (const isDefault of [true, false]) {
+      save(runtimeMode('opencode'), { colorPreset: color, isDefault })
+      chatModeService.reset(USER, runtimeMode('opencode').id)
+      expect(runtimeMode('opencode')).toMatchObject({ colorPreset: color, isDefault })
+    }
   })
 
   it('refuses a saved mode', () => {
@@ -153,5 +168,99 @@ describe('single default across runtime and saved modes', () => {
     const row = chatModeService.get(USER, saved)!
     chatModeService.upsert(USER, { id: saved, name: row.name, isDefault: true })
     expect(defaults()).toEqual([saved])
+  })
+})
+
+describe('applyThemeDefaultOnce', () => {
+  const PROFILE = 'profile-a'
+  const managedDefault = (color = 'amber') => chatModeRepo.insert(PROFILE, { id: 'managed-mode:a', name: 'Account', colorPreset: color, isDefault: true, managed: true })
+  const sharedDefault = (color = 'orange') => chatModeRepo.insert(USER, { id: 'shared', name: 'Mine', colorPreset: color, isDefault: true })
+  const flags = () => appSettingsRepo.get('brandedDefaultModeProfiles')
+  const managedColor = () => chatModeRepo.getOwned(PROFILE, 'managed-mode:a')?.colorPreset
+  const sharedColor = () => chatModeRepo.getOwned(USER, 'shared')?.colorPreset
+
+  it('writes a managed default on its own row, which upsert would refuse', () => {
+    managedDefault()
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(true)
+    expect(managedColor()).toBe('theme')
+    expect(JSON.parse(flags())).toEqual({ [PROFILE]: true })
+  })
+
+  it('writes a shared default on the default scope\u2019s row, not the profile\u2019s', () => {
+    sharedDefault()
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(true)
+    expect(sharedColor()).toBe('theme')
+  })
+
+  it('follows the precedence toggle between the two defaults', () => {
+    managedDefault()
+    sharedDefault()
+    chatModeService.applyThemeDefaultOnce(PROFILE)
+    expect([sharedColor(), managedColor()]).toEqual(['theme', 'amber'])
+    chatModeRepo.setColorPreset(USER, 'shared', 'orange')
+    appSettingsRepo.set('brandedDefaultModeProfiles', '')
+    appSettingsRepo.set('prioritizeAccountDefaults', true)
+    chatModeService.applyThemeDefaultOnce(PROFILE)
+    expect([sharedColor(), managedColor()]).toEqual(['orange', 'theme'])
+  })
+
+  it('with no default is done: a mode starred later keeps the colour the user gave it', () => {
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(false)
+    expect(JSON.parse(flags())).toEqual({ [PROFILE]: true })
+    sharedDefault('rose')
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(false)
+    expect(sharedColor()).toBe('rose')
+  })
+
+  it('takes a shared row once per installation: a second branded profile leaves the user’s colour', () => {
+    sharedDefault()
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(true)
+    chatModeRepo.setColorPreset(USER, 'shared', 'rose')
+    expect(chatModeService.applyThemeDefaultOnce('profile-b')).toBe(false)
+    expect(sharedColor()).toBe('rose')
+    expect(JSON.parse(flags())).toEqual({ [PROFILE]: true, 'profile-b': true, shared: true })
+  })
+
+  it('still adopts a shared row for a profile after another adopted only its own managed row', () => {
+    chatModeRepo.insert('profile-b', { id: 'managed-mode:b', name: 'B', colorPreset: 'sky', isDefault: true, managed: true })
+    expect(chatModeService.applyThemeDefaultOnce('profile-b')).toBe(true)
+    sharedDefault()
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(true)
+    expect(sharedColor()).toBe('theme')
+  })
+
+  it('runs once: a second call and a colour the user picks since are left alone', () => {
+    sharedDefault()
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(true)
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(false)
+    chatModeRepo.setColorPreset(USER, 'shared', 'rose')
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(false)
+    expect(sharedColor()).toBe('rose')
+  })
+
+  it('sets the flag but reports no change for a default already on the theme colour', () => {
+    sharedDefault('theme')
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(false)
+    expect(JSON.parse(flags())).toEqual({ [PROFILE]: true, shared: true })
+    chatModeRepo.setColorPreset(USER, 'shared', 'rose')
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(false)
+    expect(sharedColor()).toBe('rose')
+  })
+
+  it('keeps one flag per profile', () => {
+    sharedDefault()
+    chatModeService.applyThemeDefaultOnce(PROFILE)
+    chatModeRepo.insert('profile-b', { id: 'managed-mode:b', name: 'B', colorPreset: 'sky', isDefault: true, managed: true })
+    chatModeRepo.setColorPreset(USER, 'shared', 'rose')
+    chatModeRepo.clearDefaults(USER)
+    expect(chatModeService.applyThemeDefaultOnce('profile-b')).toBe(true)
+    expect(JSON.parse(flags())).toEqual({ [PROFILE]: true, 'profile-b': true, shared: true })
+  })
+
+  it.each(['{not json', '[1]', '"text"', 'null'])('reads a corrupt flag value %s as empty', (corrupt) => {
+    appSettingsRepo.set('brandedDefaultModeProfiles', corrupt)
+    sharedDefault()
+    expect(chatModeService.applyThemeDefaultOnce(PROFILE)).toBe(true)
+    expect(JSON.parse(flags())).toEqual({ [PROFILE]: true, shared: true })
   })
 })

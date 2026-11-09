@@ -12,7 +12,7 @@ import { SettingsLabel } from './SettingsLayout'
 import { ResetRuntimeModeDialog, runtimeModeResetChanges } from './ResetRuntimeModeDialog'
 import { runtimeModeResetFields } from '../../../../shared/chatModeRuntime'
 import type { AgentEngine } from '../../../../shared/engine'
-import { COLOR_PRESETS } from '../../constants/chatModeColors'
+import { ChatModeColorPicker } from './ChatModeColorPicker'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 import { isCredentialActive } from '../../../../shared/credentials'
@@ -76,7 +76,7 @@ export function ChatModeCard({ mode: persistedMode, runtimeStatus }: ChatModeCar
   const confirmReset = (): void => {
     resetMutation.mutate(undefined, {
       onSuccess: () => {
-        const next = { ...latestMode.current, ...runtimeModeResetFields(persistedMode.builtinEngine as AgentEngine) }
+        const next = { ...latestMode.current, ...runtimeModeResetFields(persistedMode.builtinEngine as AgentEngine, latestMode.current) }
         latestMode.current = next
         setMode(next)
         setResets((n) => n + 1)
@@ -135,19 +135,8 @@ export function ChatModeCard({ mode: persistedMode, runtimeStatus }: ChatModeCar
   const colorField = (
           <div>
             <SettingsLabel>Color</SettingsLabel>
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              {COLOR_PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => save({ colorPreset: p.id })}
-                  className="w-6 h-6 rounded-full flex items-center justify-center transition-transform hover:scale-110"
-                  style={{ backgroundColor: p.border }}
-                  title={p.name}
-                >
-                  {mode.colorPreset === p.id && <Check size={12} className="text-white" />}
-                </button>
-              ))}
+            <div className="mt-1">
+              <ChatModeColorPicker value={mode.colorPreset} onChange={(colorPreset) => save({ colorPreset })} />
             </div>
           </div>
   )

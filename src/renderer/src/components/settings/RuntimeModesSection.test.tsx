@@ -184,11 +184,39 @@ describe('Reset to defaults', () => {
     fireEvent.click(resetButton(next))
     const dialog = screen.getByRole('dialog', { name: 'Reset to defaults' })
     expect(dialog.textContent).toContain('It loses its instructions, its model override and its 2 MCP providers, and sets Tools to Workspace.')
+    expect(dialog.textContent).toContain('This cannot be undone.')
     // Nothing is reset before the confirm.
     expect(api.reset).not.toHaveBeenCalled()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(api.reset).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['theme', true], ['orange', true], ['theme', false], ['orange', false]
+  ])('counts %s as at its defaults with the star %s, so moving the star offers no reset', async (colorPreset, isDefault) => {
+    api.modes = [runtimeMode('claude', 'ready', { toolPolicy: 'workspace', colorPreset, isDefault })]
+    mount()
+    const group = await runtimeGroup()
+    await waitFor(() => expect(resetButton(group).getAttribute('aria-disabled')).toBe('true'))
+  })
+
+  it('takes a starred mode in a picked colour to Theme Default, losing nothing, and keeps the two sides agreeing', async () => {
+    api.modes = [runtimeMode('claude', 'ready', { toolPolicy: 'workspace', colorPreset: 'rose', isDefault: true })]
+    mount()
+    const group = await runtimeGroup()
+    await waitFor(() => expect(resetButton(group).getAttribute('aria-disabled')).toBeNull())
+    fireEvent.click(resetButton(group))
+    const dialog = screen.getByRole('dialog', { name: 'Reset to defaults' })
+    expect(dialog.textContent).toContain('It sets Color to Theme Default.')
+    expect(dialog.textContent).toContain('It stays your default mode.')
+    // A colour is one click away again; only what a reset clears is gone for good.
+    expect(dialog.textContent).not.toContain('This cannot be undone.')
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Reset' })) })
+    await waitFor(() => expect(api.reset).toHaveBeenCalledWith('rt-claude'))
+    // Shown from the reset's own result: the list has not been refetched.
+    fireEvent.click(within(group).getByText('Claude Agent'))
+    await waitFor(() => expect(within(group).getByRole('button', { name: 'Theme Default' }).getAttribute('aria-pressed')).toBe('true'))
   })
 
   it('wins over the Instructions save its click set off, which it waits for', async () => {

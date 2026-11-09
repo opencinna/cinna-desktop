@@ -21,7 +21,7 @@ function joined(parts: string[]): string {
  * already at its defaults — the card then offers no reset at all.
  */
 export function runtimeModeResetChanges(mode: ChatModeData): { cleared: string[]; restored: string[] } {
-  const defaults = runtimeModeResetFields(mode.builtinEngine as AgentEngine)
+  const defaults = runtimeModeResetFields(mode.builtinEngine as AgentEngine, mode)
   const cleared: string[] = []
   if ((mode.systemPrompt ?? '').trim() !== '') cleared.push('its instructions')
   if (mode.modelId) cleared.push('its model override')
@@ -75,7 +75,7 @@ export function ResetRuntimeModeDialog({ mode, pending, error, onConfirm, onCanc
 
         <p className="text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
           Reset <strong className="text-[var(--color-text)]">{mode.name}</strong> to its defaults?
-          {sentence ? ` ${sentence}.` : ''} {mode.isDefault ? 'It stays your default mode. ' : ''}This cannot be undone.
+          {sentence ? ` ${sentence}.` : ''} {mode.isDefault ? 'It stays your default mode. ' : ''}{cleared.length > 0 ? 'This cannot be undone.' : ''}
         </p>
 
         {error && (

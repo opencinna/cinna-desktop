@@ -237,6 +237,13 @@ export interface AppSettingsSchema {
    */
   localDevConsent: string
   /**
+   * JSON `{ "<userId>": true }`, or `''`: the profiles whose default chat mode
+   * has taken the Theme Default colour once, on first having a server brand.
+   * Remembered so that unpublishing and republishing a brand does not run it
+   * again over a colour the user picked since. Absent profile = not yet.
+   */
+  brandedDefaultModeProfiles: string
+  /**
    * Whether Notes (the sidebar tab, the composer's `?` picker, Save to note)
    * is on. `'unset'` until decided: main decides it once from whether any
    * profile has a note, and every reader treats `'unset'` as off. See

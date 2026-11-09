@@ -34,7 +34,7 @@ cinna-core on Cinna-user activation and every 5 minutes.
   `default_model` — the admin-curated authoritative default), deterministic-id
   helpers (`managedProviderId`, `managedModeId`, `isManagedProviderId`,
   `isManagedModeId`), type mapping (`mapToDesktopProviderType`),
-  `colorPresetForType`, and `managedDisplayName` (appends `credential_name` to the
+  `colorPresetForType` (the colour of a non-default managed mode; a sync keeps an existing row's colour, and a row becoming the default gets `theme`), and `managedDisplayName` (appends `credential_name` to the
   provider-family name to disambiguate same-provider credentials).
 - `src/shared/modelDefaults.ts` — `pickDefaultModelId` now prefers
   chat-capable + non-gated ids; `isChatCapableModelId` (new) filters non-chat

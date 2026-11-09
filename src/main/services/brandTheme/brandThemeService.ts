@@ -23,6 +23,7 @@
 import { runtimeHost } from '../../host/runtimeHost'
 import { publishEvent } from '../../host/events'
 import { userRepo } from '../../db/users'
+import { chatModeService } from '../chatModeService'
 import { brandThemeRepo, type BrandThemeAssetRow } from '../../db/brandThemes'
 import { getProfileScopeUserId } from '../../auth/scope'
 import { getLastUserId } from '../../auth/session'
@@ -61,6 +62,8 @@ export interface BrandThemeDeps {
   serverOf(userId: string): BrandServer | null
   fetch(url: string, init: RequestInit): Promise<Response>
   publish(payload: BrandThemeChangedPayload): void
+  /** The profile has a brand: its default chat mode may now take the theme's colour. */
+  themeAvailable(userId: string): void
   intervalMs: number
 }
 
@@ -86,6 +89,11 @@ const defaultDeps: BrandThemeDeps = {
   serverOf,
   fetch: (url, init) => runtimeHost.http.fetch(url, init),
   publish: (payload) => publishEvent(BRAND_THEME_CHANGED_CHANNEL, payload, 'all'),
+  themeAvailable: (userId) => {
+    // The channel `useChatModes` already invalidates `['chat-modes']` on: a mode
+    // row changed, and a brand refresh has no sync of its own to announce it.
+    if (chatModeService.applyThemeDefaultOnce(userId)) publishEvent('providers:account-config-synced', {})
+  },
   intervalMs: REFRESH_INTERVAL_MS
 }
 
@@ -246,6 +254,7 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
     resolvedCache.delete(origin)
     if (before && before.revision === parsed.ok.revision) return
     emitIfActive(origin, { origin, revision: parsed.ok.revision })
+    if (activeOrigin() === origin) service.adoptDefaultMode(deps.activeProfileId())
   }
 
   const service = {
@@ -268,6 +277,20 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
     resolveForProfile(userId: string): ResolvedBrandTheme | null {
       const origin = deps.serverOf(userId)?.origin ?? null
       return origin ? resolve(origin) : null
+    },
+
+    /**
+     * Offer the one-time Theme Default colour to `userId`'s default chat mode,
+     * if that profile has a brand (cached is enough). Called when a theme lands
+     * and after an account-config sync, which may just have made the default.
+     * Never throws: a colour is not worth failing either of those for.
+     */
+    adoptDefaultMode(userId: string): void {
+      try {
+        if (service.resolveForProfile(userId)) deps.themeAvailable(userId)
+      } catch (err) {
+        logger.warn('default chat mode could not adopt the theme colour', { error: err instanceof Error ? err.message : 'error' })
+      }
     },
 
     /**

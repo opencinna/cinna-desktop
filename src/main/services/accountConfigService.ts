@@ -18,6 +18,7 @@ import {
   type AccountConfigProvider
 } from '../llm/accountConfigTypes'
 import { pickDefaultModelId, isChatCapableModelId } from '../../shared/modelDefaults'
+import { THEME_COLOR_PRESET_ID } from '../../shared/chatModeRuntime'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('account-config')
@@ -291,7 +292,13 @@ export const accountConfigService = {
           providerId,
           modelId: defaultModelId,
           mcpProviderIds: [] as string[],
-          colorPreset: colorPresetForType(type),
+          // A sync keeps a row's colour, so the one-time adoption survives it. The
+          // exception is a row becoming the default: a managed mode has no colour
+          // picker, so it would otherwise wear its provider's colour for good.
+          // Always passed: `update` writes 'slate' for none.
+          colorPreset: existingMode && (existingMode.isDefault || !isDefault)
+            ? existingMode.colorPreset
+            : isDefault ? THEME_COLOR_PRESET_ID : colorPresetForType(type),
           isDefault,
           managed: true,
           adminManaged: p.is_admin_managed

@@ -139,3 +139,43 @@ describe('chat mode editing', () => {
       modelId: 'gpt-5.5', systemPrompt: 'Updated Codex instructions', toolPolicy: 'none' })
   })
 })
+
+describe('the color picker', () => {
+  const chip = () => screen.getByRole('button', { name: 'Theme Default' })
+
+  it('saves Theme Default from a card and marks it, ahead of the swatches', async () => {
+    let persisted = { ...initial }
+    const upsert = vi.fn(async (patch) => { persisted = { ...persisted, ...patch }; return { success: true, id: 'mode' } })
+    Object.assign(window.api, {
+      providers: { onAccountConfigSynced: () => () => {} },
+      chatModes: { list: vi.fn(async () => [{ ...persisted }]), upsert }
+    })
+    mount(<SavedMode />)
+    fireEvent.click(await screen.findByText('Writing'))
+    expect(chip().getAttribute('aria-pressed')).toBe('false')
+    // First in the row, with every swatch after it.
+    expect(chip().parentElement!.children[0]).toBe(chip())
+    expect(chip().parentElement!.children).toHaveLength(11)
+    expect(screen.getByTitle('Indigo').querySelector('svg')).not.toBeNull()
+    fireEvent.click(chip())
+    await waitFor(() => expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ id: 'mode', colorPreset: 'theme' })))
+    await waitFor(() => expect(chip().getAttribute('aria-pressed')).toBe('true'))
+    expect(chip().querySelector('svg')).not.toBeNull()
+    expect(screen.getByTitle('Indigo').querySelector('svg')).toBeNull()
+  })
+
+  it('offers it on the new mode form, whose own default colour is unchanged', async () => {
+    const upsert = vi.fn().mockResolvedValue({ success: true, id: 'new' })
+    Object.assign(window.api, { chatModes: { upsert } })
+    const onClose = vi.fn()
+    mount(<ChatModeForm onClose={onClose} />)
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Plain' } })
+    expect(chip().getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByTitle('Indigo').querySelector('svg')).not.toBeNull()
+    fireEvent.click(chip())
+    expect(chip().getAttribute('aria-pressed')).toBe('true')
+    fireEvent.submit(screen.getByRole('form', { name: 'New chat mode' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ name: 'Plain', colorPreset: 'theme' }))
+  })
+})

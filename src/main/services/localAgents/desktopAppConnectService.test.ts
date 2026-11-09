@@ -188,7 +188,7 @@ describe('adoptDesktopEngine', () => {
     expect(state.upserts).toEqual([
       {
         id: 'rt-claude', name: 'claude runtime', providerId: null, modelId: null, engine: 'claude', systemPrompt: '',
-        toolPolicy: 'connectors', complexity: 'medium', mcpProviderIds: [], colorPreset: 'orange', isDefault: true
+        toolPolicy: 'connectors', complexity: 'medium', mcpProviderIds: [], colorPreset: 'theme', isDefault: true
       }
     ])
   })

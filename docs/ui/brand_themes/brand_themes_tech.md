@@ -54,6 +54,7 @@ Implementation companion to [Brand Themes](brand_themes.md).
 - `brandThemeService.ts:applyForProfile` — announces the cached theme of the profile's server before anything is awaited. A cache that cannot be read, or a row that no longer resolves, announces `null`.
 - `brandThemeService.ts:start` / `stop` — one timer at a time; `start` refreshes at once and then every `REFRESH_INTERVAL_MS` (five minutes).
 - `brandThemeService.ts:resolve` — re-runs `parseBrandTheme` on the stored document and assets, memoised per origin by revision and fetch time.
+- `brandThemeService.ts:adoptDefaultMode` — if the profile resolves a brand, calls `deps.themeAvailable`, which runs `chatModeService.applyThemeDefaultOnce` and publishes `providers:account-config-synced` when a row changed. Called from `refresh` on a changed revision for the active origin, and from `account-config-sync.ts`. Never throws. Flag in `brandedDefaultModeProfiles`; see [Chat Modes tech](../../chat/chat_modes/chat_modes_tech.md).
 - `brandThemeService.ts:serverOf` — origin and API base from the user's `cinnaServerUrl`; none unless the user is a `cinna_user`.
 - `parse.ts:parseBrandTheme` — returns `{ ok }` or one `{ error }` reason for the log, never containing a URL. Unknown keys are ignored. It never re-judges contrast.
 

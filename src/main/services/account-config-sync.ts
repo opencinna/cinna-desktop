@@ -6,6 +6,7 @@ import { publishEvent } from '../host/events'
  * mirroring `agents/remote-sync.ts`.
  */
 import { accountConfigService } from './accountConfigService'
+import { brandThemeService } from './brandTheme/brandThemeService'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { createLogger } from '../logger/logger'
 
@@ -44,9 +45,14 @@ export async function runAccountConfigSyncOnce(userId: string): Promise<void> {
   try {
     await accountConfigService.syncAccountConfig(userId, current)
     if (!current()) return
+    // After the sync, which may just have made the managed default; before the
+    // notification, so the renderer's refetch sees the colour.
+    brandThemeService.adoptDefaultMode(userId)
     notifyAccountConfigSynced()
   } catch (err) {
     if (!current()) return
+    // A cached brand still counts with the server unreachable.
+    brandThemeService.adoptDefaultMode(userId)
     if (err instanceof CinnaReauthRequired) {
       logger.error('account-config sync stopped: Cinna re-auth required', { userId })
       stopAccountConfigPeriodicSync()

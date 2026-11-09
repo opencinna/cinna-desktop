@@ -85,7 +85,7 @@ The renderer-only feature delegates all server-side work through existing servic
 
 ## Configuration
 
-- Provider-themed colors mapped per type in `PROVIDER_OPTIONS` (`OnboardingScreen.tsx`): anthropic→amber, openai→emerald, gemini→sky. Reuses the existing `COLOR_PRESETS` ids from `src/renderer/src/constants/chatModeColors.ts`.
+- `PROVIDER_OPTIONS` (`OnboardingScreen.tsx`) carries no colour any more; the Default mode is created with `THEME_COLOR_PRESET_ID` (`'theme'`, `src/shared/chatModeRuntime.ts`).
 - Help link URLs (`pricingUrl`, `apiKeyUrl`) per provider option. Optional fields — leave undefined to hide.
 
 ## Security

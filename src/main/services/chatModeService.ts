@@ -2,7 +2,7 @@ import { chatModeRepo, ChatModeRow, ChatModeUpsertInput } from '../db/chatModes'
 import { managedOverrideRepo } from '../db/managedOverrides'
 import { appSettingsRepo } from '../db/appSettings'
 import { getDb } from '../db/client'
-import { getManagedResourceScopes, getProfileScopeUserId } from '../auth/scope'
+import { getManagedResourceScopes, getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { isManagedModeId } from '../llm/accountConfigTypes'
 import { resolveDefaultModeId } from '../../shared/chatModeDefaults'
 import { ChatModeError } from '../errors'
@@ -10,6 +10,7 @@ import {
   RUNTIME_MODE_ENGINES,
   RUNTIME_MODE_NAMES,
   RUNTIME_MODE_TAKES_CREDENTIAL,
+  THEME_COLOR_PRESET_ID,
   runtimeModeDefaults,
   runtimeModeResetFields,
   supportsWorkspacePolicy
@@ -27,6 +28,29 @@ export interface ChatModeListItem extends ChatModeRow {
 }
 
 export interface ChatModeScope { profileUserId: string; settingsUserId: string }
+
+/**
+ * Marks that a shared (default scope) row has taken the colour. Not a profile id:
+ * those are 21 characters. See {@link chatModeService.applyThemeDefaultOnce}.
+ */
+const SHARED_MODE_ADOPTED_KEY = 'shared'
+
+/** Profiles already past the one-time adoption. Anything unreadable reads as none. */
+function readBrandedDefaultModeProfiles(): Record<string, true> {
+  const raw = appSettingsRepo.get('brandedDefaultModeProfiles')
+  if (!raw) return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+    const out: Record<string, true> = {}
+    for (const [userId, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (value === true) out[userId] = true
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
 
 export const chatModeService = {
   list(userId: string): ChatModeRow[] {
@@ -205,15 +229,49 @@ export const chatModeService = {
   },
 
   /**
+   * Once per profile, when it first has a server brand: its effective default
+   * mode takes the Theme Default colour, so the composer stops wearing an
+   * engine's colour under the brand. The flag is what makes a colour the user
+   * picks afterwards stick, through later syncs and a brand being unpublished
+   * and republished. With no default yet the flag is still set: a mode starred
+   * later carries a colour the user chose, and a default that core provisions
+   * later is given the theme's at insert. A shared row is one row across
+   * profiles, so it takes the colour once per installation, or the next branded
+   * profile would undo what the user picked since. Writes through the repo because
+   * `upsert` refuses managed ids, and on the row's own owner: a managed default is
+   * the profile's, a shared one the default scope's. True only if a row changed,
+   * which is when the renderer has something to refetch.
+   */
+  applyThemeDefaultOnce(userId: string): boolean {
+    const adopted = readBrandedDefaultModeProfiles()
+    if (adopted[userId]) return false
+    const row = this.resolveEffectiveDefault({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() })
+    if (!row) {
+      appSettingsRepo.set('brandedDefaultModeProfiles', JSON.stringify({ ...adopted, [userId]: true }))
+      return false
+    }
+    const shared = row.userId !== userId
+    const changed = row.colorPreset !== THEME_COLOR_PRESET_ID && !(shared && adopted[SHARED_MODE_ADOPTED_KEY])
+    const next = { ...adopted, [userId]: true, ...(shared ? { [SHARED_MODE_ADOPTED_KEY]: true } : {}) }
+    getDb().transaction((tx) => {
+      if (changed) chatModeRepo.setColorPreset(row.userId, row.id, THEME_COLOR_PRESET_ID, tx)
+      appSettingsRepo.set('brandedDefaultModeProfiles', JSON.stringify(next))
+    })
+    logger.info('default chat mode adopted the theme colour', { userId, modeId: row.id, changed })
+    return changed
+  },
+
+  /**
    * Put a runtime mode back the way {@link ensureRuntimeModes} made it: name,
    * effort, tools, instructions and color from the defaults; no model, no
-   * credential, no MCP servers. Whether it is the default is kept.
+   * credential, no MCP servers. Whether it is the default is kept; for the colour
+   * see {@link runtimeModeResetFields}.
    */
   reset(userId: string, id: string): void {
     const row = chatModeRepo.getOwned(userId, id)
     if (!row) throw new ChatModeError('not_found', 'Chat mode not found')
     if (!row.builtinEngine) throw new ChatModeError('read_only', 'Only a runtime mode can be reset to its defaults.')
-    chatModeRepo.update(userId, id, { ...runtimeModeResetFields(row.builtinEngine), isDefault: row.isDefault })
+    chatModeRepo.update(userId, id, { ...runtimeModeResetFields(row.builtinEngine, row), isDefault: row.isDefault })
     logger.info('runtime mode reset', { modeId: id, engine: row.builtinEngine })
   }
 }

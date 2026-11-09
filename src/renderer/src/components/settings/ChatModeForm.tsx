@@ -7,7 +7,7 @@ import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useUpsertChatMode } from '../../hooks/useChatModes'
 import { useDefaultRuntime } from '../../hooks/useEngine'
-import { COLOR_PRESETS } from '../../constants/chatModeColors'
+import { ChatModeColorPicker } from './ChatModeColorPicker'
 import { isCredentialActive } from '../../../../shared/credentials'
 import { unwrapIpcError } from '../../utils/ipcError'
 
@@ -64,10 +64,7 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
           <div className="mt-3 space-y-3">
             <div>
               <SettingsLabel>Color</SettingsLabel>
-              <div className="flex flex-wrap gap-1.5">{COLOR_PRESETS.map(preset => <button key={preset.id} type="button"
-                onClick={() => setColorPreset(preset.id)} title={preset.name}
-                className="w-6 h-6 rounded-full flex items-center justify-center transition-transform hover:scale-110"
-                style={{ backgroundColor: preset.border }}>{colorPreset === preset.id && <Check size={12} className="text-white" />}</button>)}</div>
+              <ChatModeColorPicker value={colorPreset} onChange={setColorPreset} />
             </div>
             <ChatModeRuntimeFields section="options" value={runtime} resolvedEngine={defaultRuntime?.engine} onChange={changeRuntime} />
             {credentialMode && runtime.providerId && <div>

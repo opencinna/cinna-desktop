@@ -1,3 +1,5 @@
+import { THEME_COLOR_PRESET_ID } from '../../../shared/chatModeRuntime'
+
 export type ChatModeData = Awaited<ReturnType<typeof window.api.chatModes.list>>[number]
 
 export interface ColorPreset {
@@ -26,6 +28,22 @@ export const COLOR_PRESETS: ColorPreset[] = [
   { id: 'fuchsia', name: 'Fuchsia', border: '#d946ef', bg: 'rgba(217,70,239,0.08)', card: '#86198f', text: '#f5d0fe' }
 ]
 
+/**
+ * Follows the theme: the active accent, a server brand's when the profile has
+ * one. Deliberately not in {@link COLOR_PRESETS}: `presetForAgentId` hashes agent
+ * ids over that array's length, so listing it would shift every agent's colour
+ * and hand some agents the theme's.
+ */
+export const THEME_COLOR_PRESET: ColorPreset = {
+  id: THEME_COLOR_PRESET_ID,
+  name: 'Theme Default',
+  border: 'var(--color-accent)',
+  bg: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
+  card: 'var(--color-accent)',
+  text: 'var(--color-on-accent)'
+}
+
 export function getPreset(id: string): ColorPreset {
+  if (id === THEME_COLOR_PRESET.id) return THEME_COLOR_PRESET
   return COLOR_PRESETS.find((p) => p.id === id) ?? COLOR_PRESETS[0]
 }

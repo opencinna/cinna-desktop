@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 
-const state = vi.hoisted(() => ({ db: null as TestDatabase | null, key: 'sk-ant-api-test-only' }))
+const state = vi.hoisted(() => ({ db: null as TestDatabase | null, key: 'sk-ant-api-test-only', defaultCredential: null as string | null }))
 vi.mock('../db/client', () => ({ getDb: () => state.db!.db }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} }) }))
 vi.mock('../security/keystore', () => ({
@@ -22,14 +22,15 @@ vi.mock('electron', () => ({ net: { fetch: async () => new Response(JSON.stringi
   credential_id: 'account-key', provider_type: 'anthropic', display_name: 'Claude', descriptor_slug: 'claude',
   base_url: null, model: null, api_key: state.key, is_default: false, is_admin_managed: false,
   default_chat_mode_label: 'Claude', suggested_models: []
-}], default_provider_credential_id: null })) } }))
+}], default_provider_credential_id: state.defaultCredential })) } }))
 
 const { accountConfigService } = await import('./accountConfigService')
 const { managedAgentService } = await import('./managedAgentService')
 const { llmProviderRepo } = await import('../db/llmProviders')
+const { chatModeRepo } = await import('../db/chatModes')
 const { agentRepo } = await import('../db/agents')
 beforeEach(() => {
-  state.db = createTestDatabase(); state.key = 'sk-ant-api-test-only'
+  state.db = createTestDatabase(); state.key = 'sk-ant-api-test-only'; state.defaultCredential = null
   state.db.raw.exec("INSERT INTO chats(id,user_id,title,created_at,updated_at) VALUES('chat','__default__','Managed',1,1)")
 })
 afterEach(() => { state.db?.close(); state.db = null })
@@ -53,4 +54,30 @@ it('preserves an existing Managed session through routine account sync with rand
   expect(llmProviderRepo.getOwned('__default__', first.id)!.configRevision).toBe(first.configRevision! + 1)
   expect(() => held.validate()).toThrow(/credential/)
   await expect(managedAgentService.prepare('__default__', agent, 'chat')).rejects.toThrow(/different configuration or credential/)
+})
+
+const MODE_ID = 'managed-mode:account-key'
+const modeColor = () => chatModeRepo.getOwned('__default__', MODE_ID)?.colorPreset
+
+it('gives a new default mode the theme colour and a new other mode its provider colour', async () => {
+  await accountConfigService.syncAccountConfig('__default__')
+  expect(modeColor()).toBe('amber')
+  chatModeRepo.delete('__default__', MODE_ID)
+  state.defaultCredential = 'account-key'
+  await accountConfigService.syncAccountConfig('__default__')
+  expect(chatModeRepo.getOwned('__default__', MODE_ID)).toMatchObject({ colorPreset: 'theme', isDefault: true })
+})
+
+it('gives an existing mode the theme colour when it becomes the account default, and keeps a colour otherwise', async () => {
+  await accountConfigService.syncAccountConfig('__default__')
+  chatModeRepo.setColorPreset('__default__', MODE_ID, 'violet')
+  await accountConfigService.syncAccountConfig('__default__')
+  expect(modeColor()).toBe('violet')
+  // A managed mode has no colour picker, so it could not leave its provider's colour.
+  state.defaultCredential = 'account-key'
+  await accountConfigService.syncAccountConfig('__default__')
+  expect(chatModeRepo.getOwned('__default__', MODE_ID)).toMatchObject({ colorPreset: 'theme', isDefault: true })
+  chatModeRepo.setColorPreset('__default__', MODE_ID, 'rose')
+  await accountConfigService.syncAccountConfig('__default__')
+  expect(modeColor()).toBe('rose')
 })

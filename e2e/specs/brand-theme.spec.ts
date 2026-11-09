@@ -43,6 +43,11 @@ import { linkSandboxAccount } from '../fixtures/jobRemoteService'
  * samples one value per animation frame; a style that is wrong between two
  * frames and fixed before paint is invisible to it, as it is to the user.
  *
+ * Theme Default: a default mode with an engine colour adopts the brand's accent
+ * once, with the composer following in the running window, and a colour picked
+ * afterwards survives a restart. Its row is a saved mode, so the managed row and
+ * the account-config path are left to the unit tests.
+ *
  * The last test is a measurement, not an assertion: it logs how long a switch
  * to a profile whose dark background is a ~3 MB PNG takes to apply.
  */
@@ -141,13 +146,15 @@ function randomPng(width: number, height: number): Buffer {
 
 interface FakeCore { host: string; requests: string[]; close(): Promise<void> }
 
-async function fakeBrandCore(served: Served, assets: Map<string, Buffer>): Promise<FakeCore> {
+/** `themeGate` holds the theme document (not 304s or assets) until it resolves. */
+async function fakeBrandCore(served: Served, assets: Map<string, Buffer>, themeGate?: Promise<void>): Promise<FakeCore> {
   const requests: string[] = []
   const etag = `"${served.revision}"`
-  const server: Server = createServer((req, res) => {
+  const server: Server = createServer(async (req, res) => {
     const path = new URL(req.url ?? '/', 'http://localhost').pathname
     requests.push(`${req.method} ${path}`)
     if (req.method === 'GET' && path === '/api/v1/brand-theme') {
+      if (themeGate) await themeGate
       if (req.headers['if-none-match'] === etag) {
         res.writeHead(304, { etag })
         res.end()
@@ -430,6 +437,68 @@ test('3b. a switch to a cached Cinna profile commits that profile only together 
     expect(frames.filter((f) => f.profile && f.accent !== BRAND_ACCENT.dark), 'a frame showed the Cinna profile in stock colours').toEqual([])
   } finally {
     await arranged?.core.close()
+  }
+})
+
+const rgb = (hex: string): string => `rgb(${[1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16)).join(', ')})`
+/** The new-chat composer's computed border colour. */
+const composerBorder = (cinna: CinnaApp) =>
+  cinna.page.locator('[data-ambient-card]:has(textarea)').evaluate((box) => getComputedStyle(box).borderTopColor)
+
+test('Theme Default: a branded profile\u2019s default mode adopts the brand once, in the running window, and a later colour sticks', async ({ cinna }) => {
+  test.setTimeout(120_000)
+  const ORANGE = rgb('#f97316')
+  let releaseTheme = (): void => {}
+  const themeGate = new Promise<void>((resolve) => { releaseTheme = resolve })
+  const core = await fakeBrandCore(brandTheme(), fixtureAssets(), themeGate)
+  const MODE = 'Engine colour'
+  const defaultMode = () => cinna.page.evaluate(async (name) => (await window.api.chatModes.list()).find((mode) => mode.name === name)!, MODE)
+  try {
+    await test.step('arrange: a Cinna profile whose default mode wears an engine colour, its brand held back', async () => {
+      await cinna.skipOnboarding()
+      await useTheme(cinna, 'dark')
+      await createLocalProfile(cinna, await currentName(cinna), BRAND_USER)
+      await cinna.page.evaluate((name) => window.api.chatModes.upsert({ name, colorPreset: 'orange', isDefault: true }), MODE)
+      await linkSandboxAccount(cinna, core.host)
+      await cinna.relaunch()
+      await cinna.skipOnboarding()
+      await expect.poll(() => currentName(cinna)).toBe(BRAND_USER)
+      await expect(cinna.page.locator('html')).not.toHaveAttribute('data-brand')
+      await expect.poll(() => composerBorder(cinna)).toBe(ORANGE)
+    })
+
+    await test.step('the brand arrives: the composer takes its accent with no restart', async () => {
+      releaseTheme()
+      await expect(cinna.page.locator('html')).toHaveAttribute('data-brand', '', { timeout: 30_000 })
+      await expect.poll(() => composerBorder(cinna)).toBe(rgb(BRAND_ACCENT.dark))
+      expect((await defaultMode()).colorPreset).toBe('theme')
+    })
+
+    await test.step('with no brand the same preset is simply the stock accent', async () => {
+      const guest = await guestName(cinna)
+      await switchTo(cinna, BRAND_USER, guest)
+      await expect.poll(() => composerBorder(cinna)).toBe(rgb(STOCK_ACCENT.dark))
+      await switchTo(cinna, guest, BRAND_USER)
+      await expect.poll(() => composerBorder(cinna)).toBe(rgb(BRAND_ACCENT.dark))
+    })
+
+    await test.step('a colour the user picks since survives a restart and the sync that follows it', async () => {
+      const row = await defaultMode()
+      await cinna.page.evaluate((input) => window.api.chatModes.upsert({ ...input, colorPreset: 'orange', isDefault: true }), { id: row.id, name: MODE })
+      // Saved over the raw API, which no hook refetches after: the restart below reads it.
+      expect((await defaultMode()).colorPreset).toBe('orange')
+      const before = core.requests.length
+      await cinna.relaunch()
+      await cinna.skipOnboarding()
+      await expect(cinna.page.locator('html')).toHaveAttribute('data-brand', '', { timeout: 30_000 })
+      // The activation's failed sync (this fake has no account config) reached its adoption call.
+      await expect.poll(() => core.requests.slice(before).filter((request) => request.includes('account')).length).toBeGreaterThan(0)
+      await expect.poll(() => composerBorder(cinna)).toBe(ORANGE)
+      expect((await defaultMode()).colorPreset).toBe('orange')
+    })
+  } finally {
+    releaseTheme()
+    await core.close()
   }
 })
 
