@@ -143,3 +143,19 @@ test('under reduced motion no fade runs and the caret keeps the accent colour', 
   expect(await fadeOf(composer)).toBeNull()
   await expect(composer).toHaveCSS('caret-color', await resolvedAccent(page))
 })
+
+test('with Extra UI animation off no fade runs and the caret keeps the accent colour', async ({ cinna }) => {
+  const composer = await focusedComposer(cinna)
+  const page = cinna.page
+  expect((await fadeOf(composer))?.playState).toBe('running')
+
+  // The saved preference, read at startup; caretFade.test.ts covers the live toggle.
+  await page.evaluate(() => localStorage.setItem('cinna-extra-ui-animation', '0'))
+  await page.reload()
+  await composer.focus()
+  await expectMatchesFocus(composer)
+  await expect(page.locator('html')).toHaveAttribute('data-extra-animation-off', '')
+  await expect(composer).toHaveCSS('caret-animation', 'auto')
+  expect(await fadeOf(composer)).toBeNull()
+  await expect(composer).toHaveCSS('caret-color', await resolvedAccent(page))
+})

@@ -9,8 +9,8 @@ import { useEffect, useState } from 'react'
  * - Subtle — small, brief and local. May keep playing during active use on its
  *   own cadence. Currently: the AmbientGrid border glow, the secondary buttons'
  *   and cards' border glow (useAmbientButtons), the header buttons' wave
- *   (TopBar), the logo sweep (CinnaLogoDraw) and the chat tooltip's one-pass
- *   glow (ChatItemTooltip).
+ *   (TopBar), the logo sweep (CinnaLogoDraw), the chat tooltip's one-pass
+ *   glow (ChatItemTooltip) and the text caret's fade (caretFade).
  *
  * Responses to the user's own action (ChatTransition, RouterBadge's width
  * transition) and functional signals (the composer notice's orbit) are neither.

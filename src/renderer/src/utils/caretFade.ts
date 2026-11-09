@@ -1,3 +1,5 @@
+import { useUIStore } from '../stores/ui.store'
+
 /**
  * Drives the fading caret (`caret-soft-fade`, main.css). Each keystroke or click
  * rewinds the focused field's fade to its opaque start, so it only begins to
@@ -30,7 +32,14 @@ function wakeCaretFade(): void {
   parkTimer = setTimeout(parkCaretFade, CARET_IDLE_PARK_MS)
 }
 
+/** The fade is ambient animation: with Extra UI animation off, the system blink stays. */
+function applyExtraUIAnimation(enabled: boolean): void {
+  document.documentElement.toggleAttribute('data-extra-animation-off', !enabled)
+}
+
 export function initCaretFade(): void {
+  applyExtraUIAnimation(useUIStore.getState().extraUIAnimation)
+  useUIStore.subscribe((state) => applyExtraUIAnimation(state.extraUIAnimation))
   // focusin: a field focused from code, or on return to the window, starts a
   // fresh fade with no input event to arm the timer that parks it.
   for (const type of ['keydown', 'input', 'pointerdown', 'focusin']) {

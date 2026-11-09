@@ -42,7 +42,7 @@ The brand sheet is generated at runtime into `<style id="brand-theme">` (`utils/
 - **A literal colour that stands in for a surface needs a static `[data-brand]` override.** This covers a hand-written `rgba(…)` or `#…` in `main.css` that assumes the stock palette or mesh. Put the override in the `@layer brand` block at the end of `main.css`, taken from the roles (`color-mix(in srgb, var(--color-bg-secondary) 82%, transparent)`, `var(--color-border)`). Relative tints such as a low-alpha white or black overlay, and shadows, can stay as they are.
 - **Under a brand the stock mesh never shows.** The sheet sets the body's `background-image` per mode to the brand's image, or to `none` (a flat `--color-bg`).
 
-- **The text caret is styled globally** (`caret-color`, the `caret-soft-fade` animation and its reduced-motion fallback, in `main.css`; `utils/caretFade.ts` keeps it solid while typing). Do not set `caret-color` on an individual field, and do not add a `:focus` `animation` to a text field without knowing it replaces the caret's. CSS cannot change the caret's width in this Chromium. See [Appearance (tech)](../../ui/appearance/appearance_tech.md#renderer-components).
+- **The text caret is styled globally** (`caret-color` and the `caret-soft-fade` animation, guarded by reduced motion and Extra UI animation, in `main.css`; `utils/caretFade.ts` keeps it solid while typing). Do not set `caret-color` on an individual field, and do not add a `:focus` `animation` to a text field without knowing it replaces the caret's. CSS cannot change the caret's width in this Chromium. See [Appearance (tech)](../../ui/appearance/appearance_tech.md#renderer-components).
 
 ## Surface Materials
 

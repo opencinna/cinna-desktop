@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useUIStore } from '../stores/ui.store'
 import { CARET_IDLE_PARK_MS, initCaretFade } from './caretFade'
 
 /** jsdom has neither CSS animations nor `getAnimations`, so both are stood in for. */
@@ -83,6 +84,13 @@ describe('initCaretFade', () => {
     expect(fade.playState).toBe('running')
   })
 
+  it('marks the page while Extra UI animation is off, so the fade rule stops matching', () => {
+    useUIStore.getState().setExtraUIAnimation(false)
+    expect(document.documentElement.hasAttribute('data-extra-animation-off')).toBe(true)
+    useUIStore.getState().setExtraUIAnimation(true)
+    expect(document.documentElement.hasAttribute('data-extra-animation-off')).toBe(false)
+  })
+
   it('starts a parked fade again on the next keystroke', () => {
     field.dispatchEvent(new Event('keydown', { bubbles: true }))
     vi.advanceTimersByTime(CARET_IDLE_PARK_MS)
@@ -102,7 +110,7 @@ describe('caret styles', () => {
   const keyframes = css.match(/@keyframes caret-soft-fade \{([\s\S]*?)\n {2}\}/)?.[1] ?? ''
 
   it('takes the colour from the theme accent, so a brand follows', () => {
-    expect(css).toMatch(/caret-color: var\(--color-accent\);\s*caret-animation: manual;/)
+    expect(css).toMatch(/:focus \{\s*caret-color: var\(--color-accent\);\s*\}/)
     expect(keyframes).toMatch(/caret-color: var\(--color-accent\)/)
   })
 
@@ -110,9 +118,10 @@ describe('caret styles', () => {
     expect(keyframes).toMatch(/0%, 30% \{ caret-color: var\(--color-accent\); \}/)
   })
 
-  it('gives the system blink back under reduced motion', () => {
+  it('runs the fade only with motion allowed and Extra UI animation on', () => {
     expect(css).toMatch(
-      /prefers-reduced-motion: reduce\) \{\s*:read-write[^{]*:focus \{\s*caret-animation: auto;\s*animation: none;/
+      /prefers-reduced-motion: no-preference\) \{\s*:root:not\(\[data-extra-animation-off\]\) :read-write[^{]*:focus \{\s*caret-animation: manual;\s*animation: caret-soft-fade/
     )
+    expect(css.match(/animation: caret-soft-fade/g)).toHaveLength(1)
   })
 })
