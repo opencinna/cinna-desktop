@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { deflateSync } from 'node:zlib'
 import { repoRoot } from '../playwright.config'
+import type { Page } from '@playwright/test'
 import { expect, test, type CinnaApp } from '../fixtures/app'
 import { linkSandboxAccount } from '../fixtures/jobRemoteService'
 
@@ -38,10 +39,21 @@ import { linkSandboxAccount } from '../fixtures/jobRemoteService'
  * ## What it does not prove
  *
  * The real OAuth sign-in, a theme the server changes mid-session (revision
- * bump while the profile is active), 204/404 forgetting a theme, the tray
- * popup, dashboard frames, or the password lock's override. The no-flash check
+ * bump while the profile is active), 204/404 forgetting a theme, dashboard
+ * frames, or the password lock's override (with or without Branding). The
+ * tray popup is checked only in the Branding test, for brand versus stock
+ * (`data-brand`, the sheet, the accent), not role by role. The no-flash check
  * samples one value per animation frame; a style that is wrong between two
  * frames and fixed before paint is invisible to it, as it is to the user.
+ *
+ * Branding (Settings → Features → Interface, `serverBranding`): Cinna
+ * Original drops the brand from the main window and the tray popup with no
+ * restart, Account Branded brings it back from the cache with the server
+ * down, and Cinna Original survives a restart. The restart alone cannot
+ * catch a branded answer from main's `get()`: activation's stock announcement
+ * lands after each window's first ask and covers it. The test therefore
+ * asks `brandTheme.get()` itself, and reloads the tray after the main window
+ * so that its own first ask is the only answer it gets.
  *
  * Theme Default: a default mode with an engine colour adopts the brand's accent
  * once, with the composer following in the running window, and a colour picked
@@ -457,6 +469,135 @@ test('3b. a switch to a cached Cinna profile commits that profile only together 
     const { frames, order } = await recordSwitchTo(cinna, guest)
     expect(order, 'the Cinna profile committed without its brand').not.toContain('P-')
     expect(frames.filter((f) => f.profile && f.accent !== BRAND_ACCENT.dark), 'a frame showed the Cinna profile in stock colours').toEqual([])
+  } finally {
+    await arranged?.core.close()
+  }
+})
+
+/** The menu-bar popup window: it exists from startup, hidden. Read at each use: `relaunch()` replaces it. */
+function trayPage(cinna: CinnaApp): Page {
+  const tray = cinna.electronApp.windows().find((w) => w.url().endsWith('trayPanel.html'))
+  if (!tray) throw new Error('no tray panel window')
+  return tray
+}
+
+/** What a window shows: `brand` (data-brand and the sheet) or `stock` (neither); anything else is a half state. */
+const brandState = (page: Page) =>
+  page.evaluate(() => {
+    const attr = document.documentElement.hasAttribute('data-brand')
+    const sheet = document.getElementById('brand-theme') !== null
+    return attr && sheet ? 'brand' : !attr && !sheet ? 'stock' : `half: data-brand ${attr}, sheet ${sheet}`
+  })
+const pageAccent = (page: Page) =>
+  page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim())
+
+/** User menu → Settings → Features; returns the Branding group. */
+async function openBrandingSetting(cinna: CinnaApp) {
+  const page = cinna.page
+  await userMenuTrigger(cinna, BRAND_USER).click()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Features', exact: true }).click()
+  const group = page.getByRole('group', { name: 'Branding', exact: true })
+  await expect(group).toBeVisible()
+  return group
+}
+
+async function closeSettings(cinna: CinnaApp): Promise<void> {
+  await cinna.page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(heading(cinna)).toBeVisible()
+}
+
+async function expectBranded(cinna: CinnaApp, expectedLogo: string): Promise<void> {
+  await expect.poll(() => brandState(cinna.page)).toBe('brand')
+  await expect.poll(() => pageAccent(cinna.page)).toBe(BRAND_ACCENT.dark)
+  await expect.poll(() => brandState(trayPage(cinna))).toBe('brand')
+  await expect.poll(() => pageAccent(trayPage(cinna))).toBe(BRAND_ACCENT.dark)
+  await expect(brandLogo(cinna)).toHaveAttribute('src', expectedLogo)
+  await expect(heading(cinna)).toHaveText(BRAND_HEADING)
+}
+
+async function expectStock(cinna: CinnaApp): Promise<void> {
+  await expect.poll(() => brandState(cinna.page)).toBe('stock')
+  await expect.poll(() => pageAccent(cinna.page)).toBe(STOCK_ACCENT.dark)
+  await expect.poll(() => brandState(trayPage(cinna))).toBe('stock')
+  await expect.poll(() => pageAccent(trayPage(cinna))).toBe(STOCK_ACCENT.dark)
+  await expect(brandLogo(cinna)).toHaveCount(0)
+  await expect(heading(cinna)).toHaveText(STOCK_HEADING)
+}
+
+test('Branding: Cinna Original drops the brand from the main window and the tray at once, Account Branded brings it back from the cache, and the choice survives a restart', async ({ cinna }) => {
+  test.setTimeout(150_000)
+  let arranged: BrandArrange | null = null
+  const serverBranding = () => cinna.page.evaluate(async () => (await window.api.settings.getAll()).serverBranding)
+  // What main answers a window that asks now (initBrandTheme's question at startup).
+  const mainAnswer = () => cinna.page.evaluate(async () => ((await window.api.brandTheme.get()) ? 'brand' : 'stock'))
+  try {
+    const { core, expectedLogo } = (arranged = await arrangeBrandProfile(cinna))
+
+    await test.step('arrange: Account Branded (the default), the brand in the main window and the tray', async () => {
+      expect(await serverBranding()).toBe(true)
+      await expectBranded(cinna, expectedLogo.dark)
+    })
+
+    await test.step('Cinna Original: both windows go stock with no restart, and main answers stock', async () => {
+      const group = await openBrandingSetting(cinna)
+      await expect(group.getByRole('button', { name: 'Account Branded', exact: true })).toHaveAttribute('aria-pressed', 'true')
+      await group.getByRole('button', { name: 'Cinna Original', exact: true }).click()
+      await expect(group.getByRole('button', { name: 'Cinna Original', exact: true })).toHaveAttribute('aria-pressed', 'true')
+      await expect(group.getByRole('button', { name: 'Account Branded', exact: true })).toHaveAttribute('aria-pressed', 'false')
+      await expect.poll(serverBranding).toBe(false)
+      await expect.poll(() => brandState(cinna.page)).toBe('stock')
+      await expect.poll(() => brandState(trayPage(cinna))).toBe('stock')
+      expect(await mainAnswer()).toBe('stock')
+      await closeSettings(cinna)
+      await expectStock(cinna)
+    })
+
+    await test.step('Account Branded with the server down: the cached brand returns to both windows, no request made', async () => {
+      await core.close()
+      const before = core.requests.length
+      const group = await openBrandingSetting(cinna)
+      await group.getByRole('button', { name: 'Account Branded', exact: true }).click()
+      await expect(group.getByRole('button', { name: 'Account Branded', exact: true })).toHaveAttribute('aria-pressed', 'true')
+      await expect.poll(serverBranding).toBe(true)
+      await expect.poll(() => brandState(cinna.page)).toBe('brand')
+      await expect.poll(() => brandState(trayPage(cinna))).toBe('brand')
+      await closeSettings(cinna)
+      await expectBranded(cinna, expectedLogo.dark)
+      expect(core.requests.length).toBe(before)
+    })
+
+    await test.step('Cinna Original survives a restart: stock in both windows from the start', async () => {
+      const group = await openBrandingSetting(cinna)
+      await group.getByRole('button', { name: 'Cinna Original', exact: true }).click()
+      await expect.poll(serverBranding).toBe(false)
+      await closeSettings(cinna)
+      await expectStock(cinna)
+      await cinna.relaunch()
+      await cinna.skipOnboarding()
+      await expect.poll(() => currentName(cinna)).toBe(BRAND_USER)
+      expect(await serverBranding()).toBe(false)
+      expect(await mainAnswer()).toBe('stock')
+      await expectStock(cinna)
+      const after = await openBrandingSetting(cinna)
+      await expect(after.getByRole('button', { name: 'Cinna Original', exact: true })).toHaveAttribute('aria-pressed', 'true')
+      await closeSettings(cinna)
+    })
+
+    await test.step('a window that loads under Cinna Original starts stock: the tray popup and the main window reloaded', async () => {
+      // At launch, activation's stock announcement lands after each window's
+      // first ask and would cover a branded answer. A main-window reload
+      // announces again (to every window), so the tray is reloaded last: its
+      // only source is then its own first ask (initBrandTheme → get), and it
+      // renders only once that answer is applied.
+      await cinna.page.reload()
+      await expect(heading(cinna)).toBeVisible()
+      await trayPage(cinna).reload()
+      // React mounts only after initBrandTheme resolved (trayPanel.tsx); the
+      // text varies (this profile's server is down), so wait on the mount.
+      await expect(trayPage(cinna).locator('#root > *')).not.toHaveCount(0)
+      await expectStock(cinna)
+    })
   } finally {
     await arranged?.core.close()
   }
