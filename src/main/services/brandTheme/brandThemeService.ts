@@ -17,12 +17,19 @@
  * the resolved theme (assets as `data:` URLs) unless it already shows that
  * revision. A multi-megabyte background never rides an event.
  *
+ * **Branding can be off** (`serverBranding`, Settings → Features → Interface →
+ * Branding: Cinna Original). Then every answer here is stock — `get`,
+ * `resolveForProfile`, activation's announcement, a refresh's — and the
+ * default mode adopts nothing; refreshes still fetch and cache, so turning
+ * it back on (`brandingChanged`) applies the cached theme at once.
+ *
  * Core: no Electron. HTTP goes through the host's client.
  */
 
 import { runtimeHost } from '../../host/runtimeHost'
 import { publishEvent } from '../../host/events'
 import { userRepo } from '../../db/users'
+import { appSettingsRepo } from '../../db/appSettings'
 import { chatModeService } from '../chatModeService'
 import { brandThemeRepo, type BrandThemeAssetRow } from '../../db/brandThemes'
 import { getProfileScopeUserId } from '../../auth/scope'
@@ -64,6 +71,8 @@ export interface BrandThemeDeps {
   publish(payload: BrandThemeChangedPayload): void
   /** The profile has a brand: its default chat mode may now take the theme's colour. */
   themeAvailable(userId: string): void
+  /** False: the user chose Cinna Original, and every answer is stock. */
+  brandingEnabled(): boolean
   intervalMs: number
 }
 
@@ -94,6 +103,7 @@ const defaultDeps: BrandThemeDeps = {
     // row changed, and a brand refresh has no sync of its own to announce it.
     if (chatModeService.applyThemeDefaultOnce(userId)) publishEvent('providers:account-config-synced', {})
   },
+  brandingEnabled: () => appSettingsRepo.get('serverBranding') !== false,
   intervalMs: REFRESH_INTERVAL_MS
 }
 
@@ -142,7 +152,7 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
 
   /** The cached theme for an origin as `{ origin, revision }`, or null. */
   const cachedPayload = (origin: string | null): BrandThemeChangedPayload => {
-    if (!origin) return null
+    if (!origin || !deps.brandingEnabled()) return null
     const row = brandThemeRepo.get(origin)
     if (!row) return null
     // A row that no longer resolves is stock: announcing its revision would
@@ -153,6 +163,8 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
   const emitIfActive = (origin: string, payload: BrandThemeChangedPayload): void => {
     // Re-checked after every await: the profile may have moved while this fetch ran.
     if (activeOrigin() !== origin) return
+    // Cinna Original: windows already show stock, and a new revision changes nothing they show.
+    if (!deps.brandingEnabled()) return
     deps.publish(payload)
   }
 
@@ -264,6 +276,7 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
      * when it is still password-locked: themes are public (B7).
      */
     get(): ResolvedBrandTheme | null {
+      if (!deps.brandingEnabled()) return null
       const origin = activeOrigin()
       return origin ? resolve(origin) : null
     },
@@ -275,6 +288,7 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
      * null for a profile without a Cinna server.
      */
     resolveForProfile(userId: string): ResolvedBrandTheme | null {
+      if (!deps.brandingEnabled()) return null
       const origin = deps.serverOf(userId)?.origin ?? null
       return origin ? resolve(origin) : null
     },
@@ -309,6 +323,24 @@ export function createBrandThemeService(deps: BrandThemeDeps = defaultDeps) {
         logger.warn('brand theme cache could not be read; showing stock', { error: err instanceof Error ? err.message : 'error' })
       }
       deps.publish(payload)
+    },
+
+    /**
+     * The user moved Branding: announce what the profile in view shows now —
+     * null for Cinna Original, else its cached theme's revision, which every
+     * window then fetches. Turning branding on also offers the default mode
+     * its one-time Theme Default colour, as a theme landing would have.
+     * Never throws: the setting is saved either way.
+     */
+    brandingChanged(): void {
+      let payload: BrandThemeChangedPayload = null
+      try {
+        payload = cachedPayload(activeOrigin())
+      } catch (err) {
+        logger.warn('brand theme cache could not be read; showing stock', { error: err instanceof Error ? err.message : 'error' })
+      }
+      deps.publish(payload)
+      if (payload && activated) service.adoptDefaultMode(deps.activeProfileId())
     },
 
     /** Fetch the profile's server theme once. Never throws. */

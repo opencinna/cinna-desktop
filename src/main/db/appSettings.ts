@@ -57,6 +57,8 @@ export const DEFAULTS: AppSettingsSchema = {
   localDevConsent: '',
   // JSON `{ "<userId>": true }`. Empty = no profile's default mode has adopted the theme colour.
   brandedDefaultModeProfiles: '',
+  // Account Branded: a server's brand theme shows. False = Cinna Original.
+  serverBranding: true,
   // Undecided until `capabilityService` decides it once; read as off until then.
   notesCapability: 'unset',
   dashboardsCapability: 'unset'

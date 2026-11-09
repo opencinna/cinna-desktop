@@ -13,7 +13,7 @@ Implementation companion to [Brand Themes](brand_themes.md).
 
 ### Main process
 
-- `src/main/services/brandTheme/brandThemeService.ts` — `createBrandThemeService`, `brandThemeService`: `get`, `resolveForProfile`, `applyForProfile`, `refresh`, `start`, `stop`.
+- `src/main/services/brandTheme/brandThemeService.ts` — `createBrandThemeService`, `brandThemeService`: `get`, `resolveForProfile`, `applyForProfile`, `refresh`, `brandingChanged`, `start`, `stop`. `deps.brandingEnabled()` (reads `serverBranding`) makes `get`, `resolveForProfile` and the cached payload of activation/refresh answer null, and stops a refresh from publishing.
 - `src/main/services/brandTheme/parse.ts` — `parseBrandTheme`, `toResolvedBrandTheme`, `BRAND_ASSET_LIMITS`: the safety checks. Pure.
 - `src/main/services/brandTheme/svgCheck.ts` — `checkSvg`: accepts exactly core's canonical SVG serialisation and rejects anything else instead of repairing it.
 - `src/main/services/brandTheme/imageFacts.ts` — `sniffMime`, `rasterSize`: type and pixel size from the bytes.
@@ -69,7 +69,7 @@ Implementation companion to [Brand Themes](brand_themes.md).
 
 ## Configuration
 
-None. There is no setting, env var or opt-out. The endpoint path is `BRAND_THEME_PATH`; asset URLs are built from the hash, not taken from the document.
+App setting `serverBranding` (boolean, default true; only an explicit `false` turns it off), set from Settings → Features → Interface → Branding. `settings.ipc.ts` calls `brandThemeService.brandingChanged()` after saving it: that publishes null (off) or the cached revision (on) so every window re-resolves, and, when on with a brand and after activation, runs `adoptDefaultMode` for the active profile. It never throws; the setting is saved either way. The endpoint path is `BRAND_THEME_PATH`; asset URLs are built from the hash, not taken from the document.
 
 ## Security
 

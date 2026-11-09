@@ -79,6 +79,7 @@ function setup(assets: Map<string, Buffer>, startup = 'local') {
   const adopted: string[] = []
   // Like getProfileScopeUserId(): the guest until an activation sets a profile.
   let active = 'local'
+  const branding = { enabled: true }
   const service = createBrandThemeService({
     startupProfileId: () => startup,
     activeProfileId: () => active,
@@ -86,13 +87,14 @@ function setup(assets: Map<string, Buffer>, startup = 'local') {
     fetch: core.fetch,
     publish: (payload) => emitted.push(payload),
     themeAvailable: (userId) => adopted.push(userId),
+    brandingEnabled: () => branding.enabled,
     intervalMs: 60_000
   })
   const activate = (id: string): void => {
     active = id
     service.applyForProfile(id)
   }
-  return { core, emitted, adopted, service, activate }
+  return { core, emitted, adopted, service, activate, branding }
 }
 
 beforeEach(() => {
@@ -338,7 +340,7 @@ describe('the default mode\u2019s one-time adoption', () => {
     const core = fakeCore(full.assets)
     const service = createBrandThemeService({
       startupProfileId: () => 'acme-1', activeProfileId: () => 'acme-1', serverOf: (id) => SERVERS[id] ?? null,
-      fetch: core.fetch, publish: () => {}, intervalMs: 60_000,
+      fetch: core.fetch, publish: () => {}, intervalMs: 60_000, brandingEnabled: () => true,
       themeAvailable: () => { throw new Error('no database') }
     })
     service.applyForProfile('acme-1')
@@ -346,5 +348,47 @@ describe('the default mode\u2019s one-time adoption', () => {
     await service.refresh('acme-1')
     expect(() => service.adoptDefaultMode('acme-1')).not.toThrow()
     expect(service.get()?.revision).toBe(1)
+  })
+})
+
+describe('Branding: Cinna Original', () => {
+  const full = fixture('valid', 'full')
+
+  it('answers stock everywhere while off, keeps fetching, and turning it back on applies the cache at once', async () => {
+    const { core, emitted, adopted, service, activate, branding } = setup(full.assets)
+    branding.enabled = false
+    activate('acme-1')
+    core.state.reply = { status: 200, doc: full.doc }
+    await service.refresh('acme-1')
+    // Fetched and cached, but nothing announced, shown or adopted.
+    expect(brandThemeRepo.get('https://acme.example')?.revision).toBe(1)
+    expect(emitted).toEqual([null])
+    expect(adopted).toEqual([])
+    expect(service.get()).toBeNull()
+    expect(service.resolveForProfile('acme-2')).toBeNull()
+    // A profile switch onto the branded server stays stock too.
+    activate('acme-2')
+    expect(emitted).toEqual([null, null])
+
+    branding.enabled = true
+    service.brandingChanged()
+    expect(emitted).toEqual([null, null, { origin: 'https://acme.example', revision: 1 }])
+    expect(service.get()?.origin).toBe('https://acme.example')
+    expect(adopted).toEqual(['acme-2'])
+    expect(core.state.calls.filter((c) => !c.url.includes('/assets/'))).toHaveLength(1)
+
+    branding.enabled = false
+    service.brandingChanged()
+    expect(emitted.at(-1)).toBeNull()
+    expect(service.get()).toBeNull()
+    expect(adopted).toEqual(['acme-2'])
+  })
+
+  it('turning it on for a profile without a brand announces stock and adopts nothing', () => {
+    const { emitted, adopted, service, activate } = setup(full.assets)
+    activate('other')
+    service.brandingChanged()
+    expect(emitted).toEqual([null, null])
+    expect(adopted).toEqual([])
   })
 })

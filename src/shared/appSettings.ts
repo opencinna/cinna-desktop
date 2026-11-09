@@ -244,6 +244,15 @@ export interface AppSettingsSchema {
    */
   brandedDefaultModeProfiles: string
   /**
+   * Branding in Settings → Features → Interface. True (the default, Account
+   * Branded): a profile on a Cinna server that publishes a brand theme shows
+   * it. False (Cinna Original): every window, password lock included, shows
+   * stock Cinna whatever the server publishes. Installation-wide. Main's
+   * `brandThemeService` is the only reader; the theme is still fetched and
+   * cached while this is off, so turning it back on applies at once.
+   */
+  serverBranding: boolean
+  /**
    * Whether Notes (the sidebar tab, the composer's `?` picker, Save to note)
    * is on. `'unset'` until decided: main decides it once from whether any
    * profile has a note, and every reader treats `'unset'` as off. See

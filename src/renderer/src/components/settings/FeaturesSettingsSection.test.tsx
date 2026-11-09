@@ -232,6 +232,42 @@ describe('FeaturesSettingsSection', () => {
     expect(screen.getByText(/pointer reaches the left edge of the window/)).toBeTruthy()
   })
 
+  it('sets Branding right under Theme, Account Branded by default, and saves only a change', () => {
+    render(<FeaturesSettingsSection />)
+    const group = screen.getByRole('group', { name: 'Branding' })
+    const theme = screen.getByRole('button', { name: 'System' }).closest('[role="group"]') as HTMLElement
+    const docking = screen.getByRole('group', { name: 'Sidebar docking' })
+    expect(theme.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(group.compareDocumentPosition(docking) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const original = within(group).getByRole('button', { name: 'Cinna Original' })
+    const branded = within(group).getByRole('button', { name: 'Account Branded' })
+    expect(branded.getAttribute('aria-pressed')).toBe('true')
+    expect(original.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(branded)
+    expect(setSetting).not.toHaveBeenCalled()
+    fireEvent.click(original)
+    expect(setSetting).toHaveBeenCalledWith({ key: 'serverBranding', value: false })
+  })
+
+  it('shows Cinna Original as chosen when branding is off, and nothing chosen before settings load', () => {
+    settings = { ...HEALTHY, serverBranding: false }
+    const { unmount } = render(<FeaturesSettingsSection />)
+    const group = screen.getByRole('group', { name: 'Branding' })
+    expect(within(group).getByRole('button', { name: 'Cinna Original' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(within(group).getByRole('button', { name: 'Account Branded' }))
+    expect(setSetting).toHaveBeenCalledWith({ key: 'serverBranding', value: true })
+    unmount()
+
+    settings = undefined
+    render(<FeaturesSettingsSection />)
+    const loading = screen.getByRole('group', { name: 'Branding' })
+    for (const button of within(loading).getAllByRole('button')) {
+      expect(button.getAttribute('aria-pressed')).toBe('false')
+      expect((button as HTMLButtonElement).disabled).toBe(true)
+    }
+  })
+
   it('explains a rejected setting instead of silently resetting the switch', () => {
     saveError = new Error("Error invoking remote method 'settings:set': Error: Unknown app setting: showAgentSidebarSections")
     render(<FeaturesSettingsSection />)

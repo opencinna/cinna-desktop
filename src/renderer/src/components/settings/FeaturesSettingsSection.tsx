@@ -91,6 +91,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const showLocalDataInAllProfiles = settings?.showLocalDataInAllProfiles !== false
   const prioritizeAccountDefaults = settings?.prioritizeAccountDefaults === true
   const guidedFirstBuild = settings?.guidedFirstBuild !== false
+  const serverBranding = settings?.serverBranding !== false
 
   // Hint retirement counters live in localStorage (renderer-local UI state),
   // not in `app_settings` — so resetting them is a store call, not a mutation.
@@ -262,6 +263,22 @@ export function FeaturesSettingsSection(): React.JSX.Element {
                   onClick={() => setThemePreference(value)}
                   className={`rounded px-2.5 py-1 text-[13px] transition-colors ${themePreference === value ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
                   {value[0].toUpperCase() + value.slice(1)}
+                </button>
+              ))}
+            </div>
+          </SettingsRow>
+          <SettingsRow className="flex items-center justify-between gap-3">
+            <SettingsLabel info="Account Branded shows the colours, logo and background your Cinna server publishes for everyone signed in to it. Where the server publishes none, Cinna's own look shows either way. Cinna Original always shows Cinna's own look, on every profile.">Branding</SettingsLabel>
+            <div role="group" aria-label="Branding" className="flex shrink-0 rounded-md border border-[var(--color-border)] p-0.5">
+              {([[false, 'Cinna Original'], [true, 'Account Branded']] as const).map(([value, label]) => (
+                <button key={label} type="button" aria-pressed={settings ? serverBranding === value : false}
+                  disabled={!settings || disabled}
+                  onClick={() => {
+                    if (!settings || disabled || serverBranding === value) return
+                    setSetting.mutate({ key: 'serverBranding', value })
+                  }}
+                  className={`rounded px-2.5 py-1 text-[13px] transition-colors disabled:opacity-50 ${settings && serverBranding === value ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                  {label}
                 </button>
               ))}
             </div>

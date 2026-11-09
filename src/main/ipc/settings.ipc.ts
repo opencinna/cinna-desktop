@@ -9,6 +9,7 @@ import { createLogger } from '../logger/logger'
 import type { AppSettingsSchema } from '../../shared/appSettings'
 import { ipcHandle } from './_wrap'
 import { aiFunctions } from '../services/aiFunctionsService'
+import { brandThemeService } from '../services/brandTheme/brandThemeService'
 import type { AiFunctionsBackendStatus } from '../../shared/aiFunctions'
 
 const logger = createLogger('settings-ipc')
@@ -69,6 +70,8 @@ export function registerSettingsHandlers(): void {
       // Settings that gate a main-process side effect run their sync here, so
       // the renderer toggle is enough to drive the change without restart.
       if (key === 'enableTrayIcon') syncTrayFromSettings()
+      // Every window drops or takes the server's brand at once.
+      if (key === 'serverBranding') brandThemeService.brandingChanged()
       /**
        * **The Default Runtime is cached on every folder agent's row**, as
        * `driver_config.launcher`, and that cache is what `capabilitiesFor`
