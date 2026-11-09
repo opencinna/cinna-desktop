@@ -30,7 +30,7 @@ vi.mock('./chatModeService', () => ({
 const DEFAULT = '__default__'
 const USER = 'profile-1'
 
-const { buildChatListSummaries } = await import('./chatListSummary')
+const { buildChatListSummaries, buildChatWhos } = await import('./chatListSummary')
 const { chatRepo } = await import('../db/chats')
 const { agentRepo } = await import('../db/agents')
 const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
@@ -169,4 +169,21 @@ it('has no dates and no count for a chat with no messages, and never reads anoth
 
   expect(summaryOf(chat.id)).toMatchObject({ others: [], firstMessageAt: null, lastMessageAt: null, messageCount: 0 })
   expect(chatRepo.listMessageStats(USER)).toEqual([])
+})
+
+it('resolves who each chat is with alone exactly as the summaries do', () => {
+  const chats = [
+    chatRepo.create(USER, { agentId: 'a-research', modeId: 'research-mode' }),
+    chatRepo.create(USER, { modeId: 'research-mode' }),
+    chatRepo.create(USER, { modeId: 'deleted-mode', modelId: 'claude-sonnet' }),
+    chatRepo.create(USER, { agentId: 'remote:a-reviewer' }),
+    chatRepo.create(USER, { router: 'human' }),
+    chatRepo.create(USER)
+  ]
+  say(chats[4].id, 'assistant', '2026-10-01T09:00:00Z', { sourceAgentId: 'a-writer' })
+  const listed = chatRepo.list(USER)
+  const summaries = buildChatListSummaries(DEFAULT, USER, listed)
+  const whos = buildChatWhos(DEFAULT, USER, listed)
+  expect(whos.get(chats[4].id)).toMatchObject({ kind: 'agent', agentId: 'a-writer' })
+  for (const chat of listed) expect(whos.get(chat.id)).toEqual(summaries.get(chat.id)?.with)
 })

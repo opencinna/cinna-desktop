@@ -10,7 +10,11 @@ import { forwardRef, useImperativeHandle, useRef } from 'react'
 
 const spy = vi.hoisted(() => {
   window.api = { app: { setTheme: async () => {} } } as never
-  return { dropFiles: vi.fn(), resize: null as null | ((height: number) => void), handoffPending: false }
+  return {
+    dropFiles: vi.fn(), resize: null as null | ((height: number) => void), handoffPending: false,
+    /** Chat search's reach observer: the composer area's and the chat area's boxes. */
+    reach: null as null | (() => void)
+  }
 })
 vi.mock('../../hooks/useAppSettings', () => ({ useAppSettings: () => ({ data: { defaultMultiAgentRouting: 'human' } }) }))
 vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: [] }) }))
@@ -24,8 +28,8 @@ vi.mock('../../hooks/useApplyChatMode', () => ({ useApplyChatMode: () => vi.fn()
 vi.mock('../../hooks/useNewChatLike', () => ({ useNewChatLike: () => vi.fn(async () => undefined) }))
 vi.mock('../../hooks/useChat', () => ({ useChatDetail: () => ({ data: null }) }))
 vi.mock('../chat/MessageStream', () => ({
-  MessageStream: (props: { bottomPadding?: number; pillBottom?: number }) =>
-    <output data-testid="stream" data-transcript-scroll>{JSON.stringify({ padding: props.bottomPadding, pill: props.pillBottom ?? null })}</output>
+  MessageStream: (props: { bottomPadding?: number; pillBottom?: number; searchBottom?: number }) =>
+    <output data-testid="stream" data-transcript-scroll data-search-bottom={props.searchBottom ?? 'none'}>{JSON.stringify({ padding: props.bottomPadding, pill: props.pillBottom ?? null })}</output>
 }))
 // The chat's pending handoff, as the cache its PendingHandoffControl polls would hold it.
 vi.mock('../tasks/PendingHandoffControl', async () => {
@@ -68,7 +72,10 @@ beforeEach(() => {
     constructor(private callback: ResizeObserverCallback) {}
     // The composer dock's height only; chat search's reach observer watches other boxes.
     observe(el: Element): void {
-      if (!el.classList.contains('composer-dock')) return
+      if (!el.classList.contains('composer-dock')) {
+        spy.reach = () => this.callback([], this as never)
+        return
+      }
       spy.resize = (height) => this.callback([{ contentRect: { height } } as ResizeObserverEntry], this as never)
     }
     disconnect(): void {}
@@ -263,4 +270,45 @@ it('ends on two scroll-down attempts at the bottom of the transcript, focusing t
   wheel(1400)
   expect(useUIStore.getState().minimalView).toBe(false)
   expect(document.activeElement).toBe(screen.getByLabelText('Message'))
+})
+
+it("places chat search above the composer's drawn content, following it, and measures again after minimal view", () => {
+  // The chat area ends at 800; the composer's content starts at `top`.
+  const geo = { top: 700 }
+  const original = HTMLElement.prototype.getBoundingClientRect
+  const boxes = { area: null as HTMLElement | null, composer: null as HTMLElement | null }
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this === boxes.area) return { top: 0, bottom: 800 } as DOMRect
+    if (this === boxes.composer) return { top: geo.top, bottom: 788 } as DOMRect
+    return original.call(this)
+  }
+  try {
+    render(<ChatWorkspace />)
+    boxes.composer = screen.getByTestId('composer').parentElement
+    boxes.area = dock().parentElement
+    const searchBottom = (): string | null => screen.getByTestId('stream').getAttribute('data-search-bottom')
+    act(() => spy.reach?.())
+    expect(searchBottom()).toBe('108')
+    // A notice panel opens above the box.
+    geo.top = 640
+    act(() => spy.reach?.())
+    expect(searchBottom()).toBe('168')
+
+    enterMinimal()
+    settle()
+    expect(searchBottom()).toBe('none')
+    // The panel went while the composer was away; the slide back resizes nothing.
+    geo.top = 690
+    act(() => useUIStore.getState().setMinimalView(false))
+    settle()
+    settle()
+    expect(dock().dataset.minimalPhase).toBe('full')
+    expect(searchBottom()).toBe('118')
+    // And a slide that ends later is measured too.
+    geo.top = 680
+    fireEvent.transitionEnd(dock())
+    expect(searchBottom()).toBe('128')
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = original
+  }
 })

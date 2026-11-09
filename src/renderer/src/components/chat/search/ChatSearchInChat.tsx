@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from 'react'
-import { useChatSearchStore } from '../../../stores/chatSearch.store'
+import { focusChatComposer, useChatSearchStore } from '../../../stores/chatSearch.store'
 import { ChatSearchBar } from './ChatSearchBar'
 import { SearchHitCard } from './SearchHitCard'
 import { SearchResultList } from './SearchResultList'
@@ -40,6 +40,7 @@ export const CHAT_SEARCH_CARD_LIMIT = 30
 export function ChatSearchInChat<M extends SearchableMessage>({ messages, containerRef, contentRef, bottom, authorOf }: ChatSearchInChatProps<M>): React.JSX.Element {
   const query = useChatSearchStore((s) => s.query)
   const close = useChatSearchStore((s) => s.close)
+  const closeForPick = useChatSearchStore((s) => s.closeForPick)
   const { applied, pending, flush } = useSearchPause(query)
   const q = applied.trim()
   const allHits = useMemo(() => searchChatMessages(messages, q), [messages, q])
@@ -76,7 +77,8 @@ export function ChatSearchInChat<M extends SearchableMessage>({ messages, contai
     const container = containerRef.current
     const content = contentRef.current
     if (container && content) jumpToMessage(container, content, messageId, q)
-    close()
+    closeForPick()
+    focusChatComposer(useChatSearchStore.getState().searchableChatId)
   }
 
   const ids = hits.map((hit) => optionId(hit.message.id))

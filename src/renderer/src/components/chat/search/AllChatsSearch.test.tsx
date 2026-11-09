@@ -314,4 +314,34 @@ describe('all-chats search', () => {
       composer.remove()
     }
   })
+
+  it('does not give focus back to where the search started after a pick', async () => {
+    useChatSearchStore.setState({ scope: null })
+    const before = document.createElement('button')
+    document.body.append(before)
+    try {
+      view()
+      before.focus()
+      act(() => { useChatSearchStore.getState().open('all') })
+      await searchFor('retry')
+      fireEvent.click(screen.getByText('Retry each batch'))
+      expect(useChatSearchStore.getState().jump).toMatchObject({ chatId: 'c-pg' })
+      expect(document.activeElement).not.toBe(before)
+    } finally {
+      before.remove()
+    }
+  })
+
+  it("does not call a narrowed list of the newest 50 chats truncated while main's filtered search runs", async () => {
+    served = { ...RESULT, truncated: true }
+    view()
+    await searchFor('retry')
+    expect(screen.getByText('50+ chats')).toBeTruthy()
+    search.mockImplementation(async (query: string, filter?: ChatSearchFilter) =>
+      filter ? new Promise(() => {}) : serve(query))
+    fireEvent.click(chip(/^Finance/))
+    await waitFor(() => expect(groupTitles()).toEqual(['Q3 invoices']))
+    expect(screen.queryByText('50+ chats')).toBeNull()
+    expect(screen.getByText('1 in 1 chat')).toBeTruthy()
+  })
 })

@@ -56,7 +56,7 @@ import { useStickToBottom } from '../../hooks/useStickToBottom'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import { QueuedMessages, useQueuedMessages } from './QueuedMessages'
 import { holdCollapseAnchor } from './transcriptAnchor'
-import { useChatSearchStore } from '../../stores/chatSearch.store'
+import { focusChatComposer, useChatSearchStore } from '../../stores/chatSearch.store'
 import { ChatSearchInChat } from './search/ChatSearchInChat'
 import { jumpToMessage } from './search/jumpToMessage'
 import {
@@ -743,13 +743,15 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
         const content = contentRef.current
         if (container && content) jumpToMessage(container, content, messageId, query)
         useChatSearchStore.getState().clearJump(nonce)
+        // A pick closed the search without giving focus back: the opened chat's composer takes it.
+        focusChatComposer(chatId)
       })
     })
     return () => {
       cancelAnimationFrame(outer)
       cancelAnimationFrame(inner)
     }
-  }, [searchJump, searchMessagesLoaded, containerRef, contentRef])
+  }, [searchJump, searchMessagesLoaded, containerRef, contentRef, chatId])
   const searchAuthor = useCallback(
     (message: { sourceAgentId?: string | null }): string =>
       agentNameById.get(message.sourceAgentId ?? rootAgentId ?? '') ?? 'Assistant',

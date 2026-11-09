@@ -93,7 +93,8 @@ function AllChatsOverlay(): React.JSX.Element {
       if (!base) return undefined
       const keys = new Set(agentFilter)
       const groups = new Set(withWho(base.groups).filter((group) => keys.has(group.key)).map((group) => group.chatId))
-      return { ...base, groups: base.groups.filter((group) => groups.has(group.chatId)) }
+      // Not the base's truncation: these are only its chats, narrowed.
+      return { ...base, truncated: false, groups: base.groups.filter((group) => groups.has(group.chatId)) }
     },
     staleTime: 0,
     gcTime: 30_000
@@ -148,8 +149,10 @@ function AllChatsOverlay(): React.JSX.Element {
 
   const left = useDockedSidebarEdge()
 
+  const closeForPick = useChatSearchStore((s) => s.closeForPick)
   const openChat = (chatId: string, messageId: string | null): void => {
-    close()
+    // Focus goes to the opened chat's composer once it has scrolled there, not back here.
+    closeForPick()
     useUIStore.getState().setActiveJobId(null)
     useChatStore.getState().setActiveChatId(chatId)
     useUIStore.getState().setActiveView('chat')

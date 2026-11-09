@@ -193,8 +193,15 @@ export function ChatWorkspace({
     const ro = new ResizeObserver(measure)
     ro.observe(composer)
     ro.observe(area)
-    return () => ro.disconnect()
-  }, [activeChatId, activeView])
+    // Minimal view slides the dock by transform, which no ResizeObserver
+    // sees: measure again once a slide has ended.
+    const dockEl = inputWrapperRef.current
+    dockEl?.addEventListener('transitionend', measure)
+    return () => {
+      ro.disconnect()
+      dockEl?.removeEventListener('transitionend', measure)
+    }
+  }, [activeChatId, activeView, minimal.phase])
   // Whether the cloud shows (its draft has content): Jump to latest then sits above it.
   const [cloudShown, setCloudShown] = useState(false)
   // Scrolling down twice more at the bottom of the transcript leaves minimal view.

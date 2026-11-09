@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
-import { useChatSearchStore } from '../../stores/chatSearch.store'
+import { CHAT_SEARCH_JUMP_TTL_MS, useChatSearchStore } from '../../stores/chatSearch.store'
 import { MessageStream } from './MessageStream'
 import { useChatSearchShortcut } from './search/useChatSearchShortcut'
 
@@ -267,5 +267,64 @@ describe('chat search in the transcript', () => {
       before.remove()
       composer.remove()
     }
+  })
+
+  it("focuses the opened chat's composer once a picked result's jump fires, not where the search started", async () => {
+    vi.useFakeTimers()
+    const before = document.createElement('button')
+    const composer = document.createElement('textarea')
+    composer.setAttribute('data-chat-composer', 'c-1')
+    document.body.append(before, composer)
+    try {
+      before.focus()
+      // As all-chats search does on a pick.
+      act(() => { useChatSearchStore.getState().open('all') })
+      act(() => {
+        useChatSearchStore.getState().closeForPick()
+        useChatSearchStore.getState().requestJump({ chatId: 'c-1', messageId: 'm2', query: 'retry' })
+      })
+      render(view('c-1'))
+      await act(async () => { vi.advanceTimersByTime(50) })
+      expect(useChatSearchStore.getState().jump).toBeNull()
+      expect(document.activeElement).toBe(composer)
+    } finally {
+      before.remove()
+      composer.remove()
+    }
+  })
+
+  it("focuses this chat's composer after a pick in the chat's own search", () => {
+    const before = document.createElement('button')
+    const composer = document.createElement('textarea')
+    composer.setAttribute('data-chat-composer', 'c-1')
+    document.body.append(before, composer)
+    try {
+      useChatSearchStore.setState({ query: 'retry' })
+      render(view('c-1'))
+      before.focus()
+      pressFind()
+      fireEvent.click(screen.getAllByRole('option')[1])
+      expect(chatSearch()).toBeNull()
+      expect(document.activeElement).toBe(composer)
+    } finally {
+      before.remove()
+      composer.remove()
+    }
+  })
+
+  it('drops a jump that has not fired within its time limit, as when the user left the chat view', async () => {
+    vi.useFakeTimers()
+    const saved = data.byChat['c-1']
+    data.byChat['c-1'] = undefined
+    useChatSearchStore.getState().requestJump({ chatId: 'c-1', messageId: 'm2', query: 'retry' })
+    const { rerender } = render(view('c-1'))
+    // Settings: no transcript at all, so no other chat clears it.
+    rerender(view(null))
+    act(() => { vi.advanceTimersByTime(CHAT_SEARCH_JUMP_TTL_MS) })
+    expect(useChatSearchStore.getState().jump).toBeNull()
+    data.byChat['c-1'] = saved
+    rerender(view('c-1'))
+    await act(async () => { vi.advanceTimersByTime(50) })
+    expect(document.querySelector('.chat-search-flash')).toBeNull()
   })
 })

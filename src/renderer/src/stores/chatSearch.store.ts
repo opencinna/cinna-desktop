@@ -32,6 +32,12 @@ interface ChatSearchState {
   open: (scope: ChatSearchScope) => void
   /** Closes, and gives focus back to what had it before the search opened. */
   close: () => void
+  /**
+   * Closes for a picked result: focus is not given back to where the search
+   * started, it goes to the picked chat's composer once the transcript has
+   * scrolled there ({@link focusChatComposer}).
+   */
+  closeForPick: () => void
   setQuery: (query: string) => void
   toggleAgent: (key: string) => void
   clearAgents: () => void
@@ -45,6 +51,22 @@ let nonce = 0
 
 /** What had focus when the search opened: it gets it back on close. */
 let focusBefore: HTMLElement | null = null
+
+/**
+ * How long a picked result waits for its chat's transcript. A jump that has
+ * not fired by then (the user went to Settings or a dashboard before the chat
+ * loaded) is dropped, so it never fires on a later visit.
+ */
+export const CHAT_SEARCH_JUMP_TTL_MS = 5_000
+let jumpTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Focus the composer of `chatId`, else any composer, without scrolling. */
+export function focusChatComposer(chatId: string | null): void {
+  if (typeof document === 'undefined') return
+  const composers = [...document.querySelectorAll<HTMLElement>('textarea[data-chat-composer]')]
+  const composer = composers.find((el) => el.getAttribute('data-chat-composer') === chatId) ?? composers[0]
+  composer?.focus({ preventScroll: true })
+}
 
 /**
  * Back to what had focus before the search opened, while it is still in the
@@ -61,9 +83,7 @@ function restoreFocus(chatId: string | null): void {
     before.focus({ preventScroll: true })
     if (document.activeElement === before) return
   }
-  const composers = [...document.querySelectorAll<HTMLElement>('textarea[data-chat-composer]')]
-  const composer = composers.find((el) => el.getAttribute('data-chat-composer') === chatId) ?? composers[0]
-  composer?.focus({ preventScroll: true })
+  focusChatComposer(chatId)
 }
 
 export const useChatSearchStore = create<ChatSearchState>((set, get) => ({
@@ -88,6 +108,10 @@ export const useChatSearchStore = create<ChatSearchState>((set, get) => ({
     set({ scope: null })
     restoreFocus(get().searchableChatId)
   },
+  closeForPick: () => {
+    focusBefore = null
+    set({ scope: null })
+  },
   setQuery: (query) => set({ query }),
   toggleAgent: (key) =>
     set((state) => ({
@@ -106,6 +130,14 @@ export const useChatSearchStore = create<ChatSearchState>((set, get) => ({
       ...(chatId !== null && state.jump && state.jump.chatId !== chatId ? { jump: null } : {})
     })
   },
-  requestJump: (jump) => set({ jump: { ...jump, nonce: ++nonce } }),
+  requestJump: (jump) => {
+    const id = ++nonce
+    set({ jump: { ...jump, nonce: id } })
+    if (jumpTimer) clearTimeout(jumpTimer)
+    jumpTimer = setTimeout(() => {
+      jumpTimer = null
+      get().clearJump(id)
+    }, CHAT_SEARCH_JUMP_TTL_MS)
+  },
   clearJump: (done) => set((state) => (state.jump?.nonce === done ? { jump: null } : {}))
 }))

@@ -30,7 +30,7 @@ import { turnNotices } from './turnNotices'
 import type { ChatRunResult } from '../../shared/chatRunResult'
 import type { ChatListSummary } from '../../shared/chatListSummary'
 import { CHAT_SEARCH_CHAT_LIMIT, CHAT_SEARCH_MAX_QUERY, CHAT_SEARCH_PER_CHAT, type ChatSearchFilter, type ChatSearchResult } from '../../shared/chatSearch'
-import { buildChatListSummaries } from './chatListSummary'
+import { buildChatListSummaries, buildChatWhos } from './chatListSummary'
 import { appSettingsRepo } from '../db/appSettings'
 import { localAgentService } from './localAgents/localAgentService'
 import { decideGuidedChat } from './localAgents/guidedBuild'
@@ -57,7 +57,6 @@ function requireOwnedChat(userId: string, chatId: string): ChatRow {
   return chat
 }
 
-/** The owners argument for a list read: a lone owner stays a string. */
 /** A `chat:search` filter from the renderer, checked; null when it limits nothing. */
 function searchFilter(filter: unknown): { agentIds: Set<string>; modeIds: Set<string>; none: boolean } | null {
   if (filter === undefined || filter === null) return null
@@ -73,6 +72,7 @@ function searchFilter(filter: unknown): { agentIds: Set<string>; modeIds: Set<st
   return out.agentIds.size > 0 || out.modeIds.size > 0 || out.none ? out : null
 }
 
+/** The owners argument for a list read: a lone owner stays a string. */
 function listOwners(userId: string): string | string[] {
   const scopes = chatScopesFor(userId)
   return scopes.length === 1 ? scopes[0] : scopes
@@ -211,14 +211,15 @@ export const chatService = {
     const text = query.trim().slice(0, CHAT_SEARCH_MAX_QUERY)
     if (!text) return { groups: [], truncated: false }
     const owners = listOwners(userId)
-    // Who a chat is with, exactly as the Chats list groups it: from the same
-    // summaries, so a conductor-bound chat counts as its mode, not its runtime.
+    // Who a chat is with, exactly as the Chats list groups it: the summaries'
+    // own resolution (without their message stats), so a conductor-bound chat
+    // counts as its mode, not its runtime.
     let chatIds: string[] | undefined
     if (who) {
       const listed = chatRepo.list(owners)
-      const summaries = buildChatListSummaries(getSettingsScopeUserId(), userId, listed, owners)
+      const whos = buildChatWhos(getSettingsScopeUserId(), userId, listed, owners)
       chatIds = listed.filter((chat) => {
-        const withWho = summaries.get(chat.id)?.with
+        const withWho = whos.get(chat.id)
         if (!withWho) return false
         if (withWho.kind === 'agent' && withWho.agentId) return who.agentIds.has(withWho.agentId)
         if (withWho.kind === 'mode') return who.modeIds.has(withWho.modeId ?? withWho.name)
