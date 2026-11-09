@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CLOUD_TILES_POLL_MS, type AddTileInput, type DashboardsErrorCode, type DashboardsOutcome, type UpdateTileInput } from '../../../shared/dashboards'
 
 /**
@@ -85,6 +85,18 @@ export function useTileResult(tileId: string | null) {
     queryFn: async () => unwrap(await window.api.dashboards.tileResult(tileId!)).result,
     enabled: !!tileId,
     retry: false
+  })
+}
+
+/** Whether any of these tiles is recomputing now. Shares the tiles' own result queries. */
+export function useAnyTileRefreshing(tileIds: string[]): boolean {
+  return useQueries({
+    queries: tileIds.map((tileId) => ({
+      queryKey: tileResultKey(tileId),
+      queryFn: async () => unwrap(await window.api.dashboards.tileResult(tileId)).result,
+      retry: false
+    })),
+    combine: (results) => results.some((result) => !!result.data?.refreshing)
   })
 }
 

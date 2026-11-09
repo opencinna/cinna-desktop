@@ -13,7 +13,8 @@ import { useEffect, useState } from 'react'
  *   glow (ChatItemTooltip) and the text caret's fade (caretFade).
  *
  * Responses to the user's own action (ChatTransition, RouterBadge's width
- * transition) and functional signals (the composer notice's orbit) are neither.
+ * transition) and functional signals (the composer notice's orbit, a button's
+ * `app-button-running`) are neither.
  * A new ambient animation picks a class; a heavy one subscribes here.
  *
  * Idle means: no pointer, key, wheel, scroll or input activity anywhere in the

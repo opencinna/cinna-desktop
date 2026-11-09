@@ -166,6 +166,18 @@ describe('tiles', () => {
     expect(service.addTile('p1', { dashboardId: d.dashboard.id, agentId: 'folder:m1', component: 'deals', size: 'custom' })).toMatchObject({ ok: false, code: 'invalid_input' })
   })
 
+  it('keep a border and a title until Edit tile turns them off, and refuse anything but a switch', () => {
+    const d = service.create('p1', 'Sales')
+    if (!d.ok) throw new Error()
+    const t = addDeals(d.dashboard.id)
+    if (!t.ok) throw new Error()
+    expect(t.tile).toMatchObject({ showBorder: true, showTitle: true })
+    expect(service.updateTile('p1', { tileId: t.tile.id, showBorder: false })).toMatchObject({ ok: true, tile: { showBorder: false, showTitle: true } })
+    expect(service.updateTile('p1', { tileId: t.tile.id, showTitle: false })).toMatchObject({ ok: true, tile: { showBorder: false, showTitle: false } })
+    expect(service.resolveTile('p1', t.tile.id)?.tile).toMatchObject({ showBorder: false, showTitle: false })
+    expect(service.updateTile('p1', { tileId: t.tile.id, showTitle: 'no' as never })).toMatchObject({ ok: false, code: 'invalid_input' })
+  })
+
   it('take a change to the suggested questions from Edit tile, trimmed, and refuse an empty or oversized one', () => {
     const d = service.create('p1', 'Sales')
     if (!d.ok) throw new Error()

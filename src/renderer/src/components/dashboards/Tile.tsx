@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, GripVertical, Info, Loader2, MoreHorizontal, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Bot, GripVertical, Info, Loader2, MessageSquare, MoreHorizontal, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { TILE_CUSTOM_LABEL, TILE_SIZES, TILE_SIZE_LABELS, enabledTilePrompts, nearestPresetSize, tileSpan, type CloudTileStatus, type CollectedPageContext, type ComponentPrompt, type TileScheduleState, type TileSize, type TileView } from '../../../../shared/dashboards'
 import { tileParamsShown } from './dashboardContext'
 import { useRemoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
@@ -10,6 +10,7 @@ import { EditTileDialog } from './EditTileDialog'
 import { TileBody, TileSkeleton, ageLabel } from './TileBody'
 import { COMPONENT_LINK, MissingCredentials, errorFindings, openAgentTab, openCinnaSignIn } from './componentParts'
 import { FILTER_ROW_TOP, TileFilters, hasFilterRow } from './TileFilters'
+import { TilePromptButton } from './TilePromptButton'
 import type { ViewSelection } from './views/nativeViews'
 import { drawnHighlights, revealFirstHighlight, revealHighlight, useTileHighlight } from './useTileHighlight'
 
@@ -57,9 +58,9 @@ export function scheduleLine(schedule: TileScheduleState, now = Date.now()): str
   return `Fed by ${schedule.name}${schedule.nextRunAt !== null ? ` · next run ${nextRunLabel(schedule.nextRunAt, now)}` : ''}`
 }
 
-/** How many suggested questions fit on the hover bar for a tile this wide; the rest are in ⋯. */
-export function promptsOnBar(cols: number): number {
-  return cols >= 8 ? 2 : cols >= 4 ? 1 : 0
+/** Whether a tile this wide has room for its suggested questions on the hover bar; narrower, they are in ⋯. */
+export function promptsFitOnBar(cols: number): boolean {
+  return cols >= 4
 }
 
 const BAR_TEXT_BUTTON =
@@ -73,6 +74,20 @@ const BAR_TEXT_BUTTON =
  */
 const BAR_OVERLAY_CONTROLS =
   'absolute inset-y-0 right-full flex items-center gap-1 whitespace-nowrap bg-[linear-gradient(to_right,transparent,var(--color-bg)_1.25rem)] pl-6 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100'
+
+/**
+ * The title off: the bar, and under it the filter row, are one floating header
+ * (`data-tile-header`). Both slide down from the tile's top and fade in on hover
+ * or with focus in either, reversing to leave, over the content and moving
+ * nothing (ux rule 1); the tile clips them at rest. The filter row starts two
+ * heights up, under the bar, so they travel as one. Both are opaque and take
+ * their clicks, so nothing unseen is pressed through them. Fade alone with Extra
+ * UI animation off or under reduced motion.
+ */
+const FLOATING_REVEAL =
+  'transition-[opacity,translate] duration-200 ease-out group-hover:opacity-100 group-hover:translate-y-0 group-has-[[data-tile-header]:focus-within]:opacity-100 group-has-[[data-tile-header]:focus-within]:translate-y-0 motion-reduce:translate-y-0 [[data-motion-fade]_&]:translate-y-0'
+const FLOATING_BAR_HIDDEN = 'opacity-0 -translate-y-full'
+const FLOATING_FILTERS_HIDDEN = 'opacity-0 -translate-y-[200%]'
 
 const MARK = 'pointer-events-auto rounded-full bg-[var(--color-bg)] p-0.5'
 
@@ -169,6 +184,7 @@ export function Tile({
   editMode,
   dragging,
   onHandlePointerDown,
+  onEditLayout,
   onResizePointerDown,
   onResizeBy,
   onVisibilityChange,
@@ -180,7 +196,9 @@ export function Tile({
   editMode: boolean
   dragging: boolean
   onHandlePointerDown: (event: React.PointerEvent, tileId: string) => void
-  /** The corner handle (a Custom tile on hover, any tile in edit mode); the view snaps it to the grid. */
+  /** Choosing Custom: resizing happens in edit layout, so the corner shows at once. */
+  onEditLayout?: () => void
+  /** The corner handle, in edit layout only; the view snaps it to the grid. */
   onResizePointerDown?: (event: React.PointerEvent, tileId: string) => void
   /** The corner handle's arrow keys: one cell. */
   onResizeBy?: (tileId: string, cols: number, rows: number) => void
@@ -228,6 +246,12 @@ export function Tile({
   useEffect(() => {
     setStored(storedRef.current)
   }, [tileParamsKey])
+  // Interface (Edit tile). Edit layout draws both whatever they say: the tile's bounds and its handle are the point there.
+  const borderShown = tile.showBorder !== false || editMode
+  const titleShown = tile.showTitle !== false || editMode
+  /** The filter row's and the questions' menus are portaled: the pointer in one is off the tile. */
+  const [filtersMenuOpen, setFiltersMenuOpen] = useState(false)
+  const [promptMenuOpen, setPromptMenuOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   // What an agent highlighted here (D5); the owner's own pick or Escape ends it.
   const highlight = useTileHighlight(tile.id)
@@ -379,8 +403,8 @@ export function Tile({
   const gone = state === 'agent_missing' || state === 'wrong_server' || cloudMark?.code === 'agent_gone'
   const canAsk = !!chat && !!component && !gone
   const prompts = canAsk ? enabledTilePrompts(component!.prompts, tile.promptOverride) : []
-  const onBar = prompts.slice(0, promptsOnBar(span.cols))
-  const inMenu = prompts.slice(onBar.length)
+  const onBar = promptsFitOnBar(span.cols) ? prompts : []
+  const inMenu = onBar.length > 0 ? [] : prompts
   const selection: ViewSelection | undefined = chat && !chat.panelClosed
     ? { selected: chat.selected, onPick: (key, additive) => { highlight.clear(); chat.onPick(key, additive) } }
     : undefined
@@ -435,6 +459,8 @@ export function Tile({
     />
   )
 
+  const headerPinned = !!menu || !!filterNotice || drawnCount > 0 || filtersMenuOpen || promptMenuOpen
+
   return (
     <div
       ref={ref}
@@ -454,7 +480,7 @@ export function Tile({
       style={{ gridColumn: `span ${span.cols}`, gridRow: `span ${span.rows}` }}
       // The focus ring is a box-shadow: focusing a tile moves nothing (ux rule 1).
       className={`@container group relative min-h-0 min-w-0 overflow-hidden rounded-lg border bg-[var(--color-bg)] outline-none ${
-        dragging ? 'border-[var(--color-accent)] opacity-60' : 'border-[var(--color-border)]'
+        dragging ? 'border-[var(--color-accent)] opacity-60' : borderShown ? 'border-[var(--color-border)]' : 'border-transparent'
       } ${chat?.focused && !chat.panelClosed ? 'ring-1 ring-[color-mix(in_srgb,var(--color-accent)_55%,transparent)]' : ''}`}
       onContextMenu={(event) => {
         event.preventDefault()
@@ -462,7 +488,7 @@ export function Tile({
       }}
     >
       {/* Below the bar's strip: the content scrolls inside and never sits under the bar. */}
-      <div data-testid="tile-content" className={`absolute inset-x-0 bottom-0 ${filters ? FILTER_ROW_TOP : BAR_HEIGHT_TOP} overflow-auto`}>
+      <div data-testid="tile-content" className={`absolute inset-x-0 bottom-0 ${!titleShown ? 'top-0' : filters ? FILTER_ROW_TOP : BAR_HEIGHT_TOP} overflow-auto`}>
         {unavailable ? (
           <div className="flex h-full flex-col items-start justify-center gap-2 p-3">
             <p className="text-[11px] text-[var(--color-text-secondary)]">{unavailable}</p>
@@ -494,7 +520,13 @@ export function Tile({
 
       {/* The filters: a row of fixed height under the bar, always drawn, so nothing moves (D4). */}
       {filters && (
-        <div className={`absolute inset-x-0 ${BAR_HEIGHT_TOP}`}>
+        <div
+          data-tile-header
+          data-testid="tile-filter-slot"
+          className={`absolute inset-x-0 ${BAR_HEIGHT_TOP} ${
+            titleShown ? '' : `${FLOATING_REVEAL} z-[5] ${borderShown ? '' : 'border-x border-[var(--color-border)] shadow-sm'} ${headerPinned ? '' : FLOATING_FILTERS_HIDDEN}`
+          }`}
+        >
           <TileFilters
             tileId={tile.id}
             specs={component!.params}
@@ -505,6 +537,7 @@ export function Tile({
             onChange={setParams}
             resolved={cloud ? (data?.cloud?.paramsResolved ?? null) : null}
             disabled={gone}
+            onMoreOpenChange={setFiltersMenuOpen}
           />
         </div>
       )}
@@ -517,7 +550,7 @@ export function Tile({
       )}
 
       {/* Corner marks: they sit over the content and never move it, and clear of the resize corner, whose tooltip would hide theirs. */}
-      <div className={`pointer-events-none absolute bottom-1.5 flex items-center gap-1 ${onResizePointerDown && (editMode || tile.size === 'custom') ? 'right-6' : 'right-1.5'}`}>
+      <div className={`pointer-events-none absolute bottom-1.5 flex items-center gap-1 ${onResizePointerDown && editMode ? 'right-6' : 'right-1.5'}`}>
         {hasData && data?.notice && <span className={MARK} title={data.notice} aria-label={data.notice}><Info size={12} className="text-[var(--color-warning)]" /></span>}
         {hasData && data?.tooLarge && <span className={MARK} title="Too large to keep: shown until Cinna restarts." aria-label="Too large to keep"><Info size={12} className="text-[var(--color-text-muted)]" /></span>}
         {mark && <span className={MARK} title={mark} aria-label={`Last refresh failed: ${mark}`}><AlertTriangle size={12} className="text-[var(--color-danger)]" /></span>}
@@ -534,7 +567,8 @@ export function Tile({
       */}
       <div
         data-testid="tile-bar"
-        className={`absolute inset-x-0 top-0 flex ${BAR_HEIGHT} items-center gap-1 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-2`}
+        data-tile-header
+        className={`absolute inset-x-0 top-0 flex ${BAR_HEIGHT} items-center gap-1 bg-[var(--color-bg)] px-2 ${titleShown ? (borderShown ? 'border-b border-[var(--color-border)]' : '') : `${FLOATING_REVEAL} z-[6] ${borderShown ? 'border-b border-[var(--color-border)]' : `border border-[var(--color-border)] ${filters ? 'rounded-t-lg' : 'rounded-lg shadow-sm'}`} ${headerPinned ? '' : FLOATING_BAR_HIDDEN}`}`}
       >
         {editMode && (
           <button
@@ -555,21 +589,17 @@ export function Tile({
         */}
         <div className="relative flex shrink-0 items-center gap-1 self-stretch">
           <div data-testid="tile-bar-controls" className={editMode ? 'flex shrink-0 items-center gap-1' : BAR_OVERLAY_CONTROLS}>
-          {ok && <span className="shrink-0 text-[12px] text-[var(--color-text-muted)]">{data?.refreshing ? 'Refreshing…' : ageLabel(data?.fetchedAt ?? null)}</span>}
+          {ok && <span className={`shrink-0 text-[12px] text-[var(--color-text-muted)] ${onBar.length > 0 ? 'hidden @sm:inline' : ''}`}>{data?.refreshing ? 'Refreshing…' : ageLabel(data?.fetchedAt ?? null)}</span>}
           {schedule && !scheduleOff && (
             // Only where the tile is wide enough to keep its title readable; Refresh's tooltip says it everywhere.
             <span data-testid="tile-schedule-line" title={scheduleLine(schedule)} className="hidden max-w-[14rem] truncate text-[12px] text-[var(--color-text-muted)] @sm:inline">
               · {scheduleLine(schedule)}
             </span>
           )}
-          {onBar.map((prompt, index) => (
-            <button key={index} type="button" title={prompt.prompt} onClick={() => chat!.onPrompt(prompt)} className={BAR_TEXT_BUTTON}>
-              {prompt.label}
-            </button>
-          ))}
+          <TilePromptButton prompts={onBar} tileTitle={displayTitle} onPrompt={(prompt) => chat!.onPrompt(prompt)} onMenuChange={setPromptMenuOpen} />
           {(canAsk || (gone && !!chat && !!component)) && (
-            <button type="button" onClick={canAsk ? chat!.onAsk : undefined} disabled={!canAsk} title={canAsk ? `Ask ${agentName} about this` : undefined} aria-label={`Ask about ${displayTitle}`} className={`${BAR_TEXT_BUTTON} disabled:cursor-default disabled:opacity-50`}>
-              Ask
+            <button type="button" onClick={canAsk ? chat!.onAsk : undefined} disabled={!canAsk} title={canAsk ? `Ask ${agentName} about this` : undefined} aria-label={`Ask about ${displayTitle}`} className="rounded p-0.5 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent">
+              <MessageSquare size={12} />
             </button>
           )}
           {ok && (
@@ -603,7 +633,7 @@ export function Tile({
         </div>
       </div>
 
-      {onResizePointerDown && (editMode || tile.size === 'custom') && (
+      {onResizePointerDown && editMode && (
         <button
           type="button"
           aria-label={`Resize ${displayTitle}`}
@@ -616,9 +646,7 @@ export function Tile({
             event.preventDefault()
             onResizeBy?.(tile.id, step[0], step[1])
           }}
-          className={`absolute bottom-0 right-0 z-10 flex h-5 w-5 cursor-nwse-resize touch-none items-end justify-end rounded-br-lg p-1 text-[var(--color-text-muted)] transition-opacity hover:text-[var(--color-accent)] ${
-            editMode ? '' : 'opacity-30 group-hover:opacity-100 focus-visible:opacity-100'
-          }`}
+          className="absolute bottom-0 right-0 z-10 flex h-5 w-5 cursor-nwse-resize touch-none items-end justify-end rounded-br-lg p-1 text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
         >
           <span aria-hidden="true" className="block h-2 w-2 rounded-br-[3px] border-b-2 border-r-2 border-current" />
         </button>
@@ -645,8 +673,8 @@ export function Tile({
             role="menuitemradio"
             aria-checked={tile.size === 'custom'}
             className={CONTEXT_MENU_ITEM}
-            // From the cells it has now; its corner then resizes it.
-            onClick={() => updateTile.mutate({ tileId: tile.id, size: 'custom', customSpan: tile.customSpan ?? tileSpan(tile) }, { onSuccess: () => setMenu(null) })}
+            // From the cells it has now; edit layout then shows its corner.
+            onClick={() => updateTile.mutate({ tileId: tile.id, size: 'custom', customSpan: tile.customSpan ?? tileSpan(tile) }, { onSuccess: () => { setMenu(null); onEditLayout?.() } })}
           >
             <span className="w-3">{tile.size === 'custom' ? '✓' : ''}</span>
             {TILE_CUSTOM_LABEL}
@@ -657,6 +685,7 @@ export function Tile({
               <div className="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Ask</div>
               {inMenu.map((prompt, index) => (
                 <button key={index} type="button" role="menuitem" title={prompt.prompt} className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); chat!.onPrompt(prompt) }}>
+                  <MessageSquare size={12} className="shrink-0" />
                   {prompt.label}
                 </button>
               ))}
@@ -664,16 +693,19 @@ export function Tile({
           )}
           <div className="my-1 border-t border-[var(--color-border)]" />
           <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); setEditing(true) }}>
-            Edit tile…
+            <Pencil size={12} />
+            Edit
           </button>
           {component && (
             <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); openAgent() }}>
+              <Bot size={12} />
               Open agent
             </button>
           )}
           <div className="my-1 border-t border-[var(--color-border)]" />
           <button type="button" role="menuitem" className={`${CONTEXT_MENU_ITEM} text-[var(--color-danger)]`} onClick={() => { setMenu(null); setConfirmRemove(true) }}>
-            Remove…
+            <Trash2 size={12} />
+            Remove
           </button>
         </ContextMenu>
       )}

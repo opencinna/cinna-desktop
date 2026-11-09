@@ -321,6 +321,10 @@ export interface TileDto {
   refreshOverride: TileRefreshOverride | null
   /** The user's change to the component's suggested questions; absent or null: the component's as they are. Kept on this computer. */
   promptOverride?: TilePromptOverride | null
+  /** Interface (Edit tile), kept on this computer. Absent: true. Off, the tile has no border outside edit layout. */
+  showBorder?: boolean
+  /** Off, the title bar only appears over the content on hover. */
+  showTitle?: boolean
 }
 
 /**
@@ -516,6 +520,8 @@ export interface UpdateTileInput {
   customSpan?: TileSpan
   refreshOverride?: TileRefreshOverride | null
   promptOverride?: TilePromptOverride | null
+  showBorder?: boolean
+  showTitle?: boolean
 }
 
 /** Main pushes this when a tile's data or refresh state changed. */

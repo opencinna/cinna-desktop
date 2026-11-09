@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { LayoutDashboard, Plus } from 'lucide-react'
+import { LayoutDashboard, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { DashboardDto } from '../../../../shared/dashboards'
 import { useCreateDashboard, useDashboardList, useDeleteDashboard, useRenameDashboard } from '../../hooks/useDashboards'
 import { useUIStore } from '../../stores/ui.store'
@@ -133,9 +133,9 @@ export function DashboardsList(): React.JSX.Element {
       {creating && <NewDashboardDialog onClose={() => setCreating(false)} />}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} anchor={menu.anchor} label={`Actions for ${menu.dashboard.name}`} onClose={() => setMenu(null)}>
-          <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setRenaming(menu.dashboard); setMenu(null) }}>Rename…</button>
+          <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setRenaming(menu.dashboard); setMenu(null) }}><Pencil size={12} />Rename</button>
           <div className="my-1 border-t border-[var(--color-border)]" />
-          <button type="button" role="menuitem" className={`${CONTEXT_MENU_ITEM} text-[var(--color-danger)]`} onClick={() => { setDeleting(menu.dashboard); setMenu(null) }}>Delete…</button>
+          <button type="button" role="menuitem" className={`${CONTEXT_MENU_ITEM} text-[var(--color-danger)]`} onClick={() => { setDeleting(menu.dashboard); setMenu(null) }}><Trash2 size={12} />Delete</button>
         </ContextMenu>
       )}
       {renaming && <RenameDashboardDialog dashboard={renaming} onClose={() => setRenaming(null)} />}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ComponentRefreshRule, TilePromptOverride, TileRefreshOverride, TileView } from '../../../../shared/dashboards'
 import { useUpdateTile } from '../../hooks/useDashboards'
 import { DashboardDialog, DIALOG_INPUT, DIALOG_LABEL, DIALOG_PRIMARY } from './DashboardDialog'
+import { SwitchTrack } from '../ui/SwitchTrack'
 import { TilePromptsEditor, withoutBlankQuestions } from './TilePromptsEditor'
 
 /** Max ages offered when the user changes a tile's refresh rule. */
@@ -166,6 +167,15 @@ function ruleOf(view: TileView): ComponentRefreshRule {
   )
 }
 
+function InterfaceSwitch({ label, checked, onChange, title }: { label: string; checked: boolean; onChange: (next: boolean) => void; title?: string }): React.JSX.Element {
+  return (
+    <button type="button" role="switch" aria-checked={checked} title={title} className="flex items-center gap-2 text-xs text-[var(--color-text)]" onClick={() => onChange(!checked)}>
+      <SwitchTrack checked={checked} size="sm" />
+      {label}
+    </button>
+  )
+}
+
 /** Edit tile: its title, its refresh rule and its suggested questions. Closes on success only (ux rule 6). */
 export function EditTileDialog({ view, onClose }: { view: TileView; onClose: () => void }): React.JSX.Element {
   const update = useUpdateTile()
@@ -179,9 +189,11 @@ export function EditTileDialog({ view, onClose }: { view: TileView; onClose: () 
   useEffect(() => {
     if (update.error) errorRef.current?.scrollIntoView?.({ block: 'nearest' })
   }, [update.error])
+  const [showBorder, setShowBorder] = useState(view.tile.showBorder !== false)
+  const [showTitle, setShowTitle] = useState(view.tile.showTitle !== false)
   const save = (): void => {
     update.mutate(
-      { tileId: view.tile.id, title: title.trim() === '' || title.trim() === componentTitle ? null : title.trim(), refreshOverride: override, promptOverride: withoutBlankQuestions(prompts) },
+      { tileId: view.tile.id, title: title.trim() === '' || title.trim() === componentTitle ? null : title.trim(), refreshOverride: override, promptOverride: withoutBlankQuestions(prompts), showBorder, showTitle },
       { onSuccess: onClose }
     )
   }
@@ -193,6 +205,13 @@ export function EditTileDialog({ view, onClose }: { view: TileView; onClose: () 
           <label htmlFor="edit-tile-title" className={DIALOG_LABEL}>Title</label>
           <input id="edit-tile-title" ref={inputRef} className={`${DIALOG_INPUT} mt-1`} value={title} placeholder={componentTitle} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
         </div>
+        <fieldset aria-label="Interface">
+          <div className={DIALOG_LABEL}>Interface</div>
+          <div className="mt-1 flex items-center gap-6">
+            <InterfaceSwitch label="Show border" checked={showBorder} onChange={setShowBorder} />
+            <InterfaceSwitch label="Show title" checked={showTitle} onChange={setShowTitle} title="Off: the title bar appears when the pointer is over the tile" />
+          </div>
+        </fieldset>
         <RefreshOverrideFields rule={ruleOf(view)} value={override} onChange={setOverride} cloud={!!view.tile.cloud} />
         {view.component && <TilePromptsEditor prompts={view.component.prompts} value={prompts} onChange={setPrompts} />}
         <div className="flex justify-end gap-2 pt-1">

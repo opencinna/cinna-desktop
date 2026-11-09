@@ -183,7 +183,7 @@ describe('a cloud tile that cannot run', () => {
     show(tileView())
     await screen.findByText('Call Bob')
     fireEvent.click(screen.getByRole('button', { name: 'Actions for Deals' }))
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove…' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }))
     const dialog = await screen.findByRole('dialog', { name: 'Remove Deals' })
     expect(dialog.textContent).toContain('The component stays with Cloud Sales; you can add it again.')
   })

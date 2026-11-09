@@ -71,6 +71,9 @@ Where a user makes the same choice repeatedly (which tool opens a folder), the l
 - Menus are portaled via `usePopover` and marked `role="menu"` / `role="menuitem"` with an `aria-label`; every test and every E2E spec finds them by that name.
 - The current default is marked with a check inside the menu; the menu never explains itself in prose unless it is empty.
 - An on/off setting inside a menu is one item with a switch (rule 14), never a pair of check-marked items that cancel each other.
+- **The items of a menu read alike.** Each is a bare action with its icon: *Rename*, *Edit layout*, *Delete*, not *Rename…* beside *Edit layout* beside *Delete…*. The menu belongs to something, so the item does not name it again (*Edit*, not *Edit tile*, in a tile's menu; a word that names something else stays, as *Edit layout* and *Open agent* do). No item ends in an ellipsis, whether or not a dialog follows. The confirm or dialog it opens is what names the object (*Delete dashboard*). Radio items keep their check column in place of an icon. A menu older than this rule is brought in line when it is next changed.
+
+**Origin:** a dashboard's ⋯ menu read *Rename…*, *Edit layout*, *Delete…*. The ellipses marked which items open a dialog, a difference the user had no use for, and made one menu look like two conventions.
 
 ## 9. A surface that names a file is asserting that file exists
 
@@ -161,7 +164,8 @@ Ambient animation is decoration, and decoration must never compete with work. Ev
 
 - **Heavy** — large-area, long or attention-pulling motion (the grid lightning burst across the composer): plays only when the user has been idle app-wide (no pointer, key, wheel or input anywhere in the window for the idle threshold, window focused and visible), and rarely. Any activity fades it out.
 - **Subtle** — small, brief, local motion (a border glow, a button shimmer): may play while the user is active, on a slow cadence.
-- Both stop under `prefers-reduced-motion` and when Extra UI animation is off. A new ambient animation that does not say which class it is, or a heavy one gated only on its own element's focus, is a finding.
+- **Functional signals are neither.** Motion that reports something the user needs (the composer notice's orbit, a button's activity behind it) keeps running while the user is active and with Extra UI animation off; under `prefers-reduced-motion` it holds still and says the same without moving.
+- Heavy and subtle both stop under `prefers-reduced-motion` and when Extra UI animation is off. A new ambient animation that does not say which class it is, or a heavy one gated only on its own element's focus, is a finding.
 
 **Origin:** the lightning burst fired every 12–24 s whenever the composer itself was untouched, so it played while the user read, scrolled and clicked elsewhere.
 
@@ -240,4 +244,5 @@ A row that holds a message and its actions on one line (a composer notice row, a
 22. An element whose role changes with the view (list vs. menu): screenshot both states side by side. Indistinguishable, or navigation lost in one of them: finding (rule 17).
 23. Anything that tucks under or slides behind another surface (a notice panel, a sticky header, an overlay): screenshot it with every variant of the covering surface (each chat mode colour, both themes). Any part of the hidden surface showing through: finding (rule 18).
 24. Every block the change adds a kind of content or a state to (a notice panel row, a status line, a mixed list, a card that swaps states): put each kind and state it can hold side by side. Does each fill the same slots in the same places at the same height? A kind with its own arrangement (actions under the text instead of beside it, an extra line, a slot that grows) is a finding, unless the code argues rule 19's exception in a comment (rule 19).
+24b. Every menu the change touches: read its items top to bottom. A trailing ellipsis, an item repeating the name of what the menu belongs to, or an item without an icon beside ones with it: finding (rule 8).
 25. Every one-line row with actions (a notice row, a strip, a list row): screenshot it at the narrowest width the surface allows, with its longest real names. More than one labelled button on the line, a label longer than a verb and a short word, a text toggle where an icon would do, or a message left under half the row: finding (rule 20).

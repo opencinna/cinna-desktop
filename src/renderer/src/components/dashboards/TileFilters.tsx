@@ -232,6 +232,7 @@ export function TileFilters({
   notice,
   onDismissNotice,
   onChange,
+  onMoreOpenChange,
   resolved,
   disabled = false
 }: {
@@ -253,6 +254,8 @@ export function TileFilters({
   notice?: string | null
   onDismissNotice?: () => void
   onChange: (changed: Record<string, unknown>) => void
+  /** Filters ⋯ opened or closed: it is portaled, so a floating header must stay for it. */
+  onMoreOpenChange?: (open: boolean) => void
 }): React.JSX.Element {
   const shown = resolveParamWords(params, specs)
   if (resolved) {
@@ -302,6 +305,10 @@ export function TileFilters({
   useEffect(() => {
     if (behind.length === 0 && moreOpen) setMoreOpen(false)
   }, [behind.length, moreOpen, setMoreOpen])
+  useEffect(() => {
+    onMoreOpenChange?.(moreOpen)
+    return () => { if (moreOpen) onMoreOpenChange?.(false) }
+  }, [moreOpen, onMoreOpenChange])
 
   return (
     // A disabled fieldset disables every control in the row, and "Filters ⋯" with them.

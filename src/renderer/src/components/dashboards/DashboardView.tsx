@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { LayoutDashboard, MessageSquare, MoreHorizontal, RefreshCw } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Check, LayoutDashboard, LayoutGrid, MessageSquare, MoreHorizontal, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { DASHBOARD_LEASE_RENEW_MS, TILE_SPAN_LIMITS, enabledTilePrompts, tileSpan, type ComponentPrompt, type DashboardContext, type TileSpan, type TileView } from '../../../../shared/dashboards'
-import { useDashboardList, useDashboardTiles, useDeleteDashboard, useMoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
+import { useAnyTileRefreshing, useDashboardList, useDashboardTiles, useDeleteDashboard, useMoveTile, useTileResult, useUpdateTile } from '../../hooks/useDashboards'
+import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { ContextMenu, CONTEXT_MENU_ITEM } from '../ui/ContextMenu'
@@ -165,6 +167,72 @@ export function snapTileSpan(
     cols: clamp(start.cols + Math.round(dx / cell), Math.min(TILE_SPAN_LIMITS.minCols, grid.columns), grid.columns),
     rows: clamp(start.rows + Math.round(dy / row), TILE_SPAN_LIMITS.minRows, TILE_SPAN_LIMITS.maxRows)
   }
+}
+
+/** Whether one of this dashboard's own chats has a turn running: `streamingChatId` is the chat on screen, ahead of the polled list. */
+export function dashboardChatRunning(
+  chats: ReadonlyArray<{ id: string; originDashboardId?: string | null; activeRunId?: string | null }> | undefined,
+  dashboardId: string | null,
+  streamingChatId: string | null
+): boolean {
+  if (!chats || !dashboardId) return false
+  return chats.some((chat) => chat.originDashboardId === dashboardId && (!!chat.activeRunId || chat.id === streamingChatId))
+}
+
+/**
+ * {@link dashboardChatRunning} from the chat list, polled once a second as the
+ * sidebar's rows are. Only the answer is selected: the rows hold dates, so every
+ * poll is a new list, and the whole dashboard must not re-render for each.
+ */
+function useDashboardChatRunning(dashboardId: string | null): boolean {
+  const streamingChatId = useChatStore((s) => (s.isStreaming ? s.activeChatId : null))
+  const { data } = useQuery({
+    queryKey: ['chats'],
+    queryFn: () => window.api.chat.list(),
+    refetchInterval: 1_000,
+    select: (rows) => dashboardChatRunning(rows, dashboardId, streamingChatId)
+  })
+  return data ?? false
+}
+
+/** The header Refresh spins at least this long, one full turn of `animate-spin`, so even an instant refresh is seen. */
+export const REFRESH_MIN_SPIN_MS = 1000
+
+/**
+ * The header Refresh's feedback: from the press until the minimum has passed,
+ * every tile was asked, and none is recomputing. `ensureFresh` answers once a
+ * run has started, so the tiles' own state says when it ended. Only a press
+ * spins it: a tile recomputing on its own schedule does not.
+ */
+function useRefreshAll(tiles: TileView[], dashboardId: string | null) {
+  const anyRefreshing = useAnyTileRefreshing(useMemo(() => tiles.map((view) => view.tile.id), [tiles]))
+  const [press, setPress] = useState<{ minPassed: boolean; asked: boolean } | null>(null)
+  const seq = useRef(0)
+
+  useEffect(() => {
+    seq.current += 1
+    setPress(null)
+  }, [dashboardId])
+  useEffect(() => {
+    if (press?.minPassed && press.asked && !anyRefreshing) setPress(null)
+  }, [press, anyRefreshing])
+
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+
+  const refreshAll = (): void => {
+    if (press) return
+    const mine = ++seq.current
+    setPress({ minPassed: false, asked: false })
+    timer.current = setTimeout(() => {
+      if (seq.current === mine) setPress((p) => (p ? { ...p, minPassed: true } : p))
+    }, REFRESH_MIN_SPIN_MS)
+    const runs = tiles.filter((view) => view.state === 'ok').map((view) => window.api.dashboards.ensureFresh(view.tile.id, 'manual').catch(() => {}))
+    void Promise.all(runs).then(() => {
+      if (seq.current === mine) setPress((p) => (p ? { ...p, asked: true } : p))
+    })
+  }
+  return { refreshAll, spinning: press !== null }
 }
 
 /**
@@ -511,6 +579,8 @@ export function DashboardView(): React.JSX.Element {
   const panelOpen = useUIStore((s) => s.dashboardPanelOpen)
   const setPanelOpen = useUIStore((s) => s.setDashboardPanelOpen)
   const panelPresence = usePanelPresence(panelOpen)
+  const { refreshAll, spinning } = useRefreshAll(tiles, dashboardId)
+  const chatRunning = useDashboardChatRunning(dashboardId)
   const chat = useDashboardChat(dashboardId, dashboard?.name ?? '', tiles, panelOpen)
   const { focus } = chat
   const tilesRef = useRef(tiles)
@@ -543,10 +613,6 @@ export function DashboardView(): React.JSX.Element {
     )
   }
 
-  const refreshAll = (): void => {
-    for (const view of tiles) if (view.state === 'ok') void window.api.dashboards.ensureFresh(view.tile.id, 'manual').catch(() => {})
-  }
-
   const togglePanel = (): void => {
     if (!panelOpen && !chat.panelAgentId) {
       // Opened from the header: the first tile whose agent is here, so the panel has someone to ask.
@@ -557,7 +623,9 @@ export function DashboardView(): React.JSX.Element {
   }
 
   return (
-    <div ref={rowRef} className="relative flex min-w-0 flex-1">
+    // Clip, not hidden: the chat card starts its slide past the window's edge with its composer taking focus,
+    // and the browser would scroll the whole app sideways to reveal it. The margin is the shell's padding, for the card's shadow.
+    <div ref={rowRef} className="relative flex min-w-0 flex-1 overflow-clip [overflow-clip-margin:0.5rem]">
     <div className="flex min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
       {/* The agent page header's padding, alignment and title size (LocalAgentPage). */}
       <header className="flex items-start gap-2 px-6 pb-3 pt-6">
@@ -575,21 +643,23 @@ export function DashboardView(): React.JSX.Element {
             </p>
           )}
         </div>
-        {/* Edit layout starts in the ⋯ menu; this is its way out, for as long as it lasts. */}
+        {/* Edit layout starts in the ⋯ menu; this is its way out, for as long as it lasts. Each change is stored as it is made. */}
         {editMode && (
           <button type="button" className={HEADER_BUTTON} onClick={() => setEditMode(false)}>
-            Done
+            <Check size={12} />
+            Save layout
           </button>
         )}
         {tiles.length > 0 && (
-          <button type="button" className={`${HEADER_BUTTON} ${HEADER_TOGGLE_PRESSED}`} aria-pressed={panelOpen} onClick={togglePanel} title={panelOpen ? 'Close the chat panel' : 'Open the chat panel'}>
+          <button type="button" className={`${HEADER_BUTTON} ${HEADER_TOGGLE_PRESSED} ${chatRunning ? 'app-button-running' : ''}`} aria-pressed={panelOpen} aria-busy={chatRunning || undefined} onClick={togglePanel} title={panelOpen ? 'Close the chat panel' : chatRunning ? 'A chat on this dashboard is running' : 'Open the chat panel'}>
             <MessageSquare size={12} />
             Chat
           </button>
         )}
         {tiles.length > 0 && (
-          <button type="button" className={HEADER_ICON_BUTTON} onClick={refreshAll} title="Recompute every tile now" aria-label="Refresh all tiles">
-            <RefreshCw size={14} />
+          // Accent while it runs, so reduced motion, which stops the spin, still shows the press.
+          <button type="button" className={HEADER_ICON_BUTTON} onClick={refreshAll} title={spinning ? 'Refreshing…' : 'Recompute every tile now'} aria-label="Refresh all tiles" aria-busy={spinning || undefined}>
+            <RefreshCw size={14} className={spinning ? 'animate-spin text-[var(--color-accent)] motion-reduce:animate-none' : undefined} />
           </button>
         )}
         <button
@@ -632,6 +702,7 @@ export function DashboardView(): React.JSX.Element {
                 editMode={editMode}
                 dragging={draggingId === view.tile.id}
                 onHandlePointerDown={onHandlePointerDown}
+                onEditLayout={() => setEditMode(true)}
                 onResizePointerDown={resize.onPointerDown}
                 onResizeBy={resize.onResizeBy}
                 onVisibilityChange={onVisibilityChange}
@@ -644,14 +715,15 @@ export function DashboardView(): React.JSX.Element {
 
       {menu && dashboard && (
         <ContextMenu x={menu.x} y={menu.y} anchor={menu.anchor} label={`Actions for ${dashboard.name}`} onClose={() => setMenu(null)}>
-          <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); setRenaming(true) }}>Rename…</button>
+          <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); setRenaming(true) }}><Pencil size={12} />Rename</button>
           {tiles.length > 0 && (
             <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} onClick={() => { setMenu(null); setEditMode((v) => !v) }}>
-              {editMode ? 'Done editing layout' : 'Edit layout'}
+              {editMode ? <Check size={12} /> : <LayoutGrid size={12} />}
+              {editMode ? 'Save layout' : 'Edit layout'}
             </button>
           )}
           <div className="my-1 border-t border-[var(--color-border)]" />
-          <button type="button" role="menuitem" className={`${CONTEXT_MENU_ITEM} text-[var(--color-danger)]`} onClick={() => { setMenu(null); setConfirmDelete(true) }}>Delete…</button>
+          <button type="button" role="menuitem" className={`${CONTEXT_MENU_ITEM} text-[var(--color-danger)]`} onClick={() => { setMenu(null); setConfirmDelete(true) }}><Trash2 size={12} />Delete</button>
         </ContextMenu>
       )}
       {renaming && dashboard && <RenameDashboardDialog dashboard={dashboard} onClose={() => setRenaming(false)} />}

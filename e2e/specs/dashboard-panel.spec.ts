@@ -277,6 +277,29 @@ test('the panel sends what the focused tile shows once, again only when it chang
   })
 })
 
+test('Chat shows a turn still running after the panel closes, and lets go when it ends', async ({ cinna }) => {
+  test.setTimeout(180_000)
+  await arrange(cinna, models.host, replyScript(['First part. ', 'Second part. ', 'Third part. ', 'Fourth part.'], 2500))
+  const page = cinna.page
+  const chat = page.getByRole('button', { name: 'Chat', exact: true })
+  await expect(chat).not.toHaveClass(/app-button-running/)
+
+  await ask(cinna, 'Open tasks')
+  const composer = panel(cinna).getByRole('combobox', { name: 'Type a message...', exact: true })
+  await composer.fill('Go on.')
+  await composer.press('Enter')
+  await expect(chat).toHaveClass(/app-button-running/, { timeout: 15_000 })
+
+  await panel(cinna).getByRole('button', { name: 'Close chat panel', exact: true }).click()
+  await expect(panel(cinna)).toHaveCount(0)
+  await expect(chat).toHaveClass(/app-button-running/)
+  await expect(chat).toHaveAttribute('aria-pressed', 'false')
+  await expect(chat).toHaveAttribute('aria-busy', 'true')
+
+  await expect(chat).not.toHaveClass(/app-button-running/, { timeout: 60_000 })
+  await expect(chat).not.toHaveAttribute('aria-busy', 'true')
+})
+
 /** Press a tile's suggested question on its hover bar, and wait for the reply in the panel. */
 async function pressPrompt(cinna: CinnaApp): Promise<void> {
   await tile(cinna, 'Follow-ups').hover()

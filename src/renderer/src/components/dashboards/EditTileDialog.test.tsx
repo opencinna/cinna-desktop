@@ -63,7 +63,7 @@ describe('Edit tile', () => {
   it('saves no override when nothing changed', async () => {
     show(view())
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: null, promptOverride: null }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: null, promptOverride: null, showBorder: true, showTitle: true }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
@@ -79,7 +79,9 @@ describe('Edit tile', () => {
         tileId: 't1',
         title: null,
         refreshOverride: { maxAge: '1h', whileOpenEvery: null, afterTurn: false, onAppStart: true },
-        promptOverride: null
+        promptOverride: null,
+        showBorder: true,
+        showTitle: true
       })
     )
   })
@@ -90,7 +92,7 @@ describe('Edit tile', () => {
     expect(selectText('After a chat turn of its agent')).toBe('Off')
     fireEvent.change(screen.getByLabelText('While on screen, every'), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { afterTurn: false }, promptOverride: null }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { afterTurn: false }, promptOverride: null, showBorder: true, showTitle: true }))
   })
 
   it('Manual greys the rest out (nothing moves) and is saved with them kept', async () => {
@@ -103,7 +105,7 @@ describe('Edit tile', () => {
       expect(screen.getByLabelText(label).className).toContain('disabled:opacity-50')
     }
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { maxAge: '1d', manual: true }, promptOverride: null }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { maxAge: '1d', manual: true }, promptOverride: null, showBorder: true, showTitle: true }))
   })
 
   it('Manual ticked and unticked again leaves no override', async () => {
@@ -111,7 +113,7 @@ describe('Edit tile', () => {
     fireEvent.click(screen.getByLabelText('Only when I press Refresh'))
     fireEvent.click(screen.getByLabelText('Only when I press Refresh'))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: null, promptOverride: null }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: null, promptOverride: null, showBorder: true, showTitle: true }))
   })
 
   it('a refused save says why and closes nothing', async () => {
@@ -134,7 +136,18 @@ describe('Edit tile', () => {
     }
     fireEvent.click(screen.getByLabelText('Only when I press Refresh'))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { manual: true }, promptOverride: null }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith({ tileId: 't1', title: null, refreshOverride: { manual: true }, promptOverride: null, showBorder: true, showTitle: true }))
+  })
+
+  it('Interface holds the border and title switches, on unless the tile turned them off', async () => {
+    const v = view()
+    show({ ...v, tile: { ...v.tile, showBorder: false } })
+    expect(screen.getByRole('switch', { name: 'Show border' }).getAttribute('aria-checked')).toBe('false')
+    const title = screen.getByRole('switch', { name: 'Show title' })
+    expect(title.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(title)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(updateTile).toHaveBeenCalledWith(expect.objectContaining({ showBorder: false, showTitle: false })))
   })
 
   describe('suggested questions', () => {

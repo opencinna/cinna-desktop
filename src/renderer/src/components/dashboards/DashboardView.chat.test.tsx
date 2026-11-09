@@ -26,7 +26,7 @@ vi.mock('../layout/ChatWorkspace', async () => {
   }
 })
 
-import { DashboardView, snapTileSpan, tileSpanToStore } from './DashboardView'
+import { DashboardView, dashboardChatRunning, snapTileSpan, tileSpanToStore } from './DashboardView'
 import { SidebarTabs } from '../layout/SidebarTabs'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -74,8 +74,10 @@ function chatRow(id: string, agentId: string) {
   return { id, title: 'Chat', router: 'direct', agentId, messages: [], activeRunId: null, originatingJobRunId: null }
 }
 
+let lastClient: QueryClient
 function show() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  lastClient = client
   return render(
     <QueryClientProvider client={client}>
       <DashboardView />
@@ -462,6 +464,108 @@ describe('the dashboard chat panel', () => {
   })
 })
 
+describe('a tile’s suggested questions on its bar', () => {
+  const withPrompts = (labels: string[], size: TileView['tile']['size'] = 'wide') => {
+    const view = tileView('t1', 'Deals pipeline', info({ prompts: labels.map((label) => ({ label, prompt: `${label} in full` })) }), size)
+    ;(window.api as unknown as { dashboards: Record<string, unknown> }).dashboards.tiles = async () => ({ ok: true, dashboard: { id: 'd1', name: 'Sales overview', sortOrder: 0, tileCount: 1, createdAt: 0, updatedAt: 0 }, tiles: [view] })
+  }
+  const more = () => within(tileEl('Deals pipeline')).queryByRole('button', { name: 'More questions about Deals pipeline' })
+
+  it('shows the first as the button and the others behind its chevron; one from the menu is sent', async () => {
+    // Mutation: put every question back on the bar and "Second" is found without opening the menu.
+    withPrompts(['First', 'Second', 'Third'])
+    show()
+    await screen.findByText('Acme')
+    expect(within(tileEl('Deals pipeline')).getByRole('button', { name: 'First' })).toBeTruthy()
+    expect(within(tileEl('Deals pipeline')).queryByRole('button', { name: 'Second' })).toBeNull()
+    fireEvent.click(more()!)
+    const menu = await screen.findByRole('menu', { name: 'More questions about Deals pipeline' })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Second', 'Third'])
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Third' }))
+    await waitFor(() => expect(runStart).toHaveBeenCalled())
+    expect(JSON.stringify(runStart.mock.calls[0])).toContain('Third in full')
+    expect(screen.queryByRole('menu', { name: 'More questions about Deals pipeline' })).toBeNull()
+  })
+
+  it('the menu takes the keyboard: focus enters it, and Escape closes it', async () => {
+    // Mutation: go back to a plain popover and Escape leaves it open with the focus on the chevron.
+    withPrompts(['First', 'Second'])
+    show()
+    await screen.findByText('Acme')
+    fireEvent.click(more()!)
+    const menu = await screen.findByRole('menu', { name: 'More questions about Deals pipeline' })
+    expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: 'Second' }))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'More questions about Deals pipeline' })).toBeNull())
+  })
+
+  it('a single question has no chevron', async () => {
+    withPrompts(['Only'])
+    show()
+    await screen.findByText('Acme')
+    expect(within(tileEl('Deals pipeline')).getByRole('button', { name: 'Only' })).toBeTruthy()
+    expect(more()).toBeNull()
+  })
+
+  it('a tile too narrow for the button keeps them all in ⋯', async () => {
+    withPrompts(['First', 'Second'], 's')
+    show()
+    await screen.findByText('Acme')
+    expect(within(tileEl('Deals pipeline')).queryByRole('button', { name: 'First' })).toBeNull()
+    fireEvent.click(within(tileEl('Deals pipeline')).getByRole('button', { name: 'Actions for Deals pipeline' }))
+    const menu = screen.getByRole('menu', { name: 'Actions for Deals pipeline' })
+    expect(within(menu).getByRole('menuitem', { name: 'First' })).toBeTruthy()
+    expect(within(menu).getByRole('menuitem', { name: 'Second' })).toBeTruthy()
+  })
+})
+
+describe('Chat shows a turn running behind it', () => {
+  const rows = [
+    { id: 'here', originDashboardId: 'd1', activeRunId: null },
+    { id: 'there', originDashboardId: 'd2', activeRunId: 'run-2' },
+    { id: 'plain', originDashboardId: null, activeRunId: 'run-3' }
+  ]
+
+  it('only for a chat of this dashboard', () => {
+    // Mutation: drop the origin check and another dashboard's or a plain chat's turn lights this button.
+    expect(dashboardChatRunning(rows, 'd1', null)).toBe(false)
+    expect(dashboardChatRunning(rows, 'd2', null)).toBe(true)
+    expect(dashboardChatRunning(rows, 'd1', 'plain')).toBe(false)
+    expect(dashboardChatRunning(undefined, 'd1', null)).toBe(false)
+    expect(dashboardChatRunning(rows, null, null)).toBe(false)
+  })
+
+  it('the stream on screen counts ahead of the polled list', () => {
+    expect(dashboardChatRunning(rows, 'd1', 'here')).toBe(true)
+  })
+
+  it('a polled list with dates does not pull the focus out of an open menu', async () => {
+    // Mutation: read the whole list in the view and put the focus call back in ContextMenu's other effect: focus returns to the first item.
+    const api = window.api as unknown as { chat: Record<string, unknown> }
+    api.chat.list = async () => [{ id: 'c1', originDashboardId: 'd1', activeRunId: null, createdAt: new Date(), updatedAt: new Date() }]
+    show()
+    await screen.findByText('Acme')
+    fireEvent.click(within(tileEl('Deals pipeline')).getByRole('button', { name: 'Actions for Deals pipeline' }))
+    const remove = within(screen.getByRole('menu', { name: 'Actions for Deals pipeline' })).getByRole('menuitem', { name: 'Remove' })
+    act(() => remove.focus())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1300)) })
+    expect(document.activeElement).toBe(remove)
+  })
+
+  it('the button takes the style with the panel closed, and goes back when the turn ends', async () => {
+    const api = window.api as unknown as { chat: Record<string, unknown> }
+    api.chat.list = async () => [{ id: 'c1', originDashboardId: 'd1', activeRunId: 'run-1' }]
+    show()
+    await screen.findByText('Acme')
+    const chat = screen.getByRole('button', { name: 'Chat' })
+    await waitFor(() => expect(chat.className).toContain('app-button-running'))
+    expect(chat.getAttribute('aria-busy')).toBe('true')
+    api.chat.list = async () => [{ id: 'c1', originDashboardId: 'd1', activeRunId: null }]
+    await waitFor(() => expect(chat.className).not.toContain('app-button-running'), { timeout: 3000 })
+    expect(chat.getAttribute('aria-busy')).toBeNull()
+  })
+})
+
 describe('the removed chip', () => {
   const chipRow = () => screen.getByTestId('dashboard-context-chip')
   const removeChip = async () => {
@@ -586,18 +690,18 @@ describe('the dashboard header', () => {
     expect(moveTile).toHaveBeenCalledTimes(2)
   })
 
-  it('Edit layout is in the ⋯ menu under Rename; Done ends it, and only then is it on the header', async () => {
+  it('Edit layout is in the ⋯ menu under Rename; Save layout ends it, and only then is it on the header', async () => {
     show()
     await screen.findByText('Acme')
     expect(screen.queryByRole('button', { name: 'Edit layout' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Done' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Save layout' })).toBeNull()
     expect(screen.getByRole('heading', { level: 1, name: 'Sales overview' }).className).toContain('text-xl')
     fireEvent.click(screen.getByRole('button', { name: 'Actions for Sales overview' }))
     const items = within(screen.getByRole('menu', { name: 'Actions for Sales overview' })).getAllByRole('menuitem').map((item) => item.textContent)
-    expect(items).toEqual(['Rename…', 'Edit layout', 'Delete…'])
+    expect(items).toEqual(['Rename', 'Edit layout', 'Delete'])
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit layout' }))
     expect(within(tileEl('Deals pipeline')).getByRole('button', { name: 'Move Deals pipeline' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save layout' }))
     expect(within(tileEl('Deals pipeline')).queryByRole('button', { name: 'Move Deals pipeline' })).toBeNull()
   })
 
@@ -611,6 +715,47 @@ describe('the dashboard header', () => {
     fireEvent.click(chat)
     expect(chat.getAttribute('aria-pressed')).toBe('true')
     expect(chat.className).toContain('aria-pressed:bg-')
+  })
+
+  it('Refresh spins for at least its minimum even when every tile answers at once, and ignores presses meanwhile', async () => {
+    // Mutation: set the minimum to 0 and the icon has stopped at the first check after the answers.
+    const ensureFresh = vi.fn(async () => ({ ok: true }))
+    ;(window.api as unknown as { dashboards: Record<string, unknown> }).dashboards.ensureFresh = ensureFresh
+    show()
+    await screen.findByText('Acme')
+    const refresh = screen.getByRole('button', { name: 'Refresh all tiles' })
+    expect(refresh.querySelector('svg')!.getAttribute('class')).not.toContain('animate-spin')
+    fireEvent.click(refresh)
+    expect(refresh.getAttribute('aria-busy')).toBe('true')
+    expect(refresh.querySelector('svg')!.getAttribute('class')).toContain('animate-spin')
+    const asked = ensureFresh.mock.calls.length
+    expect(asked).toBeGreaterThan(0)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)) })
+    fireEvent.click(refresh)
+    expect(ensureFresh.mock.calls.length).toBe(asked)
+    expect(refresh.querySelector('svg')!.getAttribute('class')).toContain('animate-spin')
+    await waitFor(() => expect(refresh.getAttribute('aria-busy')).toBeNull(), { timeout: 2000 })
+    expect(refresh.querySelector('svg')!.getAttribute('class')).not.toContain('animate-spin')
+  })
+
+  it('Refresh keeps spinning while a tile is still recomputing past the minimum', async () => {
+    // Mutation: drop anyRefreshing from the end condition and it stops at 1 s with the tile still running.
+    let refreshing = true
+    const api = (window.api as unknown as { dashboards: Record<string, unknown> }).dashboards
+    const original = api.tileResult as (tileId: string) => Promise<{ ok: true; result: Record<string, unknown> }>
+    api.tileResult = async (tileId: string) => {
+      const answer = await original(tileId)
+      return { ...answer, result: { ...answer.result, refreshing } }
+    }
+    show()
+    await screen.findByText('Acme')
+    const refresh = screen.getByRole('button', { name: 'Refresh all tiles' })
+    fireEvent.click(refresh)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1200)) })
+    expect(refresh.getAttribute('aria-busy')).toBe('true')
+    refreshing = false
+    await act(async () => { await lastClient.invalidateQueries({ queryKey: ['dashboards', 'result'] }) })
+    await waitFor(() => expect(refresh.getAttribute('aria-busy')).toBeNull())
   })
 
   it('a tile’s focus and row picks show only while the panel is open', async () => {

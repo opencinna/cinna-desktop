@@ -224,6 +224,8 @@ export const dashboardRepo = {
       customCols: null,
       customRows: null,
       promptOverrideJson: null,
+      showBorder: true,
+      showTitle: true,
       source: tile.source ?? 'local',
       remoteAgentId: tile.remoteAgentId ?? null,
       coreBlockId: tile.coreBlockId ?? null,
@@ -240,7 +242,7 @@ export const dashboardRepo = {
   updateTile(
     profileUserId: string,
     tileId: string,
-    patch: Partial<Pick<DashboardTileRow, 'title' | 'size' | 'customCols' | 'customRows' | 'paramsJson' | 'refreshOverrideJson' | 'promptOverrideJson' | 'cloudComponentJson'>>
+    patch: Partial<Pick<DashboardTileRow, 'title' | 'size' | 'customCols' | 'customRows' | 'paramsJson' | 'refreshOverrideJson' | 'promptOverrideJson' | 'showBorder' | 'showTitle' | 'cloudComponentJson'>>
   ): DashboardTileRow | null {
     const existing = this.tile(profileUserId, tileId)
     if (!existing) return null

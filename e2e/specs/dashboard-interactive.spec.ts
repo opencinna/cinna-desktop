@@ -581,7 +581,7 @@ const FOLLOW_UPS: ComponentFixture = {
 async function openEditTile(cinna: CinnaApp, title: string) {
   await tile(cinna, title).hover()
   await tile(cinna, title).getByRole('button', { name: `Actions for ${title}`, exact: true }).click()
-  await cinna.page.getByRole('menuitem', { name: 'Edit tile…', exact: true }).click()
+  await cinna.page.getByRole('menuitem', { name: 'Edit', exact: true }).click()
   const dialog = cinna.page.getByRole('dialog', { name: 'Edit tile', exact: true })
   await expect(dialog).toBeVisible()
   return dialog

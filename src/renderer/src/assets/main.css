@@ -1025,6 +1025,66 @@
     }
   }
 
+  /* "Activity happening behind the button" (ui_guidelines_llm.md): work the button
+     answers for is still going on, whether or not its surface is open: the accent,
+     with a lighter band travelling across it and a light circling its border. A
+     functional signal, not ambient decoration (ux rule 16), so it runs while the
+     user is active and with Extra UI animation off; under reduced motion only the
+     filled accent stays. `!important` because the button's own Tailwind utilities
+     outrank @layer base. */
+  .app-button-running {
+    background-color: var(--color-accent) !important;
+    background-image: linear-gradient(
+      90deg,
+      var(--color-accent) 0%,
+      color-mix(in srgb, var(--color-accent) 75%, white) 50%,
+      var(--color-accent) 100%
+    ) !important;
+    background-size: 200% 100%;
+    border-color: transparent !important;
+    color: var(--color-on-accent) !important;
+    box-shadow: none !important;
+    position: relative;
+    animation: app-button-running 2.4s linear infinite;
+  }
+  @keyframes app-button-running {
+    from { background-position: 0% 0; }
+    to { background-position: -200% 0; }
+  }
+  /* The ambient border's circling light (`.ambient-button[data-ambient-glow]::after`),
+     without its fade: constant for as long as the work runs. The second selector
+     keeps it when the ambient rotation picks this button for a burst. */
+  .app-button-running::after,
+  .app-button-running[data-ambient-glow]:not(:disabled)::after {
+    content: '';
+    position: absolute;
+    /* White, unlike the ambient glow: that token is the accent's own blue in light mode, invisible on an accent fill. */
+    inset: -1px;
+    padding: 1.5px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: conic-gradient(from var(--ambient-border-angle), transparent 0deg, white 40deg, transparent 110deg);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    filter: drop-shadow(0 0 2px white);
+    opacity: 1;
+    animation: app-button-running-border 2.4s linear infinite;
+  }
+  @keyframes app-button-running-border {
+    from { --ambient-border-angle: 0deg; }
+    to { --ambient-border-angle: 360deg; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .app-button-running {
+      background-image: none !important;
+      animation: none;
+    }
+    .app-button-running::after,
+    .app-button-running[data-ambient-glow]:not(:disabled)::after {
+      display: none;
+    }
+  }
+
   /* Draggable strips for the (windowless) macOS title-bar area. */
   .app-drag-strip {
     -webkit-app-region: drag;

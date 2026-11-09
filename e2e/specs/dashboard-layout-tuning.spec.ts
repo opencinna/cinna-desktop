@@ -81,14 +81,14 @@ test('a tile sized Custom is dragged against the grid and keeps its cells after 
   expect(await spanOf(cinna, 'Follow-ups')).toEqual({ cols: 6, rows: 2 })
   await expect(tile(cinna, 'Follow-ups').getByTestId('tile-resize-handle')).toHaveCount(0)
 
-  await test.step('Custom in the size menu keeps the cells and gives the tile a corner', async () => {
+  await test.step('Custom in the size menu keeps the cells and goes to Edit layout, where the tile has a corner', async () => {
     await tile(cinna, 'Follow-ups').hover()
     await tile(cinna, 'Follow-ups').getByRole('button', { name: 'Actions for Follow-ups', exact: true }).click()
     const menu = page.getByRole('menu', { name: 'Actions for Follow-ups', exact: true })
     await expect(menu.getByRole('menuitemradio', { name: 'Medium' })).toHaveAttribute('aria-checked', 'true')
     await menu.getByRole('menuitemradio', { name: 'Custom' }).click()
     await expect(menu).toHaveCount(0)
-    await tile(cinna, 'Follow-ups').hover()
+    await expect(page.getByRole('button', { name: 'Save layout', exact: true })).toBeVisible()
     await expect(tile(cinna, 'Follow-ups').getByRole('button', { name: 'Resize Follow-ups', exact: true })).toBeVisible()
     expect(await spanOf(cinna, 'Follow-ups')).toEqual({ cols: 6, rows: 2 })
   })
@@ -111,6 +111,13 @@ test('a tile sized Custom is dragged against the grid and keeps its cells after 
     expect(await spanOf(cinna, 'Follow-ups')).toEqual({ cols: 4, rows: 3 })
   })
 
+  await test.step('Save layout leaves edit mode: the tile just resized keeps its cells and has no corner, hovered or not', async () => {
+    await page.getByRole('button', { name: 'Save layout', exact: true }).click()
+    await tile(cinna, 'Follow-ups').hover()
+    await expect(tile(cinna, 'Follow-ups').getByTestId('tile-resize-handle')).toHaveCount(0)
+    expect(await spanOf(cinna, 'Follow-ups')).toEqual({ cols: 4, rows: 3 })
+  })
+
   await test.step('after a restart it has those cells, and the size menu says Custom', async () => {
     await cinna.relaunch()
     await cinna.skipOnboarding()
@@ -123,14 +130,27 @@ test('a tile sized Custom is dragged against the grid and keeps its cells after 
     await cinna.page.keyboard.press('Escape')
   })
 
-  await test.step('Edit layout is in the ⋯ menu and gives a preset tile a corner too; Done leaves it', async () => {
+  await test.step('Refresh spins for at least a full turn, even when the tiles answer at once', async () => {
+    const refresh = cinna.page.getByRole('button', { name: 'Refresh all tiles', exact: true })
+    const pressedFor = await refresh.evaluate(async (button) => {
+      const started = performance.now()
+      ;(button as HTMLButtonElement).click()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      if (button.getAttribute('aria-busy') !== 'true') return -1
+      while (button.getAttribute('aria-busy') === 'true' && performance.now() - started < 30_000) await new Promise((resolve) => setTimeout(resolve, 20))
+      return performance.now() - started
+    })
+    expect(pressedFor).toBeGreaterThanOrEqual(1000)
+  })
+
+  await test.step('Edit layout is in the ⋯ menu and gives a preset tile a corner too; Save layout leaves it', async () => {
     await expect(cinna.page.getByRole('button', { name: 'Edit layout', exact: true })).toHaveCount(0)
     await cinna.page.getByRole('button', { name: `Actions for ${DASHBOARD}`, exact: true }).click()
     const menu = cinna.page.getByRole('menu', { name: `Actions for ${DASHBOARD}`, exact: true })
-    await expect(menu.getByRole('menuitem')).toHaveText(['Rename…', 'Edit layout', 'Delete…'])
+    await expect(menu.getByRole('menuitem')).toHaveText(['Rename', 'Edit layout', 'Delete'])
     await menu.getByRole('menuitem', { name: 'Edit layout', exact: true }).click()
     await expect(tile(cinna, 'Open tasks').getByRole('button', { name: 'Resize Open tasks', exact: true })).toBeVisible()
-    await cinna.page.getByRole('button', { name: 'Done', exact: true }).click()
+    await cinna.page.getByRole('button', { name: 'Save layout', exact: true }).click()
     await expect(tile(cinna, 'Open tasks').getByRole('button', { name: 'Resize Open tasks', exact: true })).toHaveCount(0)
   })
 })
@@ -156,15 +176,20 @@ test('the chat panel is a card that slides in from the right, the ring shows onl
       const button = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Chat')!
       button.click()
       const widths: number[] = []
+      const sidebarLefts = new Set<number>()
+      const sidebar = document.querySelector('.app-sidebar-wrap')!
       for (let i = 0; i < 12; i += 1) {
         await new Promise((resolve) => requestAnimationFrame(resolve))
         const wrap = document.querySelector('.dashboard-panel-wrap')
         if (wrap) widths.push(Math.round(wrap.getBoundingClientRect().width))
+        sidebarLefts.add(Math.round(sidebar.getBoundingClientRect().left))
       }
-      return widths
+      return { widths, sidebarLefts: [...sidebarLefts] }
     })
-    expect(new Set(seen).size, `the width moves in steps: ${seen.join()}`).toBeGreaterThan(2)
-    expect(seen[0]).toBeLessThan(seen[seen.length - 1])
+    expect(new Set(seen.widths).size, `the width moves in steps: ${seen.widths.join()}`).toBeGreaterThan(2)
+    expect(seen.widths[0]).toBeLessThan(seen.widths[seen.widths.length - 1])
+    // The composer taking focus off-screen must not scroll the whole app sideways under the slide.
+    expect(seen.sidebarLefts, 'the left sidebar stays put').toHaveLength(1)
     await expect(panel(cinna)).toBeVisible()
     await expect(chat).toHaveAttribute('aria-pressed', 'true')
     await expect.poll(() => chat.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(pressedBefore)
@@ -232,7 +257,7 @@ test('a tile’s suggested questions are turned off, reworded and added in Edit 
   await expect(bar.getByRole('button', { name: 'Most urgent?', exact: true })).toBeVisible()
 
   await test.step('turning it off takes it off the bar', async () => {
-    await chooseInTileMenu(cinna, 'Follow-ups', 'Edit tile…')
+    await chooseInTileMenu(cinna, 'Follow-ups', 'Edit')
     const dialog = page.getByRole('dialog', { name: 'Edit tile', exact: true })
     await dialog.getByRole('switch', { name: 'Offer Most urgent?', exact: true }).click()
     await dialog.getByRole('button', { name: 'Save', exact: true }).click()
@@ -242,7 +267,7 @@ test('a tile’s suggested questions are turned off, reworded and added in Edit 
   })
 
   await test.step('an own question without text is refused, and the dialog stays; with text it is on the bar', async () => {
-    await chooseInTileMenu(cinna, 'Follow-ups', 'Edit tile…')
+    await chooseInTileMenu(cinna, 'Follow-ups', 'Edit')
     const dialog = page.getByRole('dialog', { name: 'Edit tile', exact: true })
     await expect(dialog.getByRole('switch', { name: 'Offer Most urgent?', exact: true })).toHaveAttribute('aria-checked', 'false')
     await dialog.getByRole('button', { name: 'Add question', exact: true }).click()
@@ -257,13 +282,20 @@ test('a tile’s suggested questions are turned off, reworded and added in Edit 
   })
 
   await test.step('rewording the agent’s question and turning it back on shows the new label', async () => {
-    await chooseInTileMenu(cinna, 'Follow-ups', 'Edit tile…')
+    await chooseInTileMenu(cinna, 'Follow-ups', 'Edit')
     const dialog = page.getByRole('dialog', { name: 'Edit tile', exact: true })
     await dialog.getByRole('switch', { name: 'Offer Most urgent?', exact: true }).click()
     await dialog.getByRole('button', { name: 'Edit Most urgent?', exact: true }).click()
     await dialog.getByLabel('Label', { exact: true }).fill('First up?')
     await dialog.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(dialog).toHaveCount(0)
+    // Two now: the first is the button, the other behind its chevron.
+    await bar.hover()
+    await expect(bar.getByRole('button', { name: 'First up?', exact: true })).toBeVisible()
+    await expect(bar.getByRole('button', { name: 'Whose?', exact: true })).toHaveCount(0)
+    await bar.getByRole('button', { name: 'More questions about Follow-ups', exact: true }).click()
+    await expect(page.getByRole('menu', { name: 'More questions about Follow-ups', exact: true }).getByRole('menuitem', { name: 'Whose?', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
     const stored = await page.evaluate(async () => {
       const list = await window.api.dashboards.list()
       const tiles = await window.api.dashboards.tiles(list[0].id)
@@ -273,5 +305,98 @@ test('a tile’s suggested questions are turned off, reworded and added in Edit 
       edited: { 'Most urgent?': { label: 'First up?', prompt: 'Which follow-up is the most urgent?' } },
       added: [{ label: 'Whose?', prompt: 'Who owns the follow-up?' }]
     })
+  })
+})
+
+test('Show border and Show title in Edit tile: the title then comes only on hover, moving nothing, and filters stay reachable', async ({ cinna }) => {
+  test.setTimeout(180_000)
+  await arrange(cinna)
+  const page = cinna.page
+  const turnOff = async (title: string): Promise<void> => {
+    await chooseInTileMenu(cinna, title, 'Edit')
+    const dialog = page.getByRole('dialog', { name: 'Edit tile', exact: true })
+    await expect(dialog.getByRole('switch', { name: 'Show border', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await dialog.getByRole('switch', { name: 'Show border', exact: true }).click()
+    await dialog.getByRole('switch', { name: 'Show title', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+  }
+  const barOpacity = (title: string): Promise<string> => tile(cinna, title).getByTestId('tile-bar').evaluate((el) => getComputedStyle(el).opacity)
+  const away = (): Promise<void> => page.mouse.move(5, 300)
+
+  await test.step('a list tile: no border, no bar at rest, and hovering moves nothing', async () => {
+    await turnOff('Follow-ups')
+    await away()
+    await expect.poll(() => barOpacity('Follow-ups')).toBe('0')
+    expect(await tile(cinna, 'Follow-ups').evaluate((el) => getComputedStyle(el).borderTopColor)).toBe('rgba(0, 0, 0, 0)')
+    // Parked above the tile's top, which clips it, to slide down on hover.
+    const barTop = async (): Promise<number> => (await tile(cinna, 'Follow-ups').getByTestId('tile-bar').boundingBox())!.y
+    const tileTop = (await tile(cinna, 'Follow-ups').boundingBox())!.y
+    expect(await barTop()).toBeLessThan(tileTop - 20)
+    const item = tile(cinna, 'Follow-ups').getByText('Call Priya about the renewal')
+    const before = await item.boundingBox()
+    await tile(cinna, 'Follow-ups').hover()
+    await expect.poll(() => barOpacity('Follow-ups')).toBe('1')
+    await expect.poll(async () => Math.abs((await barTop()) - tileTop)).toBeLessThanOrEqual(2)
+    expect(await item.boundingBox()).toEqual(before)
+    await expect(tile(cinna, 'Follow-ups').getByRole('button', { name: 'Ask about Follow-ups', exact: true })).toBeVisible()
+  })
+
+  await test.step('a tile with filters: the header floats at the very top with the filters under it, both reachable, and hovering it keeps it', async () => {
+    await turnOff('Open tasks')
+    const open = tile(cinna, 'Open tasks')
+    const filtersOpacity = (): Promise<string> => open.getByTestId('tile-filter-slot').evaluate((el) => getComputedStyle(el).opacity)
+    await away()
+    await expect.poll(filtersOpacity).toBe('0')
+    const row = open.getByText('Renew the Acme contract')
+    const before = await row.boundingBox()
+    await row.hover()
+    await expect.poll(() => barOpacity('Open tasks')).toBe('1')
+    await expect.poll(filtersOpacity).toBe('1')
+    expect(await row.boundingBox()).toEqual(before)
+    const [bar, box, filterBox] = [await open.getByTestId('tile-bar').boundingBox(), await open.boundingBox(), await open.getByTestId('tile-filter-slot').boundingBox()]
+    expect(Math.abs(bar!.y - box!.y)).toBeLessThanOrEqual(2)
+    expect(filterBox!.y).toBeGreaterThanOrEqual(bar!.y + bar!.height - 1)
+    expect(await open.getByTestId('tile-bar').evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe('1px')
+    // On the header itself it stays, and its buttons work.
+    await page.mouse.move(bar!.x + 40, bar!.y + bar!.height / 2)
+    await page.waitForTimeout(300)
+    expect(await barOpacity('Open tasks')).toBe('1')
+    await open.getByRole('button', { name: 'Actions for Open tasks', exact: true }).click()
+    await expect(page.getByRole('menu', { name: 'Actions for Open tasks', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    // The filter under it works, and stays shown while it holds the focus.
+    const field = open.getByLabel('How many')
+    await field.click()
+    await field.fill('3')
+    await expect(field).toHaveValue('3')
+    expect(await barOpacity('Open tasks')).toBe('1')
+    await away()
+    await page.waitForTimeout(300)
+    // Focus in one half keeps the whole header: never the filter row alone with a gap above it.
+    expect(await filtersOpacity()).toBe('1')
+    expect(await barOpacity('Open tasks')).toBe('1')
+    await field.blur()
+    await expect.poll(filtersOpacity).toBe('0')
+  })
+
+  await test.step('Edit layout draws both, and saving it hides them again', async () => {
+    await page.getByRole('button', { name: `Actions for ${DASHBOARD}`, exact: true }).click()
+    await page.getByRole('menu', { name: `Actions for ${DASHBOARD}`, exact: true }).getByRole('menuitem', { name: 'Edit layout', exact: true }).click()
+    await away()
+    await expect.poll(() => barOpacity('Follow-ups')).toBe('1')
+    expect(await tile(cinna, 'Follow-ups').evaluate((el) => getComputedStyle(el).borderTopColor)).not.toBe('rgba(0, 0, 0, 0)')
+    await page.getByRole('button', { name: 'Save layout', exact: true }).click()
+    await away()
+    await expect.poll(() => barOpacity('Follow-ups')).toBe('0')
+  })
+
+  await test.step('it survives a restart', async () => {
+    await cinna.relaunch()
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    await openDashboard(cinna)
+    await cinna.page.mouse.move(5, 300)
+    await expect.poll(() => tile(cinna, 'Follow-ups').getByTestId('tile-bar').evaluate((el) => getComputedStyle(el).opacity)).toBe('0')
   })
 })

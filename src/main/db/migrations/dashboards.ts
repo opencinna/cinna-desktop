@@ -89,5 +89,9 @@ export function migrateDashboards(sqlite: Database.Database): void {
   for (const [column, type] of [['custom_cols', 'INTEGER'], ['custom_rows', 'INTEGER'], ['prompt_override_json', 'TEXT']]) {
     if (!hasColumn(sqlite, 'dashboard_tiles', column)) sqlite.exec(`ALTER TABLE dashboard_tiles ADD COLUMN ${column} ${type}`)
   }
+  // The Interface switches of Edit tile: an existing tile keeps its border and title.
+  for (const column of ['show_border', 'show_title']) {
+    if (!hasColumn(sqlite, 'dashboard_tiles', column)) sqlite.exec(`ALTER TABLE dashboard_tiles ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 1`)
+  }
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_dashboard_tiles_remote_agent ON dashboard_tiles(remote_agent_id)')
 }

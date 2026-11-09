@@ -1464,6 +1464,9 @@ export const dashboardTiles = sqliteTable('dashboard_tiles', {
   refreshOverrideJson: text('refresh_override_json'),
   /** The user's change to the component's suggested questions (`TilePromptOverride` JSON), or null. */
   promptOverrideJson: text('prompt_override_json'),
+  /** Interface switches (Edit tile); both on by default. */
+  showBorder: integer('show_border', { mode: 'boolean' }).notNull().default(true),
+  showTitle: integer('show_title', { mode: 'boolean' }).notNull().default(true),
   /** `local` (a folder agent; `agentManifestId`) or `remote` (a cloud agent, D6; `agentManifestId` is `''`). */
   source: text('source').notNull().default('local'),
   /** A cloud tile's core agent id. */

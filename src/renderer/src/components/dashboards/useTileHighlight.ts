@@ -76,11 +76,14 @@ export function revealHighlight(tile: HTMLElement, index: number): boolean {
   const rows = drawnHighlights(tile)
   if (rows.length === 0) return false
   const target = rows[((index % rows.length) + rows.length) % rows.length]
+  // A floating header (the title off) lies over the content's top: a row under it is not shown.
+  const headerBottom = Math.max(0, ...[...tile.querySelectorAll('[data-tile-header]')].map((el) => el.getBoundingClientRect().bottom))
   for (let node = target.parentElement; node && node !== tile; node = node.parentElement) {
     if (node.scrollHeight <= node.clientHeight) continue
     const box = node.getBoundingClientRect()
     const row = target.getBoundingClientRect()
-    if (row.top < box.top) node.scrollTop -= box.top - row.top
+    const top = Math.max(box.top, headerBottom)
+    if (row.top < top) node.scrollTop -= top - row.top
     else if (row.bottom > box.bottom) node.scrollTop += Math.min(row.bottom - box.bottom, row.top - box.top)
   }
   return true

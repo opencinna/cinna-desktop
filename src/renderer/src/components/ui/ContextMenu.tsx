@@ -83,8 +83,13 @@ export function ContextMenu({
     anchorAt.current = rect ? { left: rect.left, top: rect.top } : null
   }, [anchor])
 
+  // Once, on opening: a caller's inline onClose changes on every render of its
+  // own, and that must not pull the focus back from the item the user moved to.
   useLayoutEffect(() => {
     ref.current?.querySelector<HTMLButtonElement>(ENABLED_ITEMS)?.focus({ preventScroll: true })
+  }, [])
+
+  useLayoutEffect(() => {
     const outside = (event: PointerEvent): void => {
       if (!ref.current?.contains(event.target as Node)) onClose()
     }

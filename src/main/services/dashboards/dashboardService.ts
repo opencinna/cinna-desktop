@@ -363,7 +363,9 @@ export function toTileDto(row: DashboardTileRow, cloud?: CloudOrigin): TileDto {
     position: row.position,
     params: parseJsonObject(row.paramsJson) ?? {},
     refreshOverride: override === 'invalid' ? null : override,
-    promptOverride: prompts === 'invalid' ? null : prompts
+    promptOverride: prompts === 'invalid' ? null : prompts,
+    showBorder: row.showBorder,
+    showTitle: row.showTitle
   }
 }
 
@@ -714,6 +716,12 @@ export function createDashboardService(deps: DashboardServiceDeps = { agents: de
           }
         } else if (!isTileSize(value.size)) return refuse('invalid_input', 'That is not a tile size.')
         patch.size = value.size
+      }
+      for (const field of ['showBorder', 'showTitle'] as const) {
+        const shown = value[field]
+        if (shown === undefined) continue
+        if (typeof shown !== 'boolean') return refuse('invalid_input', 'That is not an interface setting.')
+        patch[field] = shown
       }
       if (value.promptOverride !== undefined) {
         const prompts = normalizePromptOverride(value.promptOverride)
