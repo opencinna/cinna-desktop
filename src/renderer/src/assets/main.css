@@ -1775,6 +1775,30 @@
     .cinna-logo-sweep { display: none; }
   }
 
+  /* The text caret in every field: the theme's accent, so a brand's follows,
+     fading instead of Chromium's hard blink. Runs only on a focused field the
+     user can type in; date and time inputs show no caret, and xterm's helper
+     textarea is invisible. utils/caretFade.ts rewinds the fade on each
+     keystroke, so the caret holds solid (the 0-30 % stretch) while the user
+     types or moves it, and parks it solid after a long idle: the animation
+     repaints every frame, and a composer can hold focus for a long read. */
+  :read-write:not(.xterm-helper-textarea, [type="date"], [type="month"], [type="week"], [type="time"], [type="datetime-local"]):focus {
+    caret-color: var(--color-accent);
+    caret-animation: manual;
+    animation: caret-soft-fade 1.2s ease-in-out infinite;
+  }
+  @keyframes caret-soft-fade {
+    0%, 30% { caret-color: var(--color-accent); }
+    60%, 70% { caret-color: transparent; }
+    100% { caret-color: var(--color-accent); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :read-write:not(.xterm-helper-textarea, [type="date"], [type="month"], [type="week"], [type="time"], [type="datetime-local"]):focus {
+      caret-animation: auto;
+      animation: none;
+    }
+  }
+
   /* The compact managed list (ui/ManagedList.tsx): one tinted surface over
      whatever is under it, so it reads on a page, in a card and on a glass
      dialog alike. Rows carry no border of their own; a hairline between two
