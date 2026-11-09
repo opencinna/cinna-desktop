@@ -1,8 +1,8 @@
-import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Bot, MessageCircle, MessageSquare } from 'lucide-react'
 import type { ChatListSummary } from '../../../../../shared/chatListSummary'
-import type { ChatSearchGroup } from '../../../../../shared/chatSearch'
+import { CHAT_SEARCH_CHAT_LIMIT, chatSearchFilterOf, type ChatSearchGroup, type ChatSearchResult } from '../../../../../shared/chatSearch'
 import { useChatList, useChatSummaries } from '../../../hooks/useChat'
 import { useAgents } from '../../../hooks/useAgents'
 import { useChatModes } from '../../../hooks/useChatModes'
@@ -18,7 +18,7 @@ import { SearchResultList } from './SearchResultList'
 import { useSearchPause } from './useSearchPause'
 import { countMatches, findShortcutLabel, searchTimeLabel, snippetMarkdown } from './chatSearchText'
 
-/** The bar's count slot, wide enough for "999 in 50 chats". */
+/** The bar's count slot, wide enough for "999 in 50 chats" (and "50+ chats"). */
 const COUNT_WIDTH = 104
 
 interface FoundGroup extends ChatSearchGroup {
@@ -27,6 +27,11 @@ interface FoundGroup extends ChatSearchGroup {
 }
 
 const NEUTRAL: AgentChipColors = { border: 'var(--color-border)', bg: 'transparent' }
+
+/** A search result with the query it was fetched for: kept data under a newer query still highlights its own. */
+interface FetchedSearch extends ChatSearchResult {
+  query: string
+}
 
 /**
  * All-chats search: over the main area right of a docked sidebar, a scrim
@@ -47,41 +52,74 @@ function AllChatsOverlay(): React.JSX.Element {
   const clearAgents = useChatSearchStore((s) => s.clearAgents)
   const requestJump = useChatSearchStore((s) => s.requestJump)
   const chatAvailable = useChatSearchStore((s) => s.searchableChatId !== null)
-  const { applied, pending, flush } = useSearchPause(query)
+  const { applied, pending: typing, flush } = useSearchPause(query)
   const q = applied.trim()
-  const { data: result } = useQuery({
-    queryKey: ['chat-search', q],
-    queryFn: () => window.api.chat.search(q),
-    enabled: q.length > 0,
-    placeholderData: keepPreviousData,
-    staleTime: 0,
-    gcTime: 30_000
-  })
   // Who each chat is with, as the Chats list groups it.
   const { data: chats } = useChatList()
   const { data: summaries } = useChatSummaries()
   const { data: agents } = useAgents()
   const { data: modes } = useChatModes()
-  const groups = useMemo((): FoundGroup[] => {
-    if (!q || !result) return []
+  const withWho = useCallback((found: ChatSearchGroup[]): FoundGroup[] => {
     const byId = new Map((chats ?? []).map((chat) => [chat.id, chat]))
-    return result.groups.map((group) => {
+    return found.map((group) => {
       const chat = byId.get(group.chatId) ?? { id: group.chatId, updatedAt: new Date(group.latestAt) }
       const { key, who } = chatWho(chat, summaries?.[group.chatId], { agents: agents ?? [], modes: modes ?? [] })
       return { ...group, key, who }
     })
-  }, [q, result, chats, summaries, agents, modes])
+  }, [chats, summaries, agents, modes])
+
+  // Every chat the query finds: the chips and their counts, whatever is pressed.
+  const unfiltered = useQuery({
+    queryKey: ['chat-search', q],
+    queryFn: async (): Promise<FetchedSearch> => ({ ...(await window.api.chat.search(q)), query: q }),
+    enabled: q.length > 0,
+    placeholderData: keepPreviousData,
+    staleTime: 0,
+    gcTime: 30_000
+  })
+  // The results while chips are pressed: main limits the search to those
+  // agents, so a pressed agent's chats past the newest 50 are found too.
+  const filter = useMemo(() => chatSearchFilterOf(agentFilter), [agentFilter])
+  const filterKey = [...agentFilter].sort().join(',')
+  const filtered = useQuery({
+    queryKey: ['chat-search', q, filterKey],
+    queryFn: async (): Promise<FetchedSearch> => ({ ...(await window.api.chat.search(q, filter)), query: q }),
+    enabled: q.length > 0 && !!filter,
+    // The last filtered results, else what is already here narrowed to the
+    // pressed chips — shown as pending, never opened.
+    placeholderData: (previous) => {
+      if (previous) return previous
+      const base = unfiltered.data
+      if (!base) return undefined
+      const keys = new Set(agentFilter)
+      const groups = new Set(withWho(base.groups).filter((group) => keys.has(group.key)).map((group) => group.chatId))
+      return { ...base, groups: base.groups.filter((group) => groups.has(group.chatId)) }
+    },
+    staleTime: 0,
+    gcTime: 30_000
+  })
+  const results = filter ? filtered : unfiltered
+  const result = q ? results.data : undefined
+  // Results kept from an earlier query (or filter) while the new one is in
+  // flight: drawn, but pending — the icon pulses and Enter opens nothing.
+  const stale = q.length > 0 && (results.isPlaceholderData || results.isPending)
+  const pending = typing || stale
+  /** The query the results on screen were found for: what their snippets highlight and a pick jumps to. */
+  const resultQuery = result?.query ?? q
+
+  const groups = useMemo((): FoundGroup[] => (result ? withWho(result.groups) : []), [result, withWho])
+  const chipGroups = useMemo((): FoundGroup[] => (q && unfiltered.data ? withWho(unfiltered.data.groups) : []), [q, unfiltered.data, withWho])
 
   // Who each key was when a query last found it: a pressed chip the current
   // query does not find keeps its name and colour.
   const seenWho = useRef(new Map<string, ChatListSummary['with']>())
-  for (const group of groups) seenWho.current.set(group.key, group.who)
+  for (const group of chipGroups) seenWho.current.set(group.key, group.who)
   // Chips for what the query found, counted whatever is pressed, so a chip
   // says what pressing it would show. A pressed one that found nothing stays,
   // so it can be unpressed.
   const chips = useMemo(() => {
     const found = new Map<string, { who: ChatListSummary['with']; count: number }>()
-    for (const group of groups) {
+    for (const group of chipGroups) {
       const entry = found.get(group.key)
       if (entry) entry.count += group.total
       else found.set(group.key, { who: group.who, count: group.total })
@@ -92,16 +130,16 @@ function AllChatsOverlay(): React.JSX.Element {
     return [...found.entries()]
       .map(([key, entry]) => ({ key, ...entry }))
       .sort((a, b) => a.who.name.localeCompare(b.who.name))
-  }, [groups, agentFilter, agents, modes])
-  const showChips = q.length > 0 && !!result && (chips.length >= 2 || agentFilter.length > 0)
+  }, [chipGroups, agentFilter, agents, modes])
+  const showChips = q.length > 0 && !!unfiltered.data && (chips.length >= 2 || agentFilter.length > 0)
 
-  const shown = agentFilter.length > 0 ? groups.filter((group) => agentFilter.includes(group.key)) : groups
+  const shown = groups
   // Newest nearest the bar: the newest chat at the bottom, its newest message last.
   const display = useMemo(() => [...shown].reverse().map((group) => ({ ...group, messages: [...group.messages].reverse() })), [shown])
   const listId = useId()
   const optionId = (messageId: string): string => `${listId}-${messageId}`
   const entries = display.flatMap((group) => group.messages.map((message) => ({ id: optionId(message.id), group: group.chatId })))
-  const resultsKey = `${q}|${agentFilter.join(',')}|${entries.map((entry) => entry.id).join(',')}`
+  const resultsKey = `${resultQuery}|${filterKey}|${entries.map((entry) => entry.id).join(',')}`
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
   useEffect(() => {
     setActiveId(entries[entries.length - 1]?.id)
@@ -115,7 +153,7 @@ function AllChatsOverlay(): React.JSX.Element {
     useUIStore.getState().setActiveJobId(null)
     useChatStore.getState().setActiveChatId(chatId)
     useUIStore.getState().setActiveView('chat')
-    requestJump({ chatId, messageId, query: q })
+    requestJump({ chatId, messageId, query: resultQuery })
   }
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
@@ -126,10 +164,12 @@ function AllChatsOverlay(): React.JSX.Element {
     }
     if (event.key === 'Enter') {
       event.preventDefault()
-      if (pending) {
+      if (typing) {
         flush()
         return
       }
+      // Results of an earlier query: not what the field says.
+      if (stale) return
       for (const group of display) {
         const message = group.messages.find((m) => optionId(m.id) === activeId)
         if (message) openChat(group.chatId, message.id)
@@ -161,7 +201,21 @@ function AllChatsOverlay(): React.JSX.Element {
   }
 
   const total = shown.reduce((n, group) => n + group.total, 0)
-  const count = !q || !result ? '' : shown.length === 0 ? 'No matches' : `${total} in ${shown.length} chat${shown.length === 1 ? '' : 's'}`
+  const count = !q || !result
+    ? ''
+    : shown.length === 0
+      ? 'No matches'
+      : result.truncated
+        ? `${CHAT_SEARCH_CHAT_LIMIT}+ chats`
+        : `${total} in ${shown.length} chat${shown.length === 1 ? '' : 's'}`
+  // Beside the bar, so it shows without scrolling to the far end of the list.
+  const notice = !q || !result
+    ? null
+    : result.truncated
+      ? `Showing the ${CHAT_SEARCH_CHAT_LIMIT} chats with the newest matches. Refine the search to see older ones.`
+      : filter && unfiltered.data?.truncated
+        ? `Agents are counted in the ${CHAT_SEARCH_CHAT_LIMIT} chats with the newest matches.`
+        : null
   const now = new Date()
 
   return (
@@ -174,7 +228,7 @@ function AllChatsOverlay(): React.JSX.Element {
           </div>
         ) : !result ? null : display.length === 0 ? (
           <div className="chat-search-empty chat-search-glass">
-            No matches for “{q}”{agentFilter.length > 0 ? ' with these agents' : ''}
+            No matches for “{resultQuery}”{agentFilter.length > 0 ? ' with these agents' : ''}
           </div>
         ) : (
           <SearchResultList
@@ -185,11 +239,6 @@ function AllChatsOverlay(): React.JSX.Element {
             activeId={activeId}
             onActivate={setActiveId}
           >
-            {result.truncated && (
-              <div className="chat-search-empty chat-search-glass">
-                Showing the {result.groups.length} chats with the newest matches.
-              </div>
-            )}
             {display.map((group) => {
               const tint = tintOf(group.who)
               const more = group.total - group.messages.length
@@ -222,9 +271,9 @@ function AllChatsOverlay(): React.JSX.Element {
                       role={message.role}
                       who={message.role === 'user' ? 'You' : agentName}
                       when={searchTimeLabel(new Date(message.createdAt), now)}
-                      count={countMatches(snippetMarkdown(message.role, message.content), q)}
+                      count={countMatches(snippetMarkdown(message.role, message.content), resultQuery)}
                       content={message.content}
-                      query={q}
+                      query={resultQuery}
                       active={activeId === optionId(message.id)}
                       onPick={() => openChat(group.chatId, message.id)}
                     />
@@ -259,6 +308,11 @@ function AllChatsOverlay(): React.JSX.Element {
                 onToggle={() => toggleAgent(chip.key)}
               />
             ))}
+          </div>
+        )}
+        {notice && (
+          <div className="chat-search-notice chat-search-glass" role="status" data-chat-search-notice>
+            {notice}
           </div>
         )}
         <ChatSearchBar

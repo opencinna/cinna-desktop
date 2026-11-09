@@ -15,8 +15,11 @@ import { useChatSearchShortcut } from './search/useChatSearchShortcut'
  * chat is on screen and all-chats search otherwise.
  */
 
-const data = vi.hoisted(() => ({ byChat: {} as Record<string, unknown[]> }))
-vi.mock('../../hooks/useChat', () => ({ useChatDetail: (chatId: string) => ({ data: { messages: data.byChat[chatId] ?? [] } }) }))
+const data = vi.hoisted(() => ({ byChat: {} as Record<string, unknown[] | undefined> }))
+// A chat whose messages are undefined has not loaded yet.
+vi.mock('../../hooks/useChat', () => ({
+  useChatDetail: (chatId: string) => ({ data: data.byChat[chatId] ? { messages: data.byChat[chatId] } : undefined })
+}))
 vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: [] }) }))
 vi.mock('../../hooks/useAgentRequests', () => ({ useAgentRequests: () => ({ isPending: () => false }) }))
 const stick = vi.hoisted(() => ({ containerRef: { current: null }, contentRef: { current: null } }))
@@ -157,5 +160,112 @@ describe('chat search in the transcript', () => {
     expect(useChatSearchStore.getState().scope).toBe('chat')
     expect(useChatSearchStore.getState().query).toBe('retry')
     expect(screen.getAllByRole('option')).toHaveLength(2)
+  })
+
+  it('waits for the messages before a jump fires, then fires it once', async () => {
+    vi.useFakeTimers()
+    const saved = data.byChat['c-1']
+    data.byChat['c-1'] = undefined
+    useChatSearchStore.getState().requestJump({ chatId: 'c-1', messageId: 'm2', query: 'retry' })
+    const { rerender } = render(view('c-1'))
+    await act(async () => { vi.advanceTimersByTime(50) })
+    expect(useChatSearchStore.getState().jump).not.toBeNull()
+    expect(document.querySelector('.chat-search-flash')).toBeNull()
+    data.byChat['c-1'] = saved
+    rerender(view('c-1'))
+    await act(async () => { vi.advanceTimersByTime(50) })
+    expect(document.querySelectorAll('.chat-search-flash')).toHaveLength(1)
+    expect(document.querySelector('[data-message-id="m2"] .chat-search-flash')).not.toBeNull()
+    expect(useChatSearchStore.getState().jump).toBeNull()
+  })
+
+  it('drops a jump when another chat opens before it fires, so a later visit does not take it', async () => {
+    vi.useFakeTimers()
+    const saved = data.byChat['c-1']
+    data.byChat['c-1'] = undefined
+    useChatSearchStore.getState().requestJump({ chatId: 'c-1', messageId: 'm2', query: 'retry' })
+    const { rerender } = render(view('c-1'))
+    // The user goes to another chat before c-1 has loaded.
+    rerender(view('c-2'))
+    expect(useChatSearchStore.getState().jump).toBeNull()
+    data.byChat['c-1'] = saved
+    rerender(view('c-1'))
+    await act(async () => { vi.advanceTimersByTime(50) })
+    expect(document.querySelector('.chat-search-flash')).toBeNull()
+  })
+
+  it('keeps a jump for the chat that opens next', () => {
+    useChatSearchStore.setState({ searchableChatId: 'c-2' })
+    useChatSearchStore.getState().requestJump({ chatId: 'c-1', messageId: 'm2', query: 'retry' })
+    // The old transcript lets go first, then the picked chat's shows.
+    useChatSearchStore.getState().setSearchableChatId(null)
+    useChatSearchStore.getState().setSearchableChatId('c-1')
+    expect(useChatSearchStore.getState().jump).toMatchObject({ chatId: 'c-1', messageId: 'm2' })
+  })
+
+  it.each([
+    ['a dialog without aria-modal', (el: HTMLElement) => el.setAttribute('role', 'dialog')],
+    ['an alert dialog', (el: HTMLElement) => el.setAttribute('role', 'alertdialog')],
+    ['a modal scrim', (el: HTMLElement) => el.classList.add('app-modal-scrim')],
+    ['an aria-modal element', (el: HTMLElement) => el.setAttribute('aria-modal', 'true')]
+  ])('leaves ⌘F alone while %s is open', (_name, mark) => {
+    const dialog = document.createElement('div')
+    mark(dialog)
+    document.body.append(dialog)
+    try {
+      render(view('c-1'))
+      pressFind()
+      expect(useChatSearchStore.getState().scope).toBeNull()
+      // A hidden one does not count.
+      dialog.hidden = true
+      pressFind()
+      expect(useChatSearchStore.getState().scope).toBe('chat')
+    } finally {
+      dialog.remove()
+    }
+  })
+
+  it('shows the newest 30 cards and says how many older matches it left out', () => {
+    data.byChat['c-1'] = Array.from({ length: 35 }, (_, k) => ({
+      id: `r${k}`, role: k % 2 ? 'assistant' : 'user', content: `retry number ${k}`, createdAt: at
+    }))
+    useChatSearchStore.setState({ query: 'retry' })
+    render(view('c-1'))
+    pressFind()
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(30)
+    expect(options[0].textContent).toContain('retry number 5')
+    expect(options[29].textContent).toContain('retry number 34')
+    expect(screen.getByText('35 matches')).toBeTruthy()
+    const older = document.querySelector('[data-chat-search-older]')!
+    expect(older.textContent).toBe('5 older matches. Refine the search to see them.')
+    // At the far end of the list, above the oldest card shown.
+    expect(older.compareDocumentPosition(options[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('gives focus back on Escape: to what had it, else the chat\'s composer', () => {
+    const before = document.createElement('button')
+    const composer = document.createElement('textarea')
+    composer.setAttribute('data-chat-composer', 'c-1')
+    document.body.append(before, composer)
+    try {
+      render(view('c-1'))
+      before.focus()
+      pressFind()
+      const input = screen.getByRole('combobox', { name: 'Search this chat' })
+      expect(document.activeElement).toBe(input)
+      fireEvent.keyDown(input, { key: 'Escape' })
+      expect(chatSearch()).toBeNull()
+      expect(document.activeElement).toBe(before)
+
+      ;(document.activeElement as HTMLElement).blur()
+      expect(document.activeElement).toBe(document.body)
+      pressFind()
+      fireEvent.keyDown(screen.getByRole('combobox', { name: 'Search this chat' }), { key: 'Escape' })
+      expect(document.activeElement).toBe(composer)
+    } finally {
+      before.remove()
+      composer.remove()
+    }
   })
 })

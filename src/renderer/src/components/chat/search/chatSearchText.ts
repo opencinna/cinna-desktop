@@ -131,11 +131,18 @@ export function clearHighlight(name: string): void {
 
 /**
  * Snippet ranges, one entry per mounted snippet, painted together under
- * {@link HIGHLIGHT.snippet}.
+ * {@link HIGHLIGHT.snippet}. Once per batch, not once per snippet: a list of
+ * cards sets its ranges in one commit, and the paint follows in a microtask.
  */
 const snippetRanges = new Map<object, Range[]>()
+let snippetPaintQueued = false
 export function setSnippetRanges(owner: object, ranges: Range[] | null): void {
   if (ranges && ranges.length > 0) snippetRanges.set(owner, ranges)
-  else snippetRanges.delete(owner)
-  paintHighlight(HIGHLIGHT.snippet, [...snippetRanges.values()].flat())
+  else if (!snippetRanges.delete(owner)) return
+  if (snippetPaintQueued) return
+  snippetPaintQueued = true
+  queueMicrotask(() => {
+    snippetPaintQueued = false
+    paintHighlight(HIGHLIGHT.snippet, [...snippetRanges.values()].flat())
+  })
 }

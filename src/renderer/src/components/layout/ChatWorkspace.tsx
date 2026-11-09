@@ -177,6 +177,24 @@ export function ChatWorkspace({
     areaRef: chatAreaRef
   })
   const cloud = minimal.phase === 'cloud' || minimal.phase === 'returning'
+  // How far the composer's drawn content (its notice panel, the rows above
+  // the box, the box) reaches up from the bottom of the chat area: chat search
+  // sits just above it, following the notice panel as it comes and goes.
+  const [composerReach, setComposerReach] = useState<number | undefined>(undefined)
+  useEffect(() => {
+    const area = chatAreaRef.current
+    const composer = composerAreaRef.current
+    if (!area || !composer || typeof ResizeObserver === 'undefined') return
+    const measure = (): void => {
+      const reach = area.getBoundingClientRect().bottom - composer.getBoundingClientRect().top
+      setComposerReach(reach > 0 ? Math.round(reach) : undefined)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(composer)
+    ro.observe(area)
+    return () => ro.disconnect()
+  }, [activeChatId, activeView])
   // Whether the cloud shows (its draft has content): Jump to latest then sits above it.
   const [cloudShown, setCloudShown] = useState(false)
   // Scrolling down twice more at the bottom of the transcript leaves minimal view.
@@ -699,6 +717,7 @@ export function ChatWorkspace({
         chatId={activeChatId}
         searchable={!embedded && !hosted}
         bottomPadding={minimal.bottomPadding}
+        searchBottom={composerReach !== undefined && minimal.phase === 'full' ? composerReach + 8 : undefined}
         // Minimal view: Jump to latest sits at the bottom edge, where the composer
         // was, or above the cloud while it shows (the wrapper's measured height).
         pillBottom={minimal.phase === 'cloud' ? (cloudShown ? Math.max(12, inputHeight - 8) : 12) : undefined}

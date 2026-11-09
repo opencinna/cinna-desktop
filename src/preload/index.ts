@@ -635,9 +635,12 @@ const api = {
     /** Per-chat tooltip data, keyed by chat id. Not polled: it scans messages. */
     listSummaries: (): Promise<Record<string, import('../shared/chatListSummary').ChatListSummary>> =>
       ipcRenderer.invoke('chat:list-summaries'),
-    /** All-chats search over the listed chats' user and assistant messages. */
-    search: (query: string): Promise<import('../shared/chatSearch').ChatSearchResult> =>
-      ipcRenderer.invoke('chat:search', query),
+    /** All-chats search over the listed chats' user and assistant messages, limited to `filter`'s agents or modes when given. */
+    search: (
+      query: string,
+      filter?: import('../shared/chatSearch').ChatSearchFilter
+    ): Promise<import('../shared/chatSearch').ChatSearchResult> =>
+      ipcRenderer.invoke('chat:search', query, filter),
     markResultRead: (chatId: string, runId: string): Promise<void> =>
       ipcRenderer.invoke('chat:mark-result-read', chatId, runId),
     /** `workspace`: the chat's own runtime works in its folder (the policy it captured, not its mode's current one). */

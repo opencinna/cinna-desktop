@@ -34,6 +34,8 @@ export function ChatSearchBar({ scope, chatAvailable, count, countWidth, listId,
   }, [focusNonce, scope])
   const label = scope === 'chat' ? 'Search this chat' : 'Search all chats'
   const other = scope === 'chat' ? 'all' : 'chat'
+  // Named for what it does, not the scope it shows: it is a switch.
+  const switchLabel = `Search ${other === 'all' ? 'all chats' : 'this chat'} instead`
   return (
     <div role="search" className="chat-search-bar chat-search-glass">
       <Search size={15} className="chat-search-icon" aria-hidden="true" />
@@ -59,7 +61,8 @@ export function ChatSearchBar({ scope, chatAvailable, count, countWidth, listId,
         type="button"
         className="chat-search-scope"
         disabled={!chatAvailable}
-        title={chatAvailable ? `Search ${other === 'all' ? 'all chats' : 'this chat'} instead` : 'No chat open'}
+        aria-label={switchLabel}
+        title={chatAvailable ? switchLabel : 'No chat open'}
         onClick={() => open(other)}
       >
         {scope === 'chat' ? 'This chat' : 'All chats'}

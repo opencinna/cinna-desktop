@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatListSummary } from '../../../../../shared/chatListSummary'
-import type { ChatSearchResult } from '../../../../../shared/chatSearch'
+import type { ChatSearchFilter, ChatSearchResult } from '../../../../../shared/chatSearch'
 
 /**
  * All-chats search: results after a pause in typing, chips for the agents the
@@ -58,10 +58,22 @@ const RESULT: ChatSearchResult = {
   ]
 }
 
+/** What main finds for the next search; a filter narrows it by each chat's agent, as main does. */
+let served: ChatSearchResult = RESULT
+const agentOf = (chatId: string): string | undefined => {
+  const who = lists.summaries[chatId]?.with
+  return who?.kind === 'agent' ? who.agentId : undefined
+}
+async function serve(_query: string, filter?: ChatSearchFilter): Promise<ChatSearchResult> {
+  if (!filter) return served
+  return { ...served, groups: served.groups.filter((group) => filter.agentIds?.includes(agentOf(group.chatId) ?? '')) }
+}
+
 let client: QueryClient
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  search.mockReset().mockResolvedValue(RESULT)
+  served = RESULT
+  search.mockReset().mockImplementation(serve)
   lists.chats = [
     { id: 'c-flaky', agentId: 'a-platform', modeId: null, updatedAt: at(30) },
     { id: 'c-pg', agentId: 'a-platform', modeId: null, updatedAt: at(20) },
@@ -125,7 +137,7 @@ describe('all-chats search', () => {
   })
 
   it('hides the chip row when the query found one agent only', async () => {
-    search.mockResolvedValue({ truncated: false, groups: [RESULT.groups[0]] })
+    served = { truncated: false, groups: [RESULT.groups[0]] }
     view()
     await searchFor('race')
     expect(chipRow()).toBeNull()
@@ -157,7 +169,7 @@ describe('all-chats search', () => {
     expect(useChatSearchStore.getState().agents).toEqual(['agent:a-platform'])
     expect(groupTitles()).toEqual(['Postgres migration plan', 'Flaky checkout test'])
     // A new query that finds no Platform chat: its chip stays, at 0, so it can be unpressed.
-    search.mockResolvedValue({ truncated: false, groups: [RESULT.groups[2]] })
+    served = { truncated: false, groups: [RESULT.groups[2]] }
     fireEvent.change(field(), { target: { value: 'card' } })
     await waitFor(() => expect(chip(/^Platform/).textContent).toBe('Platform 0'))
     expect(screen.getByText(/No matches for “card” with these agents/)).toBeTruthy()
@@ -212,6 +224,94 @@ describe('all-chats search', () => {
 
   it('cannot switch to this chat with no chat open', () => {
     view()
-    expect((screen.getByRole('button', { name: 'All chats' }) as HTMLButtonElement).disabled).toBe(true)
+    const scope = screen.getByRole('button', { name: 'Search this chat instead' }) as HTMLButtonElement
+    // Named for what it does; it shows the scope it searches.
+    expect(scope.textContent).toBe('All chats')
+    expect(scope.disabled).toBe(true)
+  })
+
+  it('asks main for the pressed agents, and keeps the chips counting every chat', async () => {
+    view()
+    await searchFor('retry')
+    // Main's filtered search finds a Finance chat the newest 50 did not hold.
+    const older = {
+      chatId: 'c-old', title: 'Old Finance chat', total: 1, latestAt: at(1),
+      messages: [{ id: 'm-old', role: 'assistant' as const, content: 'retry the export', createdAt: at(1) }]
+    }
+    lists.summaries['c-old'] = agent('a-finance', 'Finance')
+    search.mockImplementation(async (query: string, filter?: ChatSearchFilter) =>
+      filter ? { truncated: false, groups: [RESULT.groups[2], older] } : serve(query))
+    fireEvent.click(chip(/^Finance/))
+    await waitFor(() => expect(groupTitles()).toEqual(['Old Finance chat', 'Q3 invoices']))
+    expect(search).toHaveBeenLastCalledWith('retry', { agentIds: ['a-finance'] })
+    // The chips still count the unfiltered results.
+    expect(chip(/^Finance/).textContent).toBe('Finance 1')
+    expect(chip(/^Platform/).textContent).toBe('Platform 6')
+    expect(screen.getByText('2 in 2 chats')).toBeTruthy()
+  })
+
+  it('says when the results stop at the newest 50 chats, in the count and beside the bar', async () => {
+    served = { ...RESULT, truncated: true }
+    view()
+    await searchFor('retry')
+    expect(screen.getByText('50+ chats')).toBeTruthy()
+    const notice = document.querySelector('[data-chat-search-notice]')!
+    expect(notice.textContent).toMatch(/Showing the 50 chats with the newest matches/)
+    // Between the chip row and the bar, not at the far end of the list.
+    const bar = screen.getByRole('search')
+    expect(chipRow()!.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(notice.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByRole('listbox').contains(notice)).toBe(false)
+  })
+
+  it('keeps the notice when the agent filter leaves nothing', async () => {
+    served = { ...RESULT, truncated: true }
+    view()
+    await searchFor('retry')
+    search.mockImplementation(async (query: string, filter?: ChatSearchFilter) =>
+      filter ? { truncated: false, groups: [] } : serve(query))
+    fireEvent.click(chip(/^Finance/))
+    await waitFor(() => expect(screen.getByText(/No matches for “retry” with these agents/)).toBeTruthy())
+    expect(document.querySelector('[data-chat-search-notice]')?.textContent).toMatch(/50 chats with the newest matches/)
+  })
+
+  it("does not open an earlier query's result on Enter while the new one is in flight", async () => {
+    view()
+    await searchFor('retry')
+    search.mockImplementation(() => new Promise(() => {}))
+    fireEvent.change(field(), { target: { value: 'card' } })
+    // Past the pause: the new query is asked, the old results still drawn.
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith('card'), { timeout: 1000 })
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0)
+    expect(document.querySelector('[data-chat-search="all"]')?.hasAttribute('data-pending')).toBe(true)
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(useChatSearchStore.getState().jump).toBeNull()
+    expect(useChatSearchStore.getState().scope).toBe('all')
+  })
+
+  it('gives focus back on Escape: to what had it, else the composer', async () => {
+    useChatSearchStore.setState({ scope: null })
+    const before = document.createElement('button')
+    const composer = document.createElement('textarea')
+    composer.setAttribute('data-chat-composer', 'c-pg')
+    document.body.append(before, composer)
+    try {
+      view()
+      before.focus()
+      act(() => { useChatSearchStore.getState().open('all') })
+      expect(document.activeElement).toBe(field())
+      fireEvent.keyDown(field(), { key: 'Escape' })
+      expect(document.activeElement).toBe(before)
+
+      // What had focus is gone: the composer takes it.
+      act(() => { useChatSearchStore.getState().open('all') })
+      expect(document.activeElement).toBe(field())
+      before.remove()
+      fireEvent.keyDown(field(), { key: 'Escape' })
+      expect(document.activeElement).toBe(composer)
+    } finally {
+      before.remove()
+      composer.remove()
+    }
   })
 })

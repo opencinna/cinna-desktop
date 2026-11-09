@@ -5,7 +5,7 @@ import { SearchHitCard } from './SearchHitCard'
 import { SearchResultList } from './SearchResultList'
 import { useSearchPause } from './useSearchPause'
 import { clearHighlight, HIGHLIGHT, paintHighlight, searchChatMessages, searchTimeLabel, textRanges } from './chatSearchText'
-import { jumpToMessage, messageNodes } from './jumpToMessage'
+import { jumpToMessage, messageNodeMap } from './jumpToMessage'
 
 interface SearchableMessage {
   id: string
@@ -28,6 +28,9 @@ interface ChatSearchInChatProps<M extends SearchableMessage> {
 /** The bar's count slot, wide enough for "999 matches". */
 const COUNT_WIDTH = 72
 
+/** Cards shown at most, the newest; the transcript still highlights every match. */
+export const CHAT_SEARCH_CARD_LIMIT = 30
+
 /**
  * Search in the chat on screen (⌘F). The bar sits where "Jump to latest" does;
  * after a pause in typing the matching user and assistant messages show above
@@ -39,8 +42,12 @@ export function ChatSearchInChat<M extends SearchableMessage>({ messages, contai
   const close = useChatSearchStore((s) => s.close)
   const { applied, pending, flush } = useSearchPause(query)
   const q = applied.trim()
-  const hits = useMemo(() => searchChatMessages(messages, q), [messages, q])
-  const total = hits.reduce((n, hit) => n + hit.count, 0)
+  const allHits = useMemo(() => searchChatMessages(messages, q), [messages, q])
+  const total = allHits.reduce((n, hit) => n + hit.count, 0)
+  // The newest cards only: each is a rendered markdown snippet.
+  const hits = useMemo(() => allHits.slice(-CHAT_SEARCH_CARD_LIMIT), [allHits])
+  const older = allHits.length - hits.length
+  const olderMatches = allHits.slice(0, older).reduce((n, hit) => n + hit.count, 0)
   const listId = useId()
   const optionId = (messageId: string): string => `${listId}-${messageId}`
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
@@ -59,9 +66,10 @@ export function ChatSearchInChat<M extends SearchableMessage>({ messages, contai
       clearHighlight(HIGHLIGHT.all)
       return
     }
-    const ranges = hits.flatMap((hit) => messageNodes(content, hit.message.id).flatMap((node) => textRanges(node, q)))
+    const nodes = messageNodeMap(content)
+    const ranges = allHits.flatMap((hit) => (nodes.get(hit.message.id) ?? []).flatMap((node) => textRanges(node, q)))
     paintHighlight(HIGHLIGHT.all, ranges)
-  }, [hits, q, contentRef])
+  }, [allHits, q, contentRef])
   useEffect(() => () => clearHighlight(HIGHLIGHT.all), [])
 
   const pick = (messageId: string): void => {
@@ -116,6 +124,11 @@ export function ChatSearchInChat<M extends SearchableMessage>({ messages, contai
               activeId={activeId}
               onActivate={setActiveId}
             >
+              {older > 0 && (
+                <div className="chat-search-empty chat-search-glass" data-chat-search-older>
+                  {olderMatches} older match{olderMatches === 1 ? '' : 'es'}. Refine the search to see them.
+                </div>
+              )}
               {hits.map((hit) => {
                 const role = hit.message.role === 'user' ? 'user' : 'assistant'
                 return (

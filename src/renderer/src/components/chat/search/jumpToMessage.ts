@@ -8,9 +8,20 @@ let currentTimer: ReturnType<typeof setTimeout> | null = null
 
 /** The rendered bodies of one persisted message (a reply with parts renders several). */
 export function messageNodes(content: ParentNode, messageId: string): HTMLElement[] {
-  return [...content.querySelectorAll<HTMLElement>('[data-message-id]')].filter(
-    (node) => node.getAttribute('data-message-id') === messageId
-  )
+  return messageNodeMap(content).get(messageId) ?? []
+}
+
+/** Every message's rendered bodies, by message id, in one pass over the transcript. */
+export function messageNodeMap(content: ParentNode): Map<string, HTMLElement[]> {
+  const map = new Map<string, HTMLElement[]>()
+  for (const node of content.querySelectorAll<HTMLElement>('[data-message-id]')) {
+    const id = node.getAttribute('data-message-id')
+    if (!id) continue
+    const nodes = map.get(id)
+    if (nodes) nodes.push(node)
+    else map.set(id, [node])
+  }
+  return map
 }
 
 /**

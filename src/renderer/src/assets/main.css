@@ -1984,7 +1984,8 @@
   [data-theme="light"] .chat-search-glass {
     background: color-mix(in srgb, var(--color-bg) 58%, transparent);
   }
-  .chat-search-root { position: absolute; inset: 0; z-index: 30; pointer-events: none; }
+  /* A size container: the dot rail moves inside the column when the column's margin is too narrow for it. */
+  .chat-search-root { position: absolute; inset: 0; z-index: 30; pointer-events: none; container: chat-search / inline-size; }
   .chat-search-root[data-fixed] { position: fixed; }
   .chat-search-scrim {
     position: absolute; inset: 0; pointer-events: auto;
@@ -2051,6 +2052,12 @@
   .chat-search-list::-webkit-scrollbar { display: none; }
   @keyframes chat-search-swap { from { opacity: .35; } }
   .chat-search-empty { padding: 14px 16px; border-radius: 14px; font-size: 13px; color: var(--color-text-secondary); text-align: center; pointer-events: auto; }
+  /* Truncation, between the chips and the bar: one quiet line, there without scrolling. */
+  .chat-search-notice {
+    align-self: center; flex-shrink: 0; max-width: 100%;
+    padding: 4px 12px; border-radius: 12px; font-size: 12px; line-height: 16px;
+    color: var(--color-text-secondary); text-align: center; pointer-events: auto;
+  }
 
   .chat-search-hit {
     display: block; width: 100%; text-align: left; cursor: pointer; flex-shrink: 0; color: var(--color-text);
@@ -2118,7 +2125,12 @@
   .chat-search-rail {
     position: absolute; top: 0; bottom: 0; right: -22px; width: 14px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: var(--rail-gap, 6px); pointer-events: auto;
+    gap: var(--rail-gap, 6px); pointer-events: auto; overflow: hidden;
+  }
+  /* The column's margin is 16px below 800px: the rail goes inside its right edge, beside the cards. */
+  @container chat-search (max-width: 819px) {
+    .chat-search-rail { right: 0; }
+    .chat-search-listwrap[data-rail] .chat-search-list { padding-right: 18px; }
   }
   .chat-search-dot {
     width: var(--rail-dot, 6px); height: var(--rail-dot, 6px); border-radius: 999px; flex-shrink: 0; padding: 0;
@@ -2127,7 +2139,7 @@
   }
   .chat-search-dot:hover { transform: scale(1.5); }
   .chat-search-dot[data-seen] { background: var(--color-accent); }
-  .chat-search-dot[data-group-end] { margin-bottom: calc(var(--rail-gap, 6px) + 5px); }
+  .chat-search-dot[data-group-end] { margin-bottom: var(--rail-group-gap, 6px); }
 
   /* Agent chips: only after a search, only the agents it found. The composer's AgentChip, dimmed while unpressed. */
   .chat-search-agents {
@@ -2140,6 +2152,7 @@
     font-size: 11px; line-height: 16px; font-weight: 500; white-space: nowrap; cursor: pointer;
     user-select: none; opacity: .62; transition: opacity 120ms, box-shadow 120ms;
   }
+  [data-theme="light"] .chat-search-chip { opacity: .8; }
   .chat-search-chip:hover { opacity: .9; }
   .chat-search-chip[aria-pressed="true"] { opacity: 1; box-shadow: 0 0 0 1px var(--chip-border); }
   .chat-search-chip-n { min-width: 2ch; text-align: right; opacity: .75; font-variant-numeric: tabular-nums; }

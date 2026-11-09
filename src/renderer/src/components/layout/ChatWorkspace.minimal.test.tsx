@@ -66,7 +66,9 @@ beforeEach(() => {
   spy.handoffPending = false
   window.ResizeObserver = class {
     constructor(private callback: ResizeObserverCallback) {}
-    observe(): void {
+    // The composer dock's height only; chat search's reach observer watches other boxes.
+    observe(el: Element): void {
+      if (!el.classList.contains('composer-dock')) return
       spy.resize = (height) => this.callback([{ contentRect: { height } } as ResizeObserverEntry], this as never)
     }
     disconnect(): void {}

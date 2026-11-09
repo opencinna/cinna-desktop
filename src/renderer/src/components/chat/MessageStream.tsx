@@ -275,6 +275,11 @@ interface MessageStreamProps {
    * all-chats search scrolls here. Not a dashboard panel's.
    */
   searchable?: boolean
+  /**
+   * Where chat search's bar sits, in px from the bottom: just above the
+   * composer's drawn content, its notice panel included. Else where the pills do.
+   */
+  searchBottom?: number
 }
 
 const PILL_CLASS = `pointer-events-auto inline-flex items-center gap-1.5
@@ -643,7 +648,7 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 const NO_FILE_REF_SCOPES: ReadonlyMap<string, FileRefScope> = new Map()
 const NO_ARTIFACT_CARDS: ArtifactCardDto[] = []
 
-export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = false }: MessageStreamProps): React.JSX.Element {
+export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = false, searchBottom }: MessageStreamProps): React.JSX.Element {
   const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
@@ -1919,7 +1924,7 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
           messages={chatData?.messages ?? NO_SEARCH_MESSAGES}
           containerRef={containerRef}
           contentRef={contentRef}
-          bottom={pillBottom ?? Math.max(12, (bottomPadding ?? 0) - 8)}
+          bottom={pillBottom ?? searchBottom ?? Math.max(12, (bottomPadding ?? 0) - 8)}
           authorOf={searchAuthor}
         />
       ) : (

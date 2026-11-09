@@ -167,7 +167,8 @@ export const chatRepo = {
    * assistant's messages whose `content` contains `query`, as SQLite's `LIKE`
    * compares (case-insensitive for ASCII letters). Chats come newest match
    * first, at most `chatLimit + 1` (the extra one says there were more), each
-   * with its match count and its `perChat` newest matches.
+   * with its match count and its `perChat` newest matches. `chatIds` limits
+   * the search to those chats (still only listed ones).
    *
    * No index serves a `%…%` pattern: every user/assistant row of the listed
    * chats is read. On demand only, never from a polled path.
@@ -175,7 +176,7 @@ export const chatRepo = {
   searchMessages(
     owners: ChatOwners,
     query: string,
-    { perChat, chatLimit }: { perChat: number; chatLimit: number }
+    { perChat, chatLimit, chatIds }: { perChat: number; chatLimit: number; chatIds?: readonly string[] }
   ): { chatId: string; title: string; total: number; latestAt: Date; messages: { id: string; role: string; content: string; createdAt: Date }[] }[] {
     const db = getDb()
     const pattern = likeContains(query)
@@ -192,7 +193,7 @@ export const chatRepo = {
       })
       .from(messages)
       .innerJoin(chats, eq(chats.id, messages.chatId))
-      .where(and(listedChats(owners), matches))
+      .where(and(listedChats(owners), matches, chatIds ? inArray(messages.chatId, [...chatIds]) : undefined))
       .groupBy(messages.chatId)
       .orderBy(desc(max(messages.createdAt)), desc(chats.updatedAt), asc(messages.chatId))
       .limit(chatLimit + 1)

@@ -16,10 +16,10 @@ export function registerChatHandlers(): void {
     return chatService.listSummaries(getProfileScopeUserId())
   })
 
-  /** All-chats search; the query and the profile scope are the service's. */
-  ipcHandle('chat:search', async (_event, query: string) => {
+  /** All-chats search; the query, the filter and the profile scope are the service's. */
+  ipcHandle('chat:search', async (_event, query: string, filter?: unknown) => {
     userActivation.requireActivated()
-    return chatService.search(getProfileScopeUserId(), query)
+    return chatService.search(getProfileScopeUserId(), query, filter)
   })
 
   ipcHandle('chat:get', async (_event, chatId: string) => {

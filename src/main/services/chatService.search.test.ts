@@ -26,6 +26,15 @@ vi.mock('../auth/scope', () => ({
 }))
 vi.mock('./agentService', () => ({ agentService: { findAgent: () => null } }))
 vi.mock('./conductorBridge', () => ({ conductorBridge: { refresh: async () => {} } }))
+vi.mock('./chatModeService', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./chatModeService')>()
+  return {
+    chatModeService: {
+      ...real.chatModeService,
+      findMerged: (id: string) => (id === 'research-mode' ? { id, name: 'Research', colorPreset: 'violet' } : null)
+    }
+  }
+})
 
 const DEFAULT = '__default__'
 const PROFILE = 'profile-1'
@@ -48,6 +57,13 @@ function say(chatId: string, role: string, content: string, minute: number): str
 
 const chatIds = (userId: string, query: string): string[] =>
   chatService.search(userId, query).groups.map((group) => group.chatId)
+
+function seedAgent(id: string, name: string, userId = DEFAULT): void {
+  holder.current!.raw.prepare(
+    `INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, created_at)
+     VALUES (?, ?, ?, 'a2a', 1, 'local', NULL, ?)`
+  ).run(id, userId, name, Date.now())
+}
 
 beforeEach(() => {
   holder.current = createTestDatabase()
@@ -158,5 +174,58 @@ describe('chatService.search', () => {
 
   it('refuses a query that is not text', () => {
     expect(() => chatService.search(DEFAULT, 42)).toThrow('Search needs some text.')
+  })
+
+  describe('with a filter', () => {
+    /** One chat per "who", each with a match: two agents, a mode, and nobody. */
+    function seedWhos(): Record<'research' | 'writer' | 'mode' | 'none', string> {
+      seedAgent('a-research', 'Research Agent')
+      seedAgent('a-writer', 'Writer')
+      const research = chatRepo.create(DEFAULT, { title: 'Research chat', agentId: 'a-research' })
+      say(research.id, 'user', 'the needle for research', 1)
+      const writer = chatRepo.create(DEFAULT, { title: 'Writer chat', agentId: 'a-writer' })
+      say(writer.id, 'assistant', 'the needle for writing', 2)
+      const mode = chatRepo.create(DEFAULT, { title: 'Mode chat', modeId: 'research-mode' })
+      say(mode.id, 'user', 'the needle in a mode', 3)
+      const none = chatRepo.create(DEFAULT, { title: 'Plain chat' })
+      say(none.id, 'user', 'the needle with nobody', 4)
+      return { research: research.id, writer: writer.id, mode: mode.id, none: none.id }
+    }
+    const found = (filter: unknown): string[] => chatService.search(DEFAULT, 'needle', filter).groups.map((g) => g.title)
+
+    it('limits the results to the given agents, modes or nobody, as the Chats list groups them', () => {
+      seedWhos()
+      expect(found(undefined)).toEqual(['Plain chat', 'Mode chat', 'Writer chat', 'Research chat'])
+      expect(found({ agentIds: ['a-writer'] })).toEqual(['Writer chat'])
+      expect(found({ agentIds: ['a-writer', 'a-research'] })).toEqual(['Writer chat', 'Research chat'])
+      expect(found({ modeIds: ['research-mode'] })).toEqual(['Mode chat'])
+      expect(found({ none: true })).toEqual(['Plain chat'])
+      expect(found({ agentIds: ['a-research'], modeIds: ['research-mode'] })).toEqual(['Mode chat', 'Research chat'])
+      // An empty filter limits nothing; an agent with no chat finds nothing.
+      expect(found({ agentIds: [], modeIds: [] })).toHaveLength(4)
+      expect(found({ agentIds: ['a-gone'] })).toEqual([])
+    })
+
+    it('keeps the 50-chat limit within the filtered chats', () => {
+      seedAgent('a-writer', 'Writer')
+      for (let k = 0; k < 52; k++) {
+        const chat = chatRepo.create(DEFAULT, { title: `Writer ${k}`, agentId: 'a-writer' })
+        say(chat.id, 'user', 'needle', k)
+      }
+      const other = chatRepo.create(DEFAULT, { title: 'Other' })
+      say(other.id, 'user', 'needle', 59)
+      const result = chatService.search(DEFAULT, 'needle', { agentIds: ['a-writer'] })
+      expect(result.truncated).toBe(true)
+      expect(result.groups).toHaveLength(50)
+      expect(result.groups.every((g) => g.title.startsWith('Writer'))).toBe(true)
+      expect(chatService.search(DEFAULT, 'needle', { none: true })).toMatchObject({ truncated: false, groups: [{ title: 'Other' }] })
+    })
+
+    it('refuses a filter that is not one', () => {
+      expect(() => chatService.search(DEFAULT, 'needle', 'agent:a')).toThrow('Invalid search filter.')
+      expect(() => chatService.search(DEFAULT, 'needle', { agentIds: 'a' })).toThrow('Invalid search filter.')
+      expect(() => chatService.search(DEFAULT, 'needle', { agentIds: [1] })).toThrow('Invalid search filter.')
+      expect(() => chatService.search(DEFAULT, 'needle', { none: 'yes' })).toThrow('Invalid search filter.')
+    })
   })
 })

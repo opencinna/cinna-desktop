@@ -29,7 +29,7 @@ import { chatRunResultRepo } from '../db/chatRunResults'
 import { turnNotices } from './turnNotices'
 import type { ChatRunResult } from '../../shared/chatRunResult'
 import type { ChatListSummary } from '../../shared/chatListSummary'
-import { CHAT_SEARCH_CHAT_LIMIT, CHAT_SEARCH_MAX_QUERY, CHAT_SEARCH_PER_CHAT, type ChatSearchResult } from '../../shared/chatSearch'
+import { CHAT_SEARCH_CHAT_LIMIT, CHAT_SEARCH_MAX_QUERY, CHAT_SEARCH_PER_CHAT, type ChatSearchFilter, type ChatSearchResult } from '../../shared/chatSearch'
 import { buildChatListSummaries } from './chatListSummary'
 import { appSettingsRepo } from '../db/appSettings'
 import { localAgentService } from './localAgents/localAgentService'
@@ -58,6 +58,21 @@ function requireOwnedChat(userId: string, chatId: string): ChatRow {
 }
 
 /** The owners argument for a list read: a lone owner stays a string. */
+/** A `chat:search` filter from the renderer, checked; null when it limits nothing. */
+function searchFilter(filter: unknown): { agentIds: Set<string>; modeIds: Set<string>; none: boolean } | null {
+  if (filter === undefined || filter === null) return null
+  if (typeof filter !== 'object' || Array.isArray(filter)) throw new ChatError('invalid_value', 'Invalid search filter.')
+  const { agentIds, modeIds, none } = filter as ChatSearchFilter
+  const ids = (value: unknown): Set<string> => {
+    if (value === undefined) return new Set()
+    if (!Array.isArray(value) || !value.every((id) => typeof id === 'string')) throw new ChatError('invalid_value', 'Invalid search filter.')
+    return new Set(value as string[])
+  }
+  if (none !== undefined && typeof none !== 'boolean') throw new ChatError('invalid_value', 'Invalid search filter.')
+  const out = { agentIds: ids(agentIds), modeIds: ids(modeIds), none: none === true }
+  return out.agentIds.size > 0 || out.modeIds.size > 0 || out.none ? out : null
+}
+
 function listOwners(userId: string): string | string[] {
   const scopes = chatScopesFor(userId)
   return scopes.length === 1 ? scopes[0] : scopes
@@ -187,15 +202,34 @@ export const chatService = {
 
   /**
    * All-chats search: exactly the chats `list` returns for the profile, in
-   * their user and assistant messages. A blank query finds nothing.
+   * their user and assistant messages. A blank query finds nothing. `filter`
+   * limits it to the chats with the given agents or modes (or with neither).
    */
-  search(userId: string, query: unknown): ChatSearchResult {
+  search(userId: string, query: unknown, filter?: unknown): ChatSearchResult {
     if (typeof query !== 'string') throw new ChatError('invalid_value', 'Search needs some text.')
+    const who = searchFilter(filter)
     const text = query.trim().slice(0, CHAT_SEARCH_MAX_QUERY)
     if (!text) return { groups: [], truncated: false }
-    const rows = chatRepo.searchMessages(listOwners(userId), text, {
+    const owners = listOwners(userId)
+    // Who a chat is with, exactly as the Chats list groups it: from the same
+    // summaries, so a conductor-bound chat counts as its mode, not its runtime.
+    let chatIds: string[] | undefined
+    if (who) {
+      const listed = chatRepo.list(owners)
+      const summaries = buildChatListSummaries(getSettingsScopeUserId(), userId, listed, owners)
+      chatIds = listed.filter((chat) => {
+        const withWho = summaries.get(chat.id)?.with
+        if (!withWho) return false
+        if (withWho.kind === 'agent' && withWho.agentId) return who.agentIds.has(withWho.agentId)
+        if (withWho.kind === 'mode') return who.modeIds.has(withWho.modeId ?? withWho.name)
+        return who.none
+      }).map((chat) => chat.id)
+      if (chatIds.length === 0) return { groups: [], truncated: false }
+    }
+    const rows = chatRepo.searchMessages(owners, text, {
       perChat: CHAT_SEARCH_PER_CHAT,
-      chatLimit: CHAT_SEARCH_CHAT_LIMIT
+      chatLimit: CHAT_SEARCH_CHAT_LIMIT,
+      chatIds
     })
     return {
       groups: rows.slice(0, CHAT_SEARCH_CHAT_LIMIT).map((row) => ({
