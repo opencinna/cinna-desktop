@@ -26,8 +26,8 @@ Before this existed, all of it was invisible. A background shell finished, Claud
 5. Claude reads the output and answers on its own. The answer streams into the chat as a new assistant message with no user message above it. If the chat is not on screen, the sidebar shows the normal unread result
 
 ### Stopping a background process
-1. The popover row of a running, stoppable background process has a **Stop** button
-2. Pressing it shows "Stopping…" in the same space, and the desktop asks the agent to stop that one task
+1. The popover row of a running, stoppable background process has a **Stop** button: the red square the composer stops a turn with, smaller. Beside it, a spinner and a timer counting up each second stand for the running state
+2. Pressing it turns the square into a spinner in the same space (its tooltip and accessible name say "Stopping"), and the desktop asks the agent to stop that one task
 3. The agent reports the task as stopped, and the row changes to *Stopped*. The popover stays open on that row, even when it was the last one running. The badge then reads 0, and its name is *"No background processes running"*. It leaves when the popover closes
 4. A stop that did not happen leaves a sentence under the row, for example *"This process had already ended."* or *"The agent did not answer. Try again in a moment."* Nothing closes. The popover grows downward, so the row stays under the pointer
 
@@ -76,7 +76,7 @@ A `command` item is a process the user started in the agent's folder. It is not 
 - **A Claude subagent never stays "running" after its turn.** When Claude ends a turn, any subagent that turn started and the CLI no longer lists as live is marked lost, with a warning in the log. A subagent still running in the background is left alone, as is one an earlier turn started
 - **Every refusal is data with a sentence, never a thrown error:** `already_ended`, `not_stoppable`, `unavailable` (the agent did not answer within five seconds, or its process is gone), `chat_not_found` (not this profile's chat, or it is in the trash). A stop that timed out while the item ended meanwhile reads "already ended", not "no answer"
 - **The stop state lives above the popover**, because a popover row unmounts while its stop is still in flight
-- **"Stopping…" lasts until the item is seen to stop.** It stays until the pushed state leaves `running` or a refusal comes back. After an accepted stop that no push confirms, it gives up after ten seconds. The engines send the stopped state before they answer, so the fallback rarely matters
+- **The Stopping state lasts until the item is seen to stop.** It stays until the pushed state leaves `running` or a refusal comes back. After an accepted stop that no push confirms, it gives up after ten seconds. The engines send the stopped state before they answer, so the fallback rarely matters
 - **A retried Stop keeps the old refusal on screen until the new answer replaces or clears it**, so the row does not shrink under the pointer. **A refusal is dropped once its item is no longer running**, because a sentence about stopping a process that has ended says nothing
 
 ### Who sees what

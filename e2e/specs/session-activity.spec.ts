@@ -122,7 +122,7 @@ test('a background task shows its badge while it runs, and the turn it wakes lan
     const row = popover.getByRole('listitem')
     await expect(row).toHaveCount(1)
     await expect(row.getByTitle(SHELL_TASK, { exact: true }).first()).toHaveText(SHELL_TASK)
-    await expect(row.getByText('Running', { exact: true })).toBeVisible()
+    await expect(row.getByRole('img', { name: 'Running', exact: true })).toBeVisible()
     await cinna.page.mouse.move(0, 0)
   })
 
@@ -152,7 +152,7 @@ test('Stop on a running background task stops it at the agent, and the badge lea
   await test.step('hover the badge and press Stop', async () => {
     await backgroundBadge(cinna).hover()
     const popover = backgroundPopover(cinna)
-    await expect(popover.getByText('Running', { exact: true })).toBeVisible()
+    await expect(popover.getByRole('img', { name: 'Running', exact: true })).toBeVisible()
     await popover.getByRole('button', { name: `Stop ${STOP_TASK}`, exact: true }).click()
   })
 

@@ -191,8 +191,8 @@ describe('the activity badges', () => {
     expect(within(dialog).getByText('npm test')).toBeTruthy()
     expect(within(dialog).getByText('Watching CI')).toBeTruthy()
     expect(within(dialog).getByText('/tmp/out.log')).toBeTruthy()
-    expect(rows[1].textContent).toContain('Lost · 3m')
-    expect(rows[2].textContent).toContain('Completed · 1h 5m')
+    expect(rows[1].textContent).toContain('Lost · 3m 00s')
+    expect(rows[2].textContent).toContain('Completed · 1h 05m')
     // Mutation: drop the lost line and only the state word says anything.
     expect(within(rows[1] as HTMLElement).getByText("The agent's process ended before this finished.")).toBeTruthy()
     expect(rows[2].textContent).not.toContain('process ended')
@@ -379,23 +379,22 @@ describe('stopping a background process', () => {
       .toEqual(['Stop npm run dev'])
   })
 
-  it('asks main to stop the item, says Stopping… in the same width meanwhile, and lets the push end the row', async () => {
+  it('asks main to stop the item, turns its square into a spinner meanwhile, and lets the push end the row', async () => {
     const answer = deferred<{ ok: true }>()
     spies.stopActivity.mockReturnValue(answer.promise)
     await opened([item('b1', { title: 'npm run dev', canStop: true }), item('b2', { title: 'sleep 9' })])
     const button = within(dialog()).getByRole('button', { name: 'Stop npm run dev' })
+    expect(button.querySelector('.lucide-square')).toBeTruthy()
+    expect(button.textContent).toBe('')
     fireEvent.click(button)
 
     await waitFor(() => expect(spies.stopActivity).toHaveBeenCalledWith('chat-1', 'b1'))
     const pending = await within(dialog()).findByRole('button', { name: 'Stopping npm run dev' })
     expect(pending).toBe(button)
     expect(pending.getAttribute('aria-disabled')).toBe('true')
-    // Both labels are always laid out; only which one shows changes.
-    const [idle, busy] = [...pending.querySelectorAll('span')]
-    expect(idle.textContent).toBe('Stop')
-    expect(idle.className).toContain('invisible')
-    expect(busy.textContent).toBe('Stopping…')
-    expect(busy.className).not.toContain('invisible')
+    expect(pending.getAttribute('title')).toBe('Stopping…')
+    expect(pending.querySelector('.animate-spin')).toBeTruthy()
+    expect(pending.querySelector('.lucide-square')).toBeNull()
     // A second click while pending sends nothing.
     fireEvent.click(pending)
     expect(spies.stopActivity).toHaveBeenCalledTimes(1)
@@ -469,6 +468,34 @@ describe('stopping a background process', () => {
     // Running again under the same id (the hub never does this, the state must not linger).
     await send([item('b1', { title: 'npm run dev', canStop: true }), other])
     expect(within(dialog()).getByRole('button', { name: 'Stop npm run dev' })).toBeTruthy()
+  })
+
+  it('shows a running row a spinner for the word and a timer ticking each second, frozen once it ends', async () => {
+    // Mounted on real timers, `waitFor` cannot see vitest's fake ones; the row's timer starts on hover.
+    await mount()
+    await send([item('b1', { title: 'npm run dev', canStop: true })])
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      vi.setSystemTime(T0.getTime() + 59_000)
+      fireEvent.mouseEnter(background()!)
+      const row = (): HTMLElement => dialog().querySelector('[data-state]') as HTMLElement
+      const timer = (): string | null | undefined => row().querySelector('[data-timer]')?.textContent
+      expect(within(row()).getByRole('img', { name: 'Running' }).querySelector('.animate-spin')).toBeTruthy()
+      expect(row().textContent).not.toContain('Running')
+      expect(timer()).toBe('59s')
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      expect(timer()).toBe('1m 00s')
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      expect(timer()).toBe('1m 01s')
+
+      await send([item('b1', { title: 'npm run dev', state: 'completed', endedAt: new Date(T0.getTime() + 61_000) })])
+      expect(within(row()).queryByRole('img', { name: 'Running' })).toBeNull()
+      expect(row().textContent).toContain('Completed · 1m 01s')
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      expect(row().textContent).toContain('Completed · 1m 01s')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('gives up on Stopping… when no push comes within the fallback', async () => {

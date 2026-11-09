@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Activity, AppWindow, Check, CircleX, Cog, Loader2, Network, Paperclip, SquareTerminal, Trash2 } from 'lucide-react'
+import { Activity, AppWindow, Check, CircleX, Cog, Loader2, Network, Paperclip, Square, SquareTerminal, Trash2 } from 'lucide-react'
 import type {
   SessionActivityItem,
   SessionActivityKind,
   SessionActivityState
 } from '../../../../shared/sessionActivity'
-import { useRelativeNow } from '../../hooks/useRelativeNow'
 import type { SessionActivityStopControl } from '../../hooks/useSessionActivityStop'
 import { useHoverPopover } from '../ui/useHoverPopover'
 import { useRunScriptStore } from '../../stores/runScript.store'
@@ -68,20 +67,9 @@ export function activityLabel(items: readonly SessionActivityItem[], kind: Activ
   return `${parts.join(' and ')} running`
 }
 
-/** How long an item ran, or has been running: `<1m`, `4m`, `2h 5m`. */
-export function formatActivityDuration(ms: number): string {
-  const minutes = Math.floor(Math.max(0, ms) / 60_000)
-  if (minutes < 1) return '<1m'
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`
-}
-
 /**
- * How long a command the user ran took, or has been running — the one format
- * the Commands popover and the Run Script window's header share: `4s`, `2m 05s`,
- * `1h 03m`.
+ * How long an item took, or has been running — the one format the activity
+ * popovers and the Run Script window's header share: `4s`, `2m 05s`, `1h 03m`.
  */
 export function formatRunDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000))
@@ -221,36 +209,53 @@ export function SessionActivityBadge({
   )
 }
 
-/** Bordered, in the danger tone: an action, not one more word of the row (§11). */
-const stopButtonClass = `shrink-0 grid px-1.5 rounded border leading-4 font-medium
-  border-[var(--color-danger)]/50 text-[var(--color-danger)]
-  hover:bg-[var(--color-danger)]/10 aria-disabled:cursor-default aria-disabled:hover:bg-transparent
+/** The composer's Stop in miniature: the same square on the same red, so it reads as the same action. */
+const stopButtonClass = `shrink-0 grid place-items-center w-5 h-5 rounded bg-[var(--color-danger)] text-white
+  transition-opacity hover:opacity-80 aria-disabled:opacity-50 aria-disabled:cursor-default
   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]`
 
 function StopButton({ item, stop }: { item: SessionActivityItem; stop: SessionActivityStopControl }): React.JSX.Element {
   const pending = stop.pending(item.id)
-  // Both labels share one grid cell, so "Stop" → "Stopping…" keeps the width (§1).
+  // A fixed box, so the square → spinner swap moves nothing (§1).
   // Not `disabled` while pending: that would drop focus out of the popover.
   return (
     <button
       type="button"
       aria-label={`${pending ? 'Stopping' : 'Stop'} ${item.title}`}
+      title={pending ? 'Stopping…' : 'Stop'}
       aria-disabled={pending || undefined}
       onClick={() => { if (!pending) stop.stop(item.id) }}
       className={stopButtonClass}
     >
-      <span aria-hidden className={`[grid-area:1/1] text-center ${pending ? 'invisible' : ''}`}>Stop</span>
-      <span aria-hidden className={`[grid-area:1/1] text-center ${pending ? '' : 'invisible'}`}>Stopping…</span>
+      {pending
+        ? <Loader2 size={12} aria-hidden className="animate-spin motion-reduce:animate-none" />
+        : <Square size={12} aria-hidden />}
     </button>
   )
 }
 
+/**
+ * A running item's state and time: a spinner and a timer that ticks each second.
+ * The timer holds the width of its longest usual reading (`10m 05s`), so a tick
+ * that adds a digit does not move the spinner or the Stop button beside it (§1).
+ */
+function RunningTime({ ms }: { ms: number }): React.JSX.Element {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span role="img" aria-label={STATE_LABEL.running} title={STATE_LABEL.running} className={`grid ${STATE_TONE.running}`}>
+        <Loader2 size={12} aria-hidden className="animate-spin motion-reduce:animate-none" />
+      </span>
+      <span data-timer className="min-w-[7ch] text-right text-[var(--color-text-muted)]">{formatRunDuration(ms)}</span>
+    </span>
+  )
+}
+
 function ActivityRow({ item, stop }: { item: SessionActivityItem; stop?: SessionActivityStopControl }): React.JSX.Element {
-  const now = useRelativeNow()
   const ended = item.state !== 'running'
+  const now = useSecondsNow(!ended)
   const stoppable = !!stop && item.kind === 'background' && item.state === 'running' && item.canStop
   const refusal = stop?.refusal(item.id) ?? null
-  const ranFor = (item.endedAt ?? now).getTime() - item.startedAt.getTime()
+  const ranFor = (item.endedAt?.getTime() ?? now) - item.startedAt.getTime()
   return (
     <div
       data-state={item.state}
@@ -264,8 +269,12 @@ function ActivityRow({ item, stop }: { item: SessionActivityItem; stop?: Session
         {stoppable && <StopButton item={item} stop={stop} />}
         {/* Last: the only part that rewrites itself while the popover is open. */}
         <span className="shrink-0 tabular-nums">
-          <span className={STATE_TONE[item.state]}>{STATE_LABEL[item.state]}</span>
-          <span className="text-[var(--color-text-muted)]"> · {formatActivityDuration(ranFor)}</span>
+          {ended ? (
+            <>
+              <span className={STATE_TONE[item.state]}>{STATE_LABEL[item.state]}</span>
+              <span className="text-[var(--color-text-muted)]"> · {formatRunDuration(ranFor)}</span>
+            </>
+          ) : <RunningTime ms={ranFor} />}
         </span>
       </div>
       {item.detail && (
@@ -463,8 +472,7 @@ function CommandRow({ chatId, item, stop, adder, onOpenOutput }: {
         </span>
         {/* Last: the only part that rewrites itself while the popover is open. */}
         <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">
-          {!ended && <span className={STATE_TONE.running}>{STATE_LABEL.running} </span>}
-          · {formatRunDuration(ranFor)}
+          {ended ? `· ${formatRunDuration(ranFor)}` : <RunningTime ms={ranFor} />}
         </span>
       </div>
       <div className="flex items-center gap-1">
