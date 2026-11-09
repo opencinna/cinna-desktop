@@ -478,7 +478,7 @@ test('3. a password-locked profile\'s lock wears its server\'s brand over a stoc
   await unpublish(fixture)
 })
 
-test('4. the admin publishes from core\'s Admin → Brand Theme page; the desktop consent page and a new sign-in wear it; unpublishing there returns the app to stock', async ({ team }) => {
+test('4. the admin publishes from the Brand theme card in core\'s Admin → Server Configuration → Interface; the desktop consent page and a new sign-in wear it; unpublishing there returns the app to stock', async ({ team }) => {
   test.setTimeout(300_000)
   const fixture = team.fixture as BrandFixture
   const pkg = fullPackage(fixture, 'Web', TEAL, 'What can Web E2E help with?')
@@ -490,7 +490,8 @@ test('4. the admin publishes from core\'s Admin → Brand Theme page; the deskto
     const row = admin.getByRole('button', { name: `Actions for the brand theme ${pkg.name}` })
 
     await test.step('upload theme.json and its files in the dialog, then Publish from the preview it opens', async () => {
-      await admin.goto(`${fixture.web}/admin/brand-theme`)
+      await admin.goto(`${fixture.web}/admin/server-configuration#interface`)
+      // The Brand theme card, beside the disclaimer on the Interface tab, holds the only Upload there.
       await admin.getByRole('button', { name: 'Upload', exact: true }).click()
       const dialog = admin.getByRole('dialog', { name: 'Upload theme package' })
       await dialog.getByTestId('upload-source-files').setInputFiles([
@@ -536,7 +537,7 @@ test('4. the admin publishes from core\'s Admin → Brand Theme page; the deskto
       await expectBrand(fixture, app.page, doc, 'dark')
     })
 
-    await test.step('Unpublish on the admin page; the next activation is stock', async () => {
+    await test.step('Unpublish from the card; the next activation is stock', async () => {
       await row.click()
       await admin.getByRole('menuitem', { name: 'Unpublish', exact: true }).click()
       await admin.getByRole('button', { name: 'Unpublish theme', exact: true }).click()

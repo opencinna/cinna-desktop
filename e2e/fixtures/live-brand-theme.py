@@ -86,7 +86,7 @@ def create(client: httpx.Client) -> None:
     if foreign:
         raise SystemExit(
             f"refusing: this core publishes the brand theme {foreign[0]['name']!r}; "
-            "the spec would unpublish it. Unpublish it yourself (Admin -> Brand Theme) and run again."
+            "the spec would unpublish it. Unpublish it yourself (Admin -> Server Configuration -> Interface -> Brand theme) and run again."
         )
     tag = uuid.uuid4().hex[:8]
     people = {}
