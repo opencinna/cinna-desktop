@@ -272,6 +272,19 @@ const bodyBackground = (cinna: CinnaApp, expected: string | null) =>
     return image.replace(/^url\("(?:.*\/)?([^/"]+)"\)$/, '$1')
   }, expected)
 
+/** The sidebar card and its active tab, whose right edge is drawn over the card. */
+const sidebarSurfaces = (cinna: CinnaApp) =>
+  cinna.page.evaluate(() => {
+    const card = getComputedStyle(document.querySelector('.app-sidebar')!)
+    const tab = document.querySelector('.sidebar-tab[aria-pressed="true"]')!
+    return {
+      card: card.backgroundColor,
+      tab: getComputedStyle(tab).backgroundColor,
+      seam: getComputedStyle(tab, '::after').backgroundColor,
+      cardBorder: card.borderTopColor,
+      tabBorder: getComputedStyle(tab).borderTopColor
+    }
+  })
 const brandLogo = (cinna: CinnaApp) => cinna.page.getByTestId('brand-logo')
 const heading = (cinna: CinnaApp) => cinna.page.getByRole('heading', { level: 1 })
 
@@ -372,6 +385,13 @@ test('a Cinna profile shows its server brand in both modes, a local profile stoc
       await expect(brandLogo(cinna)).toHaveAttribute('src', expectedLogo.dark)
       await expect(heading(cinna)).toHaveText(BRAND_HEADING)
       await expect.poll(() => bodyBackground(cinna, expectedDarkBg)).toBe('brand image/webp')
+      // The active tab blends into the brand's card: no black strip over its edge.
+      await expect
+        .poll(async () => {
+          const s = await sidebarSurfaces(cinna)
+          return { tab: s.tab === s.card, seam: s.seam === s.card, border: s.tabBorder === s.cardBorder }
+        })
+        .toEqual({ tab: true, seam: true, border: true })
     })
 
     await test.step('1. light: brand accent, light logo, no background image (flat, not the stock mesh)', async () => {
@@ -393,6 +413,8 @@ test('a Cinna profile shows its server brand in both modes, a local profile stoc
       await expect.poll(() => bodyBackground(cinna, expectedDarkBg)).toMatch(/^dark-background-gradient-mesh-1.*\.png$/)
       await expect(brandLogo(cinna)).toHaveCount(0)
       await expect(heading(cinna)).toHaveText(STOCK_HEADING)
+      // Stock keeps its own glass: the rule applies under a brand only.
+      await expect.poll(async () => (await sidebarSurfaces(cinna)).seam).toBe('rgba(0, 0, 0, 0.45)')
       await useTheme(cinna, 'light')
       await expect.poll(() => accent(cinna)).toBe(STOCK_ACCENT.light)
       await expect.poll(() => bodyBackground(cinna, null)).toMatch(/^light-background-gradient-mesh-1.*\.png$/)

@@ -1834,14 +1834,24 @@
    [data-brand] only. Stock renders exactly as before. The generated sheet
    (the --color-* values and the body background per mode) is in the same
    layer; these rules are static. Relative tints (a white or black overlay at
-   low alpha: nav highlight, sidebar tabs, glass-card lift in dark, scrims) and
-   shadows stay stock: they lighten or darken whatever is under them. */
+   low alpha: nav highlight, inactive sidebar tabs, glass-card lift in dark,
+   scrims) and shadows stay stock: they lighten or darken whatever is under
+   them. */
 @layer brand {
   /* The dark sidebar glass was black at 82 %; the brand's raised surface at
      the same alpha, with the brand's hairline. */
   [data-brand][data-theme="dark"] .app-sidebar,
   [data-brand][data-theme="dark"] .app-sidebar.is-menu {
     background-color: color-mix(in srgb, var(--color-bg-secondary) 82%, transparent);
+    border-color: var(--color-border);
+  }
+  /* The active tab is part of the card, not a tint: it wears the same surface,
+     and its seam cover lies over the card without showing as a darker strip. */
+  [data-brand][data-theme="dark"] .sidebar-tab[aria-pressed='true'],
+  [data-brand][data-theme="dark"] .sidebar-tab[aria-pressed='true']::after {
+    background-color: color-mix(in srgb, var(--color-bg-secondary) 82%, transparent);
+  }
+  [data-brand][data-theme="dark"] .sidebar-tab[aria-pressed='true'] {
     border-color: var(--color-border);
   }
   /* Popovers: stock near-white / near-black at 90 % → the raised surface at 90 %. */
