@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { Check, Loader2, Mic } from 'lucide-react'
 import { CONTEXT_MENU_ITEM, CONTEXT_MENU_SURFACE, ContextMenu } from '../../ui/ContextMenu'
 import { MenuSwitchItem } from '../../ui/MenuSwitchItem'
@@ -6,7 +6,9 @@ import { useUIStore } from '../../../stores/ui.store'
 import { useToastStore } from '../../../stores/toast.store'
 import { registerMediaToggle } from './mediaKeys'
 import { SPEECH_BLOCKED_HINT, speechBlocked, useSpeechStatus } from './useSpeechStatus'
-import { useVoiceRecorder } from './useVoiceRecorder'
+import { useVoiceRecorder, type DictationCallbacks } from './useVoiceRecorder'
+import { commitFinal, startSpan, type DictationSpan } from './dictationSpan'
+import { useLiveDictationStore, type LiveDictationControls } from './liveDictation.store'
 
 interface Microphone {
   deviceId: string
@@ -29,9 +31,16 @@ const BLOCKED = `${BUTTON} text-[var(--color-text-muted)] opacity-40`
 const RECORDING = `${BUTTON} text-[var(--color-danger)] hover:bg-[var(--color-bg-hover)]`
 const TRANSCRIBING = `${BUTTON} text-[var(--color-text-muted)] cursor-wait`
 
+/** Where a live dictation writes: its composer's draft key and that draft's text setter. */
+export interface DictationTarget {
+  draftKey: string
+  setDraft: (update: (draft: string) => string) => void
+}
+
 /**
- * The composer's voice input: click to record, click again to transcribe, the
- * text lands in the composer. Right-click picks the microphone. Rendered only
+ * The composer's voice input: click to record, click again to stop. Where main
+ * streams, the words appear at the caret while the user speaks (see
+ * `liveDictation.store.ts`); otherwise the text lands in the composer after stop. Right-click picks the microphone. Rendered only
  * where main reports a speech engine; the box is the same in every state, so
  * nothing beside it moves (ux_rules §1). The headphone button toggles it too
  * (see `mediaKeys.ts`); its double click sends the composer, and while
@@ -42,9 +51,12 @@ export function VoiceInputButton({
   onText,
   onError,
   onSend,
-  composerRef
+  composerRef,
+  dictation
 }: {
   onText: (text: string) => void
+  /** Live dictation's target; without it, the text arrives whole after stop through `onText`. */
+  dictation?: DictationTarget
   /** The headphone double click: send the composer as its Send button would. */
   onSend: () => void
   /** Shows an error; null means the previous one no longer applies. */
@@ -55,7 +67,7 @@ export function VoiceInputButton({
   const status = useSpeechStatus()
   const shown = useUIStore((s) => s.showVoiceInput)
   if (!status.supported || !shown) return null
-  return <VoiceInputControl blocked={speechBlocked(status)} onText={onText} onError={onError} onSend={onSend} composerRef={composerRef} />
+  return <VoiceInputControl blocked={speechBlocked(status)} onText={onText} onError={onError} onSend={onSend} composerRef={composerRef} dictation={dictation} />
 }
 
 function VoiceInputControl({
@@ -63,13 +75,15 @@ function VoiceInputControl({
   onText,
   onError,
   onSend,
-  composerRef
+  composerRef,
+  dictation
 }: {
   blocked: boolean
   onText: (text: string) => void
   onSend: () => void
   onError: (message: string | null) => void
   composerRef?: RefObject<HTMLElement | null>
+  dictation?: DictationTarget
 }): React.JSX.Element {
   const deviceId = useUIStore((s) => s.voiceInputDeviceId)
   const setDeviceId = useUIStore((s) => s.setVoiceInputDeviceId)
@@ -88,7 +102,78 @@ function VoiceInputControl({
     if (message !== null) sendAfterText.current = false
     onError(message)
   }, [onError])
-  const { state, current, toggle } = useVoiceRecorder({ deviceId, onText: handleText, onError: handleError })
+  // Live dictation: where it sits in the draft and the partial on show. The
+  // span and the partial live in refs (the recorder's callbacks are not
+  // render-bound) and are published to the composer through the store.
+  const target = useRef(dictation)
+  target.current = dictation
+  const span = useRef<DictationSpan | null>(null)
+  const partial = useRef('')
+  const finishing = useRef(false)
+  const controls = useRef<LiveDictationControls>({ freeze: () => {}, cancel: () => {}, send: () => {} })
+  const publish = useCallback(() => {
+    const t = target.current
+    if (!t || !span.current) return
+    useLiveDictationStore.getState().set(t.draftKey, {
+      span: span.current,
+      partial: partial.current,
+      finishing: finishing.current,
+      controls: controls.current
+    })
+  }, [])
+  const writeFinal = useCallback((text: string) => {
+    const t = target.current
+    if (!t || !span.current) return
+    let next = span.current
+    t.setDraft((draft) => {
+      const committed = commitFinal(draft, next, text)
+      next = committed.span
+      return committed.draft
+    })
+    span.current = next
+  }, [])
+  const callbacks = useMemo<DictationCallbacks | undefined>(() => dictation ? {
+    onSessionStart: () => {
+      const textarea = composerRef?.current instanceof HTMLTextAreaElement ? composerRef.current : null
+      const draft = textarea?.value ?? ''
+      span.current = startSpan(textarea?.selectionStart ?? draft.length, textarea?.selectionEnd ?? draft.length, draft.length)
+      partial.current = ''
+      finishing.current = false
+      publish()
+      // Typing ends the dictation, so the keys must reach the composer.
+      textarea?.focus()
+    },
+    onPartial: (text) => {
+      partial.current = text
+      publish()
+    },
+    onFinal: (text) => {
+      writeFinal(text)
+      partial.current = ''
+      publish()
+    },
+    onSessionEnd: (completed) => {
+      const t = target.current
+      span.current = null
+      partial.current = ''
+      finishing.current = false
+      if (t) useLiveDictationStore.getState().set(t.draftKey, null)
+      if (!completed) {
+        sendAfterText.current = false
+        return
+      }
+      if (!sendAfterText.current) return
+      sendAfterText.current = false
+      setLanded((count) => count + 1)
+    }
+  } : undefined, [!!dictation, composerRef, publish, writeFinal]) // eslint-disable-line react-hooks/exhaustive-deps
+  const { state, current, toggle, end } = useVoiceRecorder({ deviceId, onText: handleText, onError: handleError, dictation: callbacks })
+  useEffect(() => {
+    const now = state === 'transcribing'
+    if (finishing.current === now || !span.current) return
+    finishing.current = now
+    publish()
+  }, [state, publish])
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [microphones, setMicrophones] = useState<Microphone[]>([])
@@ -111,6 +196,18 @@ function VoiceInputControl({
     sendAfterText.current = true
     if (now === 'recording') toggle()
   }, [current, onSend, toggle])
+  controls.current.freeze = () => {
+    // What the composer shows becomes plain draft text before listening stops.
+    if (partial.current.trim()) writeFinal(partial.current)
+    partial.current = ''
+    end()
+  }
+  controls.current.cancel = () => {
+    partial.current = ''
+    end()
+  }
+  controls.current.send = () => send()
+
   // Idle again with nothing to deliver: a double click that read a stale state
   // (after the recorder went idle, before this re-rendered) set the flag with
   // nothing running; left set, the next dictation would send itself. The
@@ -192,7 +289,7 @@ function VoiceInputControl({
   const title = recording
     ? 'Stop recording'
     : transcribing
-      ? 'Transcribing…'
+      ? (dictation ? 'Finishing…' : 'Transcribing…')
       : blocked
         ? SPEECH_BLOCKED_HINT
         : 'Audio input · right-click to choose the microphone'

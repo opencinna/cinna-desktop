@@ -80,6 +80,10 @@ import { useComposerDraftStore } from '../../stores/composerDraft.store'
 import { createLogger } from '../../stores/logger.store'
 import { useRunQueue } from '../../hooks/useRunQueue'
 import { VoiceInputButton } from './voice/VoiceInputButton'
+import { DictationMirror } from './voice/DictationMirror'
+import { dictatedText, dictationGoal, displayTyped, editOntoGoal } from './voice/dictationSpan'
+import { useTypedText } from './voice/useTypedText'
+import { useLiveDictation, useLiveDictationStore } from './voice/liveDictation.store'
 import { useVoiceErrorToast } from './voice/useVoiceErrorToast'
 import { cloudHasContent } from '../../utils/minimalView'
 import { matchesMentionQuery } from '../../utils/mentionMatch'
@@ -483,6 +487,77 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     requestAnimationFrame(() => textarea.setSelectionRange(textarea.value.length, textarea.value.length))
   }, [setInput, draftKey])
   const showVoiceError = useVoiceErrorToast()
+  // A live dictation shows its partial at its span; only confirmed text is in
+  // the draft. Typing, a paste or a drop ends it keeping what is shown, Esc
+  // keeps only the confirmed text, Enter stops and sends once the words land.
+  // The words are typed out toward what the engine reports, a revision
+  // backspaced and retyped (useTypedText); the draft already holds the
+  // confirmed part. What is typed beyond the confirmed text is drawn lighter.
+  const liveDictation = useLiveDictation(draftKey)
+  const dictationConfirmed = liveDictation ? dictatedText(input, liveDictation.span) : ''
+  const dictationTargetText = liveDictation ? dictationGoal(dictationConfirmed, liveDictation.partial) : ''
+  const typedDictation = useTypedText(dictationTargetText, liveDictation !== null)
+  const dictationView = useMemo(() => {
+    if (!liveDictation) return null
+    const shown = displayTyped(input, liveDictation.span, typedDictation)
+    const confirmedShown = Math.min(typedDictation.length, dictationConfirmed.length)
+    return { value: shown.value, start: shown.start, partialStart: shown.start + confirmedShown, partialEnd: shown.end, caret: shown.end }
+  }, [liveDictation, input, typedDictation, dictationConfirmed])
+  const textValue = dictationView?.value ?? input
+  const dictationTarget = useMemo(() => ({ draftKey, setDraft: setInput }), [draftKey, setInput])
+  const freezeDictation = useCallback(() => {
+    useLiveDictationStore.getState().live[draftKey]?.controls.freeze()
+  }, [draftKey])
+  // The caret follows the dictation's end unless the user put it elsewhere;
+  // there it keeps its place, counted from the end when it sits after the
+  // dictation, since the text grows only at the dictation.
+  // A user selection is kept whole: each end as an offset from the start
+  // when before the dictation, from the end when after it.
+  type Mark = { offset: number; fromEnd: boolean }
+  const dictationCaret = useRef<{ follow: boolean; start: Mark; end: Mark } | null>(null)
+  const appliedCaret = useRef<{ start: number; end: number } | null>(null)
+  useLayoutEffect(() => {
+    const el = textareaRef.current
+    if (!dictationView || !liveDictation || !el) {
+      dictationCaret.current = null
+      appliedCaret.current = null
+      return
+    }
+    if (document.activeElement !== el) return
+    const caret = (dictationCaret.current ??= { follow: true, start: { offset: 0, fromEnd: false }, end: { offset: 0, fromEnd: false } })
+    const replace = liveDictation.span.replace
+    let start: number
+    let end: number
+    if (caret.follow && replace && dictationView.partialEnd === dictationView.partialStart) {
+      // The selection it will replace stays selected until the first words.
+      start = replace.from
+      end = replace.to
+    } else if (caret.follow) {
+      start = end = dictationView.caret
+    } else {
+      const at = (mark: Mark): number => Math.max(0, Math.min(mark.fromEnd ? el.value.length - mark.offset : mark.offset, el.value.length))
+      start = at(caret.start)
+      end = at(caret.end)
+    }
+    appliedCaret.current = { start, end }
+    if (el.selectionStart !== start || el.selectionEnd !== end) el.setSelectionRange(start, end)
+  }, [dictationView, liveDictation])
+  const handleDictationSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>): void => {
+    if (!dictationView) return
+    const el = e.currentTarget
+    const { selectionStart: start, selectionEnd: end } = el
+    const applied = appliedCaret.current
+    if (applied && applied.start === start && applied.end === end) return
+    if (start === end && end === dictationView.caret) {
+      dictationCaret.current = { follow: true, start: { offset: 0, fromEnd: false }, end: { offset: 0, fromEnd: false } }
+      return
+    }
+    const mark = (pos: number): Mark => pos >= dictationView.partialEnd && pos > dictationView.partialStart
+      ? { offset: el.value.length - pos, fromEnd: true }
+      : { offset: pos, fromEnd: false }
+    dictationCaret.current = { follow: false, start: mark(start), end: mark(end) }
+    appliedCaret.current = { start, end }
+  }
   // The send. Who answers is main's decision, from `chats.router`; the composer
   // only says which agent the user addressed.
   const composer = useChatComposer(chatId)
@@ -538,7 +613,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     if (!el) return
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 180) + 'px'
-  }, [input, draftKey])
+  }, [textValue, draftKey])
   const { cancel: cancelStream } = useChatStream()
   const { isStreaming: hasPortStream, activeRequestId, activeChatId: storeChatId, streamingBlocks } = useChatStore()
   // The store holds one port stream: the chat last on screen's. It is this
@@ -1128,7 +1203,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // chat has no turn of its own to stop: while its first send is in flight it
   // keeps a disabled Send (`sending`).
   const hasSendableFiles = (targetSupportsAttachments && pendingAttachments.length > 0) || pendingNotes.length > 0
-  const showStop = isStreaming && chatId !== null && !editingId && ((!input.trim() && !hasSendableFiles && pathRefs.length === 0 && pastes.length === 0) || readiness.refusal !== null)
+  const showStop = isStreaming && chatId !== null && !editingId && ((!textValue.trim() && !hasSendableFiles && pathRefs.length === 0 && pastes.length === 0) || readiness.refusal !== null)
   const sendClickedAt = useRef(0)
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
@@ -1248,9 +1323,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (!canAcceptDrop) return
       if (!e.dataTransfer.types.includes('Files')) return
       e.preventDefault()
+      freezeDictation()
       dropFiles(e.dataTransfer)
     },
-    [canAcceptDrop, dropFiles]
+    [canAcceptDrop, dropFiles, freezeDictation]
   )
   const dropRef = useRef({ canAcceptDrop, dropFiles })
   dropRef.current = { canAcceptDrop, dropFiles }
@@ -1358,6 +1434,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const openComposerAttachment = useComposerAttachmentOpen()
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      // A paste ends a live dictation; the draft then holds what was shown.
+      freezeDictation()
       const types = Array.from(e.clipboardData?.types ?? [])
       // A paste that is exactly one skill link is taken as the offer, not
       // inserted (L3: the paste event's own text, never a clipboard read).
@@ -1394,7 +1472,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       e.preventDefault()
       attachClipboardFiles()
     },
-    [canShowAttachButton, attachBlockedByStream, chatId, setAttachError, takeTextPaste, takeAmbiguousPaste, attachClipboardFiles, skillLinkKey]
+    [canShowAttachButton, attachBlockedByStream, chatId, setAttachError, takeTextPaste, takeAmbiguousPaste, attachClipboardFiles, skillLinkKey, freezeDictation]
   )
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
@@ -1895,6 +1973,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           : 0
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (liveDictation && !e.nativeEvent.isComposing) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        liveDictation.controls.cancel()
+        return
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        liveDictation.controls.send()
+        return
+      }
+    }
     const mod = e.metaKey || e.ctrlKey
     const key = e.key.toLowerCase()
     if (mod && e.shiftKey && !e.altKey && key === 'v') plainPasteAtRef.current = Date.now()
@@ -2110,7 +2200,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     (editingId
       ? !input.trim() && pastes.length === 0
       : blocksSend ||
-        (!input.trim() && pathRefs.length === 0 && pastes.length === 0 && !(chatId !== null && hasSendableFiles)))
+        (!textValue.trim() && pathRefs.length === 0 && pastes.length === 0 && !(chatId !== null && hasSendableFiles)))
   // The headphone double click: exactly what a click on Send would do, and
   // nothing where Send is disabled or Stop stands in its place.
   const sendFromHeadphones = (): void => {
@@ -2121,7 +2211,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   // Minimal view's cloud: shown only while the draft has something to send.
   const cloudEmpty = minimal && !cloudHasContent({
-    text: input,
+    // Live words count, so the cloud shows while the user dictates into an empty draft.
+    text: textValue,
     attachments: pendingAttachments.length,
     notes: pendingNotes.length,
     pathRefs: pathRefs.length,
@@ -2287,10 +2378,35 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           ref={textareaRef}
           // Found by surfaces outside the composer that hand focus back to it (a brief card's Keep talking).
           data-chat-composer={chatId ?? 'new'}
-          value={input}
-          onChange={handleInput}
+          value={textValue}
+          onChange={(e) => {
+            // A keystroke ends a live dictation keeping its words, plus the
+            // key. The event's value holds only what was typed out so far, so
+            // the key is moved onto the whole text (words still typing out,
+            // confirmed ones above all, would be lost otherwise).
+            if (liveDictation && dictationView) {
+              const el = e.target
+              const full = displayTyped(input, liveDictation.span, dictationTargetText)
+              const moved = editOntoGoal(
+                { value: dictationView.value, start: dictationView.start, end: dictationView.partialEnd },
+                el.value,
+                el.selectionEnd,
+                full,
+                typedDictation,
+                dictationTargetText
+              )
+              liveDictation.controls.freeze()
+              if (moved && moved.value !== el.value) {
+                el.value = moved.value
+                el.setSelectionRange(moved.caret, moved.caret)
+              }
+            } else if (liveDictation) liveDictation.controls.freeze()
+            handleInput(e)
+          }}
+          onSelect={handleDictationSelect}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          data-dictating={dictationView ? '' : undefined}
           placeholder={held ? sendHold ?? undefined : chatId && isStreaming ? 'Send a follow-up · Esc Esc to stop' : placeholder ?? 'Type a message...'}
           rows={1}
           role="combobox"
@@ -2309,9 +2425,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               ? `${listboxId}-opt-${triggerIndex}`
               : undefined
           }
-          className="w-full bg-transparent text-[var(--color-text)] placeholder-[var(--color-text-muted)] placeholder:opacity-40
-            px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none"
+          className={`w-full bg-transparent placeholder-[var(--color-text-muted)] placeholder:opacity-40
+            px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none ${dictationView
+              ? 'text-transparent caret-[var(--color-text)]'
+              : 'text-[var(--color-text)]'}`}
         />
+        {dictationView && (
+          <DictationMirror
+            textareaRef={textareaRef}
+            value={dictationView.value}
+            partialStart={dictationView.partialStart}
+            partialEnd={dictationView.partialEnd}
+          />
+        )}
         {(pendingAttachments.length > 0 || pendingNotes.length > 0 || pathRefs.length > 0 || pastes.length > 0) && (
           <div className="px-3 pb-2 pt-1 flex flex-wrap items-end gap-1 justify-end">
             <AttachmentList
@@ -2559,7 +2685,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               Keyed by the draft, so a chat switch unmounts it: a recording is
               discarded, and a transcription in flight lands in the old draft
               and is never sent from the new chat. */}
-          <VoiceInputButton key={draftKey} onText={appendDictation} onError={showVoiceError} onSend={sendFromHeadphones} composerRef={textareaRef} />
+          <VoiceInputButton key={draftKey} onText={appendDictation} onError={showVoiceError} onSend={sendFromHeadphones} composerRef={textareaRef} dictation={dictationTarget} />
           {/* Separate keys, so focus never passes from Send to Stop on one node;
               a click on Send hands focus back to the input instead. */}
           {showStop ? (
@@ -2578,7 +2704,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               onClick={() => {
                 sendClickedAt.current = Date.now()
                 textareaRef.current?.focus()
-                void handleSend()
+                // Mid-dictation: stop, and send once the last words land.
+                if (liveDictation) liveDictation.controls.send()
+                else void handleSend()
               }}
               aria-label={editingId ? 'Save' : 'Send'}
               aria-describedby={!editingId && readiness.text ? readinessReasonId : undefined}

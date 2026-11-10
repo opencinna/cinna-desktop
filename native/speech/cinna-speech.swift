@@ -13,13 +13,26 @@
 //   cinna-speech install [--locale <id>]
 //     {"ok":true} once the macOS 26 speech model for the language is installed.
 //
+//   cinna-speech stream [--locale <id>]
+//     Live dictation. stdin: raw 16-bit little-endian PCM, 16 kHz, mono, until
+//     EOF. stdout: one JSON object per line —
+//       {"type":"start","backend":"analyzer|sfspeech"} (may carry "installModel":true, as above)
+//       {"type":"partial","text":"…"}   the whole unconfirmed segment so far; replaces the last one
+//       {"type":"final","text":"…"}     a confirmed segment, never revised
+//       {"type":"engine-change","backend":"sfspeech","reason":"…"}  SpeechAnalyzer failed to set up
+//       {"type":"error","code":"denied|unavailable|failed","message":"…"}  ends the run
+//       {"type":"done"}                  every final has been printed; ends the run
+//     Exits 0 after `done` or `error`. SIGTERM is cancel: the process just dies.
+//     Authorization and backend choice as for `transcribe`.
+//
 // Two backends. On macOS 26 and later, SpeechAnalyzer with SpeechTranscriber,
 // once its per-language model is installed. Elsewhere, and while that model is
 // missing or when SpeechAnalyzer fails, SFSpeechRecognizer. Recognition never leaves the Mac: the
 // SFSpeechRecognizer path refuses a language that has no on-device model rather
 // than fall back to Apple's servers.
 //
-// Every handled case prints one JSON line and exits 0; a non-zero exit means
+// Every handled case of the one-shot commands prints one JSON line and exits 0
+// (`stream` prints a line per event and ends on `done` or `error`); a non-zero exit means
 // the helper itself broke. Built by scripts/build-speech-helper.sh, which embeds
 // Info.plist (the Speech framework aborts a process whose main bundle has no
 // NSSpeechRecognitionUsageDescription). The SpeechAnalyzer code needs the
@@ -332,12 +345,268 @@ func install() -> Never {
   fail("unavailable", "Speech models need macOS 26.")
 }
 
+// MARK: - stream (live dictation)
+
+/** Serializes stream lines: the recognizer, the stdin reader and Tasks all print. */
+let streamOutput = NSLock()
+
+func writeStreamLine(_ object: [String: Any]) {
+  let line: String
+  if let data = try? JSONSerialization.data(withJSONObject: object, options: []),
+     let encoded = String(data: data, encoding: .utf8) {
+    line = encoded
+  } else {
+    line = "{\"type\":\"error\",\"code\":\"failed\",\"message\":\"Could not encode an event\"}"
+  }
+  FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!)
+}
+
+/** One stream event. Blocks forever once the run has ended (see `streamEnd`). */
+func streamEvent(_ object: [String: Any]) {
+  streamOutput.lock()
+  writeStreamLine(object)
+  streamOutput.unlock()
+}
+
+/** The run's last line, then exit. Holds the lock so nothing can print after it. */
+func streamEnd(_ object: [String: Any]) -> Never {
+  streamOutput.lock()
+  writeStreamLine(object)
+  exit(0)
+}
+
+func streamFail(_ code: String, _ message: String, _ extra: [String: Any] = [:]) -> Never {
+  streamEnd(["type": "error", "code": code, "message": message].merging(extra) { _, new in new })
+}
+
+/** The PCM the caller writes on stdin, as AVAudio sees it. */
+let streamInputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+
+/**
+ * Reads stdin on its own thread (never the recognizer's) and hands each read
+ * to `onBuffer` as Float32; a read can end mid-sample, so an odd byte waits for
+ * the next one. `onEnd` runs once at EOF.
+ */
+func pumpStdin(onBuffer: @escaping (AVAudioPCMBuffer) -> Void, onEnd: @escaping (_ seconds: Double) -> Void) {
+  Thread.detachNewThread {
+    var carry = Data()
+    var bytesIn = 0
+    while true {
+      let chunk = FileHandle.standardInput.availableData
+      if chunk.isEmpty { break }
+      bytesIn += chunk.count
+      carry.append(chunk)
+      let frames = carry.count / 2
+      if frames == 0 { continue }
+      guard let buffer = AVAudioPCMBuffer(pcmFormat: streamInputFormat, frameCapacity: AVAudioFrameCount(frames)) else { continue }
+      buffer.frameLength = AVAudioFrameCount(frames)
+      let samples = buffer.floatChannelData![0]
+      carry.withUnsafeBytes { raw in
+        let source = raw.bindMemory(to: Int16.self)
+        for i in 0..<frames { samples[i] = Float(Int16(littleEndian: source[i])) / 32768 }
+      }
+      carry.removeFirst(frames * 2)
+      onBuffer(buffer)
+    }
+    onEnd(Double(bytesIn) / 32000)
+  }
+}
+
+/**
+ * SFSpeechRecognizer on a live buffer. On-device recognition resets its
+ * cumulative text after a pause of ~3 s and about every 60 s; the result just
+ * before each reset is the only one with `speechRecognitionMetadata` (and is
+ * not final), and it carries the whole segment. So: a metadata result is a
+ * `final`, the next results start a new segment as `partial`s, and the
+ * `isFinal` result after `endAudio()` is the last segment's `final`.
+ */
+func streamSFSpeech(extra: [String: Any], announce: Bool) {
+  guard let recognizer = makeRecognizer() else {
+    streamFail("unavailable", "Speech recognition does not support this language on this Mac.", extra)
+  }
+  guard recognizer.supportsOnDeviceRecognition else {
+    if extra["installModel"] != nil {
+      streamFail("unavailable", "Apple's speech model for \(languageName(recognizer.locale)) is downloading. Try again in a minute.", extra)
+    }
+    streamFail("unavailable", "Speech recognition for \(languageName(recognizer.locale)) isn't available on this Mac without sending audio to Apple.", extra)
+  }
+  guard recognizer.isAvailable else {
+    streamFail("unavailable", "Speech recognition is not available right now.", extra)
+  }
+  if announce { streamEvent(["type": "start", "backend": "sfspeech"].merging(extra) { _, new in new }) }
+  // One callback at a time, in order, off the main thread.
+  let queue = OperationQueue()
+  queue.maxConcurrentOperationCount = 1
+  recognizer.queue = queue
+  let request = SFSpeechAudioBufferRecognitionRequest()
+  request.shouldReportPartialResults = true
+  request.requiresOnDeviceRecognition = true
+  if #available(macOS 13, *) { request.addsPunctuation = true }
+  // The segment a metadata result just confirmed: the `isFinal` result can
+  // repeat it when no new speech followed.
+  var confirmed: String?
+  activeTask = recognizer.recognitionTask(with: request) { result, error in
+    if let result = result {
+      let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+      if result.isFinal {
+        if !text.isEmpty && text != confirmed { streamEvent(["type": "final", "text": text]) }
+        streamEnd(["type": "done"])
+      }
+      if result.speechRecognitionMetadata != nil {
+        if !text.isEmpty && text != confirmed { streamEvent(["type": "final", "text": text]) }
+        confirmed = text
+        return
+      }
+      if !text.isEmpty {
+        confirmed = nil
+        streamEvent(["type": "partial", "text": text])
+      }
+      return
+    }
+    if let error = error as NSError? {
+      if noSpeechCodes.contains(error.code) { streamEnd(["type": "done"]) }
+      streamFail("failed", error.localizedDescription)
+    }
+  }
+  pumpStdin(onBuffer: { request.append($0) }, onEnd: { seconds in
+    diagnose(String(format: "stream: end of audio after %.2f s", seconds))
+    request.endAudio()
+  })
+}
+
+#if compiler(>=6.2)
+/** Why SpeechAnalyzer could not be set up; the caller falls back to SFSpeechRecognizer. */
+struct AnalyzerSetupError: Error, LocalizedError {
+  let reason: String
+  var errorDescription: String? { reason }
+}
+
+/**
+ * SpeechAnalyzer on a live buffer: volatile results are `partial`s, final ones
+ * `final`s. Throws `AnalyzerSetupError` only before any audio was read; once
+ * audio flows, a failure ends the run with `error`.
+ */
+@available(macOS 26, *)
+func streamAnalyzer(locale: Locale) async throws {
+  let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [])
+  guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+    throw AnalyzerSetupError(reason: "no audio format for SpeechTranscriber")
+  }
+  guard let converter = AVAudioConverter(from: streamInputFormat, to: format) else {
+    throw AnalyzerSetupError(reason: "cannot convert 16 kHz audio to \(format)")
+  }
+  let analyzer = SpeechAnalyzer(modules: [transcriber])
+  let (input, feed) = AsyncStream<AnalyzerInput>.makeStream()
+  do {
+    try await analyzer.start(inputSequence: input)
+  } catch {
+    throw AnalyzerSetupError(reason: error.localizedDescription)
+  }
+  let reader = Task {
+    do {
+      for try await result in transcriber.results {
+        let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.isFinal {
+          if !text.isEmpty { streamEvent(["type": "final", "text": text]) }
+        } else {
+          streamEvent(["type": "partial", "text": text])
+        }
+      }
+    } catch {
+      streamFail("failed", error.localizedDescription)
+    }
+  }
+  let ended = DispatchSemaphore(value: 0)
+  pumpStdin(onBuffer: { buffer in
+    let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / streamInputFormat.sampleRate) + 16
+    guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
+      streamFail("failed", "Could not allocate an audio buffer.")
+    }
+    var given = false
+    var conversionError: NSError?
+    let status = converter.convert(to: converted, error: &conversionError) { _, state in
+      if given { state.pointee = .noDataNow; return nil }
+      given = true
+      state.pointee = .haveData
+      return buffer
+    }
+    if status == .error { streamFail("failed", conversionError?.localizedDescription ?? "Audio conversion failed.") }
+    if converted.frameLength > 0 { feed.yield(AnalyzerInput(buffer: converted)) }
+  }, onEnd: { seconds in
+    diagnose(String(format: "stream: end of audio after %.2f s", seconds))
+    feed.finish()
+    ended.signal()
+  })
+  await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+    DispatchQueue.global().async { ended.wait(); done.resume() }
+  }
+  do {
+    try await analyzer.finalizeAndFinishThroughEndOfInput()
+  } catch {
+    streamFail("failed", error.localizedDescription)
+  }
+  _ = await reader.result
+  streamEnd(["type": "done"])
+}
+#endif
+
+/** Authorized: picks the backend like `run` and streams. */
+func runStream() {
+  let state = currentAnalyzerState()
+  switch state {
+  case .ready(let locale):
+    diagnose("stream: backend analyzer, locale \(bcp47(locale))")
+    #if compiler(>=6.2)
+    if #available(macOS 26, *) {
+      streamEvent(["type": "start", "backend": "analyzer"])
+      Task.detached {
+        do {
+          try await streamAnalyzer(locale: locale)
+        } catch {
+          // Only setup failures get here, before any audio was read.
+          let reason = error.localizedDescription
+          diagnose("stream: SpeechAnalyzer setup failed, using SFSpeechRecognizer: \(reason)")
+          streamEvent(["type": "engine-change", "backend": "sfspeech", "reason": reason])
+          streamSFSpeech(extra: [:], announce: false)
+        }
+      }
+      return
+    }
+    #endif
+    streamSFSpeech(extra: [:], announce: true)
+  case .needsModel(let locale, let downloading):
+    diagnose("stream: backend sfspeech, analyzer model for \(bcp47(locale)) \(downloading ? "downloading" : "missing")")
+    streamSFSpeech(extra: downloading ? [:] : ["installModel": true], announce: true)
+  case .unusable:
+    diagnose("stream: backend sfspeech")
+    streamSFSpeech(extra: [:], announce: true)
+  }
+}
+
+func stream() {
+  switch SFSpeechRecognizer.authorizationStatus() {
+  case .authorized:
+    runStream()
+  case .denied:
+    streamFail("denied", "Speech recognition is turned off for Cinna in System Settings.")
+  case .restricted:
+    streamFail("denied", "Speech recognition is restricted on this Mac.")
+  case .notDetermined:
+    SFSpeechRecognizer.requestAuthorization { status in
+      if status == .authorized { DispatchQueue.global().async { runStream() } }
+      else { streamFail("denied", "Speech recognition was not allowed for Cinna.") }
+    }
+  @unknown default:
+    streamFail("failed", "Unknown speech recognition authorization state.")
+  }
+}
+
 // Each command runs on a background queue and exits the process when it has
 // answered; the main thread stays free for any framework callback that needs it.
 let command = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ""
-let commands: [String: () -> Void] = ["probe": { probe() }, "transcribe": transcribe, "install": { install() }]
+let commands: [String: () -> Void] = ["probe": { probe() }, "transcribe": transcribe, "install": { install() }, "stream": stream]
 guard let body = commands[command] else {
-  FileHandle.standardError.write("usage: cinna-speech probe [--locale <id>] | transcribe --file <wav> [--locale <id>] | install [--locale <id>]\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: cinna-speech probe [--locale <id>] | transcribe --file <wav> [--locale <id>] | install [--locale <id>] | stream [--locale <id>]\n".data(using: .utf8)!)
   exit(2)
 }
 DispatchQueue.global().async(execute: body)

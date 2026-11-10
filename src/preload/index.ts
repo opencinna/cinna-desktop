@@ -7,7 +7,7 @@ import type { AgentEngine } from '../shared/engine'
 import type { JobExecuteResult } from '../shared/jobs'
 import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
 import type { AutonomousTaskStart } from '../shared/taskRuntime'
-import type { SpeechStatus, TranscribeRequest, TranscribeResult } from '../shared/speech'
+import { isSpeechStreamEvent, type SpeechStatus, type SpeechStreamCommand, type SpeechStreamEvent, type SpeechStreamHandle, type SpeechStreamOptions, type TranscribeRequest, type TranscribeResult } from '../shared/speech'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type {
@@ -2768,7 +2768,51 @@ const api = {
     status: (): Promise<SpeechStatus> => ipcRenderer.invoke('speech:status'),
     /** A 16-bit PCM mono WAV → text. Failures are data (`success: false`, `code`). */
     transcribe: (request: TranscribeRequest): Promise<TranscribeResult> =>
-      ipcRenderer.invoke('speech:transcribe', request)
+      ipcRenderer.invoke('speech:transcribe', request),
+    /**
+     * Live dictation over a MessagePort: push 16 kHz mono 16-bit PCM while the
+     * user speaks, then `stop`; `onEvent` gets the partial and final text and
+     * exactly one terminal event (`stop`, or an `error` that is not
+     * recoverable), after which the port is closed and the handle is inert.
+     * Failures are events, never a throw.
+     */
+    stream: (options: SpeechStreamOptions, onEvent: (event: SpeechStreamEvent) => void): SpeechStreamHandle => {
+      const channel = new MessageChannel()
+      let ended = false
+      let stopped = false
+      const end = (): void => {
+        ended = true
+        channel.port1.onmessage = null
+        channel.port1.close()
+      }
+      channel.port1.onmessage = (event) => {
+        if (ended) return
+        if (!isSpeechStreamEvent(event.data)) {
+          console.warn('[preload] dropped off-contract speech event', event.data)
+          return
+        }
+        const frame = event.data
+        if (frame.type === 'stop' || (frame.type === 'error' && !frame.recoverable)) end()
+        onEvent(frame)
+      }
+      const post = (command: SpeechStreamCommand): void => {
+        if (!ended) channel.port1.postMessage(command)
+      }
+      ipcRenderer.postMessage('speech:stream', { locale: options?.locale }, [channel.port2])
+      return {
+        push: (pcm) => { if (!stopped) post({ type: 'audio', pcm }) },
+        stop: () => {
+          if (stopped) return
+          stopped = true
+          post({ type: 'stop' })
+        },
+        cancel: () => {
+          if (ended) return
+          post({ type: 'cancel' })
+          end()
+        }
+      }
+    }
   },
 
   tray: {
