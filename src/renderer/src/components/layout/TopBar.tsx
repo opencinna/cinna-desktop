@@ -19,7 +19,7 @@ export const TRAFFIC_LIGHT_GUTTER = 'pl-[76px]'
 // Slight-tint background at rest, solid background + subtle border on hover
 // so the icons stay legible over the main-area background.
 const TOPBAR_BTN =
-  'ambient-header-button p-1.5 rounded-md border border-transparent transition-colors ' +
+  'ambient-header-button splash-block p-1.5 rounded-md border border-transparent transition-colors ' +
   'bg-[var(--color-bg-secondary)]/60 text-[var(--color-text-muted)] ' +
   'hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text)] hover:border-[var(--color-border)]'
 

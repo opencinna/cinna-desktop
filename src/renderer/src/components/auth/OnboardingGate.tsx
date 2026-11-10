@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { OnboardingScreen } from './OnboardingScreen'
+import { skipStartupSplash } from '../../hooks/useStartupSplash'
 import { useProviders } from '../../hooks/useProviders'
 import { useConnectIntent } from '../../hooks/useConnectIntent'
 import { useConnectIntentStore } from '../../stores/connectIntent.store'
@@ -130,6 +131,8 @@ export function OnboardingGate({ children }: { children: React.ReactNode }): Rea
 
   if (checksClipboard && !clipboardSettled) return <div className="h-full bg-[var(--color-bg)]" />
 
+  // The shell after first run is not a launch; it gets no startup splash.
+  skipStartupSplash()
   return (
     <OnboardingScreen
       connectIntent={intent}

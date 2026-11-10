@@ -41,6 +41,7 @@ import { useSkillLinkIntents } from './hooks/useSkillLinkIntents'
 import { useChatSearchShortcut } from './components/chat/search/useChatSearchShortcut'
 import { AllChatsSearch } from './components/chat/search/AllChatsSearch'
 import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
+import { skipStartupSplash, useStartupSplash } from './hooks/useStartupSplash'
 
 // Any Cinna-backed query/mutation that fails with a reauth-required code
 // raises the global ReauthModal — one prompt for all surfaces (catalog,
@@ -84,10 +85,13 @@ function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Elemen
 
   // Startup failed — without this the app would sit on a blank window forever.
   if (state.status === 'error') {
+    // Not a launch into the shell: a later one (after Retry) gets no splash.
+    skipStartupSplash()
     return <StartupError message={state.message} onRetry={retry} />
   }
 
   if (needsPassword) {
+    skipStartupSplash()
     return <LoginScreen />
   }
 
@@ -173,9 +177,12 @@ function Shell(): React.JSX.Element {
   // them, and with Extra UI animation off they fade without sliding.
   const minimalView = useUIStore((s) => s.minimalView)
   const extraUIAnimation = useUIStore((s) => s.extraUIAnimation)
+  // The launch skeleton (useStartupSplash): the blocks below play it in place.
+  const splash = useStartupSplash()
   return (
     <div
       className="h-full flex flex-col min-h-0 p-2 relative"
+      data-startup-splash={splash === 'done' ? undefined : splash}
       data-minimal={minimalView || undefined}
       data-motion-fade={!extraUIAnimation || undefined}
     >

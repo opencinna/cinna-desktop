@@ -1085,6 +1085,84 @@
     }
   }
 
+  /* Startup splash (hooks/useStartupSplash.ts). On the shell's first frame of a
+     launch, `data-startup-splash="hold"`: each `.splash-block` fades in as its
+     bare surface with a band travelling through it (the running button's
+     motion, in the text colour at low strength), and everything that is
+     neither a block nor holds one is transparent, block contents included.
+     `reveal` fades that content in where it already sits and fades the band
+     and the fill to nothing, in REVEAL_MS. A functional signal (ux rule 16):
+     it runs with Extra UI animation off; under reduced motion the band holds
+     still. `!important` because blocks and content carry their own Tailwind
+     backgrounds, opacities and transitions (`transition-colors` would drop the
+     band's fade), which outrank @layer base. */
+  [data-startup-splash] .splash-block {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--splash-band) 50%,
+      transparent 100%
+    ) !important;
+    background-size: 200% 100% !important;
+    background-repeat: repeat !important;
+  }
+  [data-startup-splash="hold"] .splash-block {
+    --splash-band: color-mix(in srgb, var(--color-text) 9%, transparent);
+    --splash-fill: color-mix(in srgb, var(--color-text) 6%, transparent);
+    animation: splash-block-in 180ms ease-out both, splash-band-flow 1.4s linear infinite;
+  }
+  [data-startup-splash="reveal"] .splash-block {
+    --splash-band: transparent;
+    --splash-fill: transparent;
+    transition: --splash-band 280ms ease-out, --splash-fill 280ms ease-out !important;
+    animation: splash-band-flow 1.4s linear infinite;
+  }
+  /* The heading has no surface of its own: a soft fill stands in. */
+  [data-startup-splash] .splash-block-fill {
+    background-color: var(--splash-fill) !important;
+    border-radius: 10px;
+  }
+  /* The heading's text is a text node, which the content rule cannot reach. */
+  [data-startup-splash="hold"] .splash-block-fill {
+    color: transparent !important;
+  }
+  [data-startup-splash="reveal"] .splash-block-fill {
+    transition: --splash-band 280ms ease-out, --splash-fill 280ms ease-out, color 280ms ease-out !important;
+  }
+  /* The roots of every subtree that holds no block: a block's contents and its
+     siblings alike. Opacity on the root covers the subtree. */
+  [data-startup-splash="hold"] :is(.splash-block, :has(.splash-block)) > :not(.splash-block, :has(.splash-block)) {
+    opacity: 0 !important;
+  }
+  [data-startup-splash="reveal"] :is(.splash-block, :has(.splash-block)) > :not(.splash-block, :has(.splash-block)) {
+    transition: opacity 280ms ease-out !important;
+  }
+  @property --splash-band {
+    syntax: '<color>';
+    inherits: false;
+    initial-value: transparent;
+  }
+  @property --splash-fill {
+    syntax: '<color>';
+    inherits: false;
+    initial-value: transparent;
+  }
+  @keyframes splash-block-in {
+    from { opacity: 0; }
+  }
+  @keyframes splash-band-flow {
+    from { background-position: 0% 0; }
+    to { background-position: -200% 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-startup-splash="hold"] .splash-block {
+      animation: splash-block-in 180ms ease-out both;
+    }
+    [data-startup-splash="reveal"] .splash-block {
+      animation: none;
+    }
+  }
+
   /* Draggable strips for the (windowless) macOS title-bar area. */
   .app-drag-strip {
     -webkit-app-region: drag;

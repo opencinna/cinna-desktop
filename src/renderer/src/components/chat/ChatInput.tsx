@@ -2268,7 +2268,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         data-ambient-card={minimal ? undefined : true}
         className={minimal
           ? 'composer-cloud-card relative z-[1] rounded-2xl'
-          : 'ambient-grid-surface ambient-button relative z-[1] rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200'}
+          : 'ambient-grid-surface ambient-button splash-block relative z-[1] rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200'}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}

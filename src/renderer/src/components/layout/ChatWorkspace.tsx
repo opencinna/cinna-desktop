@@ -609,7 +609,7 @@ export function ChatWorkspace({
           ) : (
             <CinnaLogoDraw className="mx-auto mb-3" />
           )}
-          <h1 className="text-lg font-semibold text-[var(--color-text)]">
+          <h1 className="splash-block splash-block-fill mx-auto w-fit text-lg font-semibold text-[var(--color-text)]">
             {guidedInvite && pickedFolder ? GUIDED_BUILD_HEADING : guidedUndetermined ? '\u00a0' : brandHeading || 'What can I help with?'}
           </h1>
         </div>}

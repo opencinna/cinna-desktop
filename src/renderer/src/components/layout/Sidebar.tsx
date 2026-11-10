@@ -123,7 +123,7 @@ export function Sidebar(): React.JSX.Element {
       {/* In Settings too, dimmed: the tabs are the way out besides Back, and the
           tinted card says the body is a menu now, not a list (ux rule 17). */}
       <SidebarTabs />
-      <div className={`app-sidebar ambient-grid-surface overflow-hidden flex flex-col ${isSettings ? 'is-menu' : ''}`}>
+      <div className={`app-sidebar splash-block ambient-grid-surface overflow-hidden flex flex-col ${isSettings ? 'is-menu' : ''}`}>
         <AmbientGrid active={visible} borderGlow />
         {isSettings ? (
           <>
