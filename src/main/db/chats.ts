@@ -5,10 +5,18 @@ import { agents, chatFiles, chats, chatOnDemandAgents, messages } from './schema
 import type { MessageRow } from './messages'
 import type { ChatRouter } from '../../shared/chatRouting'
 import type { ChatOrigin } from '../../shared/chatOrigin'
-import { likeContains } from '../../shared/chatSearch'
+import { CONTAINS_FOLDED } from './searchFunctions'
 
 export type ChatRow = typeof chats.$inferSelect
 export type { MessageRow }
+
+/** The trigram index needs three characters (code points) to look anything up. */
+const SEARCH_INDEX_MIN_CHARS = 3
+
+/** `query` as one FTS5 phrase: an exact (case-folded) substring, operators and `"` taken literally. */
+function ftsPhrase(query: string): string {
+  return `"${query.replace(/"/g, '""')}"`
+}
 
 /** Fields editable via the `chat:update` IPC channel. */
 export interface ChatMetaUpdate {
@@ -164,25 +172,33 @@ export const chatRepo = {
 
   /**
    * All-chats search over the listed chats of `owners`: the user's and the
-   * assistant's messages whose `content` contains `query`, as SQLite's `LIKE`
-   * compares (case-insensitive for ASCII letters). Chats come newest match
-   * first, at most `chatLimit + 1` (the extra one says there were more), each
-   * with its match count and its `perChat` newest matches. `chatIds` limits
-   * the search to those chats (still only listed ones).
+   * assistant's messages whose `content` contains `query`, case folded by
+   * Unicode as the renderer's in-chat search folds it (`привет` finds
+   * `Привет`; diacritics are not stripped). Chats come newest match first, at
+   * most `chatLimit + 1` (the extra one says there were more), each with its
+   * match count and its `perChat` newest matches. `chatIds` limits the search
+   * to those chats (still only listed ones).
    *
-   * No index serves a `%…%` pattern: every user/assistant row of the listed
-   * chats is read. On demand only, never from a polled path.
+   * A query of {@link SEARCH_INDEX_MIN_CHARS} code points or more is a phrase
+   * on the `messages_search` trigram index (`migrations/messages-search.ts`),
+   * every character taken literally. A shorter one has no trigram to look up
+   * and reads every user/assistant row of the listed chats through
+   * `cinna_contains_folded`. On demand only, never from a polled path.
    */
   searchMessages(
     owners: ChatOwners,
     query: string,
     { perChat, chatLimit, chatIds }: { perChat: number; chatLimit: number; chatIds?: readonly string[] }
   ): { chatId: string; title: string; total: number; latestAt: Date; messages: { id: string; role: string; content: string; createdAt: Date }[] }[] {
+    // FTS5 rejects a NUL inside a phrase and a bound SQL argument stops at one;
+    // chat text never holds a NUL, so such a query finds nothing.
+    if (query.includes('\0')) return []
     const db = getDb()
-    const pattern = likeContains(query)
     const matches = and(
       inArray(messages.role, ['user', 'assistant']),
-      sql`${messages.content} LIKE ${pattern} ESCAPE '\\'`
+      [...query].length >= SEARCH_INDEX_MIN_CHARS
+        ? sql`${messages}.rowid IN (SELECT rowid FROM messages_search WHERE messages_search MATCH ${ftsPhrase(query)})`
+        : sql`${sql.raw(CONTAINS_FOLDED)}(${messages.content}, ${query.toLowerCase()})`
     )
     const groups = db
       .select({

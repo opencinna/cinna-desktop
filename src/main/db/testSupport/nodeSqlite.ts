@@ -25,6 +25,7 @@ import type Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import * as schema from '../schema'
 import { runAllMigrations } from '../migrations'
+import { registerSearchFunctions } from '../searchFunctions'
 
 type Row = Record<string, unknown>
 type Param = null | number | bigint | string | Uint8Array
@@ -105,6 +106,11 @@ export function adaptDatabase(raw: DatabaseSync): Database.Database {
       }
       return Object.assign(run, { deferred: run, immediate: run, exclusive: run })
     },
+    /** A user-defined SQL function; `better-sqlite3` and `node:sqlite` take the same arguments. */
+    function: (name: string, options: { deterministic?: boolean }, fn: (...args: never[]) => unknown) => {
+      raw.function(name, options, fn as (...args: unknown[]) => null)
+      return client
+    },
     pragma: (source: string) => {
       raw.exec(`PRAGMA ${source}`)
       return []
@@ -128,6 +134,7 @@ export interface TestDatabase {
 export function createTestDatabase(): TestDatabase {
   const raw = new DatabaseSync(':memory:')
   const sqlite = adaptDatabase(raw)
+  registerSearchFunctions(sqlite)
   raw.exec('PRAGMA foreign_keys = OFF')
   runAllMigrations(sqlite)
   raw.exec('PRAGMA foreign_keys = ON')

@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 import { drizzle, BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import * as schema from './schema'
 import { runAllMigrations } from './migrations'
+import { registerSearchFunctions } from './searchFunctions'
 import { chatModeRepo } from './chatModes'
 import { taskInputRequestRepo } from './taskInputRequests'
 import { createLogger } from '../logger/logger'
@@ -19,6 +20,7 @@ export function initDatabase(openDatabase: (path: string) => Database.Database =
   sqlite = openDatabase(dbPath)
 
   sqlite.pragma('journal_mode = WAL')
+  registerSearchFunctions(sqlite)
 
   // Foreign-key enforcement is disabled WHILE migrations run, then re-enabled.
   // Rationale: SQLite resolves `ON DELETE CASCADE` chains at statement-prepare

@@ -14,6 +14,7 @@ import { migrateChatGuidedBuild } from './chat-guided-build'
 import { migrateInflightTurns } from './inflight-turns'
 import { migrateRetireChatMirror } from './retire-chat-mirror'
 import { migrateMessages } from './messages'
+import { migrateMessagesSearch } from './messages-search'
 import { migrateChatModes, migrateChatModeRuntimeIndex } from './chat-modes'
 import { migrateAgents } from './agents'
 import { migrateAcpDriver } from './acp-driver'
@@ -170,4 +171,9 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // using the old default keeps it. Reads `agent_roots`, writes `app_settings`,
   // both created above; string comparison only, no filesystem access.
   pinLegacyAgentsHome(sqlite)
+  // The all-chats search index over `messages` and its triggers, last: after
+  // every migration that alters or rewrites `messages`, so none of them runs
+  // under the triggers or renumbers rowids the index already holds. Its
+  // one-time backfill reads `messages` only.
+  migrateMessagesSearch(sqlite)
 }

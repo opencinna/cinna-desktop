@@ -5,7 +5,7 @@ import { splitPastes } from '../../../../../shared/pastedText'
  * Matching for chat search, in the renderer: which loaded messages a query
  * finds (chat scope), how often, and the text ranges a match covers in the
  * rendered DOM. Plain case-insensitive substring matching, the same rule
- * main's `LIKE` applies to all chats.
+ * main's search (`chatRepo.searchMessages`) applies to all chats.
  */
 
 /** The ⌘F label for this platform. */

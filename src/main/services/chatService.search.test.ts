@@ -44,6 +44,8 @@ const { chatRepo } = await import('../db/chats')
 const { appSettingsRepo } = await import('../db/appSettings')
 const { messages } = await import('../db/schema')
 const { CHAT_SEARCH_PER_CHAT } = await import('../../shared/chatSearch')
+const { messageRepo } = await import('../db/messages')
+const { runAllMigrations } = await import('../db/migrations')
 
 let order = 0
 /** A message at `minute` minutes past a fixed hour: later minute, newer message. */
@@ -81,6 +83,56 @@ describe('chatService.search', () => {
     expect(chatIds(DEFAULT, 'reconcile')).toEqual([chat.id])
     expect(chatIds(DEFAULT, 'Reconcile')).toEqual([chat.id])
     expect(chatIds(DEFAULT, '   ')).toEqual([])
+  })
+
+  it('folds Cyrillic, Greek and accented letters, through the index and the short-query scan', () => {
+    const russian = chatRepo.create(DEFAULT, { title: 'Russian' })
+    say(russian.id, 'user', 'Привет, как дела?', 1)
+    const greek = chatRepo.create(DEFAULT, { title: 'Greek' })
+    say(greek.id, 'assistant', 'Ωραία ΜΈΡΑ σήμερα', 2)
+    const french = chatRepo.create(DEFAULT, { title: 'French' })
+    say(french.id, 'user', 'Une ÉCOLE à Paris', 3)
+
+    // Three characters or more: the trigram index.
+    expect(chatIds(DEFAULT, 'привет')).toEqual([russian.id])
+    expect(chatIds(DEFAULT, 'ПРИВЕТ, КАК')).toEqual([russian.id])
+    expect(chatIds(DEFAULT, 'ωραία μέρα')).toEqual([greek.id])
+    expect(chatIds(DEFAULT, 'école')).toEqual([french.id])
+    // One or two characters: the scan, folded the same way.
+    expect(chatIds(DEFAULT, 'пр')).toEqual([russian.id])
+    expect(chatIds(DEFAULT, 'ω')).toEqual([greek.id])
+    expect(chatIds(DEFAULT, 'éc')).toEqual([french.id])
+    // Diacritics are kept, as the renderer keeps them.
+    expect(chatIds(DEFAULT, 'ecole')).toEqual([])
+    expect(chatIds(DEFAULT, 'ec')).toEqual([])
+  })
+
+  it('takes quotes, *, %, _, ( and FTS5 operators literally in a long query', () => {
+    const quoted = chatRepo.create(DEFAULT, { title: 'Quoted' })
+    say(quoted.id, 'user', 'she said "hello there" twice', 1)
+    const star = chatRepo.create(DEFAULT, { title: 'Star' })
+    say(star.id, 'assistant', 'glob is src/*.ts here', 2)
+    const percent = chatRepo.create(DEFAULT, { title: 'Percent' })
+    say(percent.id, 'user', 'up 50% now', 3)
+    const underscore = chatRepo.create(DEFAULT, { title: 'Underscore' })
+    say(underscore.id, 'user', 'set max_id first', 4)
+    const call = chatRepo.create(DEFAULT, { title: 'Call' })
+    say(call.id, 'assistant', 'call f(x) AND NOT g:y', 5)
+    const decoy = chatRepo.create(DEFAULT, { title: 'Decoy' })
+    say(decoy.id, 'user', 'hello there src/a.ts up 50 now maxXid f x g y AND', 6)
+
+    expect(chatIds(DEFAULT, '"hello there"')).toEqual([quoted.id])
+    expect(chatIds(DEFAULT, 'said "hel')).toEqual([quoted.id])
+    expect(chatIds(DEFAULT, 'src/*.ts')).toEqual([star.id])
+    expect(chatIds(DEFAULT, '50% n')).toEqual([percent.id])
+    expect(chatIds(DEFAULT, 'max_id')).toEqual([underscore.id])
+    expect(chatIds(DEFAULT, 'f(x)')).toEqual([call.id])
+    expect(chatIds(DEFAULT, 'and not g:y')).toEqual([call.id])
+    expect(chatIds(DEFAULT, '(x')).toEqual([call.id])
+    expect(chatIds(DEFAULT, '"')).toEqual([quoted.id])
+    // A NUL (FTS5 rejects it in a phrase) finds nothing rather than throwing.
+    expect(chatIds(DEFAULT, 'hello\u0000there')).toEqual([])
+    expect(chatIds(DEFAULT, 'he\u0000')).toEqual([])
   })
 
   it('takes %, _ and \\ literally', () => {
@@ -227,5 +279,63 @@ describe('chatService.search', () => {
       expect(() => chatService.search(DEFAULT, 'needle', { agentIds: [1] })).toThrow('Invalid search filter.')
       expect(() => chatService.search(DEFAULT, 'needle', { none: 'yes' })).toThrow('Invalid search filter.')
     })
+  })
+})
+
+describe('the search index', () => {
+  it('follows an insert, a draft rewritten in place, a deleted message and a deleted chat', () => {
+    const chat = chatRepo.create(DEFAULT, { title: 'Draft' })
+    const draft = say(chat.id, 'assistant', 'Первый черновик', 1)
+    expect(chatIds(DEFAULT, 'черновик')).toEqual([chat.id])
+
+    messageRepo.updateAssistantParts(draft, 'Окончательный ответ', [])
+    expect(chatIds(DEFAULT, 'черновик')).toEqual([])
+    expect(chatIds(DEFAULT, 'окончательный')).toEqual([chat.id])
+
+    messageRepo.deleteById(draft)
+    expect(chatIds(DEFAULT, 'окончательный')).toEqual([])
+
+    const doomed = chatRepo.create(DEFAULT, { title: 'Doomed' })
+    say(doomed.id, 'user', 'cascade target', 2)
+    expect(chatIds(DEFAULT, 'cascade')).toEqual([doomed.id])
+    expect(chatRepo.permanentDelete(DEFAULT, doomed.id)).toBe(true)
+    expect(holder.current!.raw.prepare('SELECT COUNT(*) AS n FROM messages').get()).toEqual({ n: 0 })
+    // Nothing left behind: the cascade fired the delete trigger.
+    expect(holder.current!.raw.prepare("SELECT COUNT(*) AS n FROM messages_search WHERE messages_search MATCH '\"cascade\"'").get()).toEqual({ n: 0 })
+  })
+
+  it('never indexes tool, error or notice rows, nor a row whose role changes away from user/assistant', () => {
+    const chat = chatRepo.create(DEFAULT, { title: 'Roles' })
+    say(chat.id, 'tool_call', 'needle in a tool result', 1)
+    say(chat.id, 'error', 'needle in an error', 2)
+    const reply = say(chat.id, 'assistant', 'needle in the reply', 3)
+    const indexed = (): unknown => holder.current!.raw.prepare('SELECT COUNT(*) AS n FROM messages_search').get()
+    expect(indexed()).toEqual({ n: 1 })
+    expect(chatService.search(DEFAULT, 'needle').groups[0].messages.map((m) => m.id)).toEqual([reply])
+
+    holder.current!.raw.prepare("UPDATE messages SET role = 'error' WHERE id = ?").run(reply)
+    expect(indexed()).toEqual({ n: 0 })
+    expect(chatIds(DEFAULT, 'needle')).toEqual([])
+    holder.current!.raw.prepare("UPDATE messages SET role = 'assistant' WHERE id = ?").run(reply)
+    expect(chatIds(DEFAULT, 'needle')).toEqual([chat.id])
+  })
+
+  it('is filled from the messages already there when the migration creates it, and a rerun changes nothing', () => {
+    const chat = chatRepo.create(DEFAULT, { title: 'Before' })
+    say(chat.id, 'user', 'Старое сообщение', 1)
+    say(chat.id, 'tool_call', 'старое из инструмента', 2)
+    const raw = holder.current!.raw
+    // An install from before the index: no table, no triggers.
+    raw.exec('DROP TRIGGER messages_search_ai; DROP TRIGGER messages_search_ad; DROP TRIGGER messages_search_au; DROP TABLE messages_search')
+    say(chat.id, 'assistant', 'Ещё одно старое', 3)
+
+    runAllMigrations(holder.current!.sqlite)
+    expect(chatService.search(DEFAULT, 'старое').groups[0].total).toBe(2)
+
+    runAllMigrations(holder.current!.sqlite)
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM messages_search').get()).toEqual({ n: 2 })
+    expect(chatService.search(DEFAULT, 'старое').groups[0].total).toBe(2)
+    say(chat.id, 'user', 'и новое старое', 4)
+    expect(chatService.search(DEFAULT, 'старое').groups[0].total).toBe(3)
   })
 })

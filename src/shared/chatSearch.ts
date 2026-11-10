@@ -62,8 +62,3 @@ export function chatSearchFilterOf(keys: readonly string[]): ChatSearchFilter | 
   }
   return filter
 }
-
-/** A `LIKE` pattern matching `query` anywhere, with `%`, `_` and `\` taken literally (`ESCAPE '\'`). */
-export function likeContains(query: string): string {
-  return `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
-}
