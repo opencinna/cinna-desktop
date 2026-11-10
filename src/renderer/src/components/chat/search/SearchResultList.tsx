@@ -86,11 +86,16 @@ export function SearchResultList({ id, label, entries, resultsKey, activeId, onA
     setSeen((prev) => (prev.size === next.size && [...next].every((k) => prev.has(k)) ? prev : next))
   }, [entries])
 
-  // New results: the newest is nearest the bar, so the list starts at its bottom.
+  // New results: the newest is nearest the bar, so the list starts at its
+  // bottom. Keyed on the results alone: the parents build `entries` afresh on
+  // every render, so `paint` changes whenever they re-render, and a scroll tied
+  // to it pulled a user reading older results back to the bottom.
   useLayoutEffect(() => {
     const list = listRef.current
-    if (!list) return
-    list.scrollTop = list.scrollHeight
+    if (list) list.scrollTop = list.scrollHeight
+  }, [resultsKey])
+
+  useLayoutEffect(() => {
     layoutRail()
     paint()
   }, [resultsKey, layoutRail, paint])
