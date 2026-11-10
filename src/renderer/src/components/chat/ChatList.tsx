@@ -309,7 +309,8 @@ export function ChatList(): React.JSX.Element {
               </div>
             )}
             {pinned.length > 0 && (
-              <div className="space-y-px">
+              // Set off from the list below by the same rule as Active.
+              <div role="group" aria-label="Pinned" className="space-y-px pb-1 mb-1 border-b border-[var(--color-border)]">
                 <ChatGroupHeader
                   label="Pinned"
                   collapsed={pinnedClosed}

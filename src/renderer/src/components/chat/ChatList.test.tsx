@@ -279,6 +279,12 @@ describe('Pinned, the row menu and drag order', () => {
     await shown()
     expect(screen.getByRole('button', { name: 'Pinned', expanded: true })).toBeTruthy()
     expect(titles()).toEqual(['Pinned high', 'Pinned low', 'Recent', 'Older', 'Oldest'])
+    // Ruled off from the list below, like Active.
+    const pinnedGroup = screen.getByRole('group', { name: 'Pinned' })
+    expect(pinnedGroup.className).toContain('border-b')
+    expect([...pinnedGroup.querySelectorAll('[data-chat-row]')].map((el) => el.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining('Pinned high'), expect.stringContaining('Pinned low')])
+    )
 
     act(() => useUIStore.setState({ chatGroupByAgent: true, chatGroupByDate: true }))
     // Pinned is still one flat list at the head; the Writer group holds only its unpinned chats.
