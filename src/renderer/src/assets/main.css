@@ -1086,7 +1086,9 @@
   }
 
   /* Startup splash (hooks/useStartupSplash.ts). On the shell's first frame of a
-     launch, `data-startup-splash="hold"`: each `.splash-block` fades in as its
+     launch, `data-startup-splash="wait"` holds everything transparent over the
+     window's background until the window is visible and painted. Then
+     `hold`: each `.splash-block` quickly fades in as its
      bare surface with a band travelling through it (the running button's
      motion, in the text colour at low strength), and everything that is
      neither a block nor holds one is transparent, block contents included.
@@ -1106,10 +1108,13 @@
     background-size: 200% 100% !important;
     background-repeat: repeat !important;
   }
+  [data-startup-splash="wait"] .splash-block {
+    opacity: 0 !important;
+  }
   [data-startup-splash="hold"] .splash-block {
     --splash-band: color-mix(in srgb, var(--color-text) 9%, transparent);
     --splash-fill: color-mix(in srgb, var(--color-text) 6%, transparent);
-    animation: splash-block-in 180ms ease-out both, splash-band-flow 1.4s linear infinite;
+    animation: splash-block-in 150ms ease-out both, splash-band-flow 1.4s linear infinite;
   }
   [data-startup-splash="reveal"] .splash-block {
     --splash-band: transparent;
@@ -1123,7 +1128,7 @@
     border-radius: 10px;
   }
   /* The heading's text is a text node, which the content rule cannot reach. */
-  [data-startup-splash="hold"] .splash-block-fill {
+  :is([data-startup-splash="wait"], [data-startup-splash="hold"]) .splash-block-fill {
     color: transparent !important;
   }
   [data-startup-splash="reveal"] .splash-block-fill {
@@ -1131,7 +1136,7 @@
   }
   /* The roots of every subtree that holds no block: a block's contents and its
      siblings alike. Opacity on the root covers the subtree. */
-  [data-startup-splash="hold"] :is(.splash-block, :has(.splash-block)) > :not(.splash-block, :has(.splash-block)) {
+  :is([data-startup-splash="wait"], [data-startup-splash="hold"]) :is(.splash-block, :has(.splash-block)) > :not(.splash-block, :has(.splash-block)) {
     opacity: 0 !important;
   }
   [data-startup-splash="reveal"] :is(.splash-block, :has(.splash-block)) > :not(.splash-block, :has(.splash-block)) {
@@ -1156,7 +1161,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     [data-startup-splash="hold"] .splash-block {
-      animation: splash-block-in 180ms ease-out both;
+      animation: splash-block-in 150ms ease-out both;
     }
     [data-startup-splash="reveal"] .splash-block {
       animation: none;

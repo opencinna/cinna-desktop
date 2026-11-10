@@ -19,6 +19,11 @@ function setup() {
   return { client, ...hook }
 }
 
+/** The two frames between a visible window and the blocks' fade-in. */
+function enter(): void {
+  act(() => vi.advanceTimersByTime(40))
+}
+
 /** A query that stays in flight until `finish` is called. */
 function holdQuery(client: QueryClient): () => void {
   let finish!: () => void
@@ -37,6 +42,8 @@ describe('useStartupSplash', () => {
 
   it('holds for the minimum when nothing is loading, then reveals and finishes', () => {
     const { result } = setup()
+    expect(result.current).toBe('wait')
+    enter()
     expect(result.current).toBe('hold')
     act(() => vi.advanceTimersByTime(MIN_HOLD_MS))
     act(() => vi.advanceTimersByTime(SETTLE_MS - 1))
@@ -50,6 +57,7 @@ describe('useStartupSplash', () => {
   it('waits past the minimum for a query in flight, and reveals when it settles', async () => {
     const { client, result } = setup()
     const finish = holdQuery(client)
+    enter()
     act(() => vi.advanceTimersByTime(MIN_HOLD_MS + 200))
     expect(result.current).toBe('hold')
     await act(async () => {
@@ -62,6 +70,7 @@ describe('useStartupSplash', () => {
   it('does not reveal while a query that starts as another settles is in flight', async () => {
     const { client, result } = setup()
     const finishFirst = holdQuery(client)
+    enter()
     act(() => vi.advanceTimersByTime(MIN_HOLD_MS + 100))
     // The gap a dependent query leaves: the first settles and the hook renders
     // with nothing loading, then the second starts a moment later.
@@ -87,14 +96,35 @@ describe('useStartupSplash', () => {
   it('reveals at the cap even when a query never settles', () => {
     const { client, result } = setup()
     holdQuery(client)
+    enter()
     act(() => vi.advanceTimersByTime(MAX_HOLD_MS - 1))
     expect(result.current).toBe('hold')
     act(() => vi.advanceTimersByTime(1))
     expect(result.current).toBe('reveal')
   })
 
+  it('keeps everything transparent while the window is hidden, and fades the blocks in once it shows', () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    try {
+      const { result } = setup()
+      act(() => vi.advanceTimersByTime(MAX_HOLD_MS * 2))
+      expect(result.current).toBe('wait')
+      visibility.mockReturnValue('visible')
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      enter()
+      expect(result.current).toBe('hold')
+      act(() => vi.advanceTimersByTime(MIN_HOLD_MS - 1))
+      expect(result.current).toBe('hold')
+    } finally {
+      visibility.mockRestore()
+    }
+  })
+
   it('reveals at once on a key press', () => {
     const { result } = setup()
+    enter()
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))
     })

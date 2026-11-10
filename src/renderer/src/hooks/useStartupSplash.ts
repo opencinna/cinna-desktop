@@ -10,14 +10,18 @@ import { useIsFetching } from '@tanstack/react-query'
  * reveals: the content fades in where it already is and the band fades out, so
  * the window never shows the interface arriving piece by piece (ux_rules §1).
  *
- * - `hold`: at least `MIN_HOLD_MS` from the shell's first frame, so the blocks
+ * - `wait`: blocks and content alike are transparent over the background
+ *   until the window is visible and has painted (main shows it on
+ *   `ready-to-show`, which can come after the shell mounts), so the blocks'
+ *   quick fade-in plays where the user can see it rather than in a hidden window.
+ * - `hold`: at least `MIN_HOLD_MS` from the blocks' fade-in, so the blocks
  *   read as a deliberate step rather than a flicker; at most `MAX_HOLD_MS`, so a
  *   slow server query never keeps the window blank.
  * - Any key or pointer press reveals at once: the user's action wins.
  * - Once per launch. A shell mounted after the login or onboarding screen (or
  *   again after a sign-out) is not a launch, and skips it.
  */
-export type StartupSplashPhase = 'hold' | 'reveal' | 'done'
+export type StartupSplashPhase = 'wait' | 'hold' | 'reveal' | 'done'
 
 export const MIN_HOLD_MS = 300
 export const MAX_HOLD_MS = 1500
@@ -40,7 +44,7 @@ export function resetStartupSplashForTests(): void {
 }
 
 export function useStartupSplash(): StartupSplashPhase {
-  const [phase, setPhase] = useState<StartupSplashPhase>(() => (used ? 'done' : 'hold'))
+  const [phase, setPhase] = useState<StartupSplashPhase>(() => (used ? 'done' : 'wait'))
   const [minElapsed, setMinElapsed] = useState(false)
   const fetching = useIsFetching()
 
@@ -49,6 +53,25 @@ export function useStartupSplash(): StartupSplashPhase {
   useEffect(() => {
     used = true
   }, [])
+
+  useEffect(() => {
+    if (phase !== 'wait') return
+    // Two frames: the first is where the transparent shell is painted, the
+    // second starts the fade from it.
+    let frame = 0
+    const enter = (): void => {
+      if (document.visibilityState !== 'visible' || frame) return
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => setPhase('hold'))
+      })
+    }
+    enter()
+    document.addEventListener('visibilitychange', enter)
+    return () => {
+      cancelAnimationFrame(frame)
+      document.removeEventListener('visibilitychange', enter)
+    }
+  }, [phase])
 
   useEffect(() => {
     if (phase !== 'hold') return
