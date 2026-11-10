@@ -317,6 +317,7 @@ npm run release:mac
 
 This single command:
 - Compiles main/preload/renderer.
+- Creates the `v${version}` draft release first (`scripts/release-draft.cjs`), or reuses the one draft already there, and stops if the tag has more than one. electron-builder 26 creates its GitHub publisher behind an `await` before caching it, so two artifacts finishing together each got their own publisher, and each created a draft: 0.11.0 and 0.11.1 shipped from two drafts with the assets split between them, and the Linux workflow uploaded to whichever came first. With the draft already there, every publisher reuses it. `release:linux` and `release:all` run the same step.
 - Prepares target Canvas payloads, discovers/unpacks the ACP runtime dependency trees, rebuilds native addons per target, and validates shipped manifests/payloads while packaging `.app` bundles for `x64` and `arm64`.
 - Signs everything with the Developer ID cert.
 - Submits each `.app` to Apple notary and **waits** for `Accepted` (2–10 min per arch).
@@ -350,7 +351,9 @@ Complete the packaged runtime checks under [Verifying the result](#verifying-the
 ```bash
 VERSION="v$(node -p "require('./package.json').version")"
 
-# Confirm the draft exists with all expected assets
+# Confirm the draft exists with all expected assets — and that it is the only one
+# for the tag (gh release view shows just one of several)
+gh api repos/opencinna/cinna-desktop/releases --jq ".[] | select(.tag_name==\"$VERSION\") | \"\(.id) draft=\(.draft) assets=\(.assets|length)\""
 gh release view "$VERSION" --repo opencinna/cinna-desktop
 
 # Expected assets (macOS):
