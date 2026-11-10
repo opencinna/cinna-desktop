@@ -46,9 +46,9 @@ The query and the pressed chips outlive a close, so ⌘F reopens where the user 
 
 ### Known limits
 
-- Matching is a plain case-insensitive substring. In all-chats search SQLite's `LIKE` is case-insensitive for ASCII only; `é` does not match `É` there, though the in-chat search (JavaScript lowercasing) does match it. `%`, `_` and `\` in a query are taken literally.
+- Matching is a plain case-insensitive substring, folded by Unicode in both scopes (`é` matches `É`, `привет` matches `Привет`); diacritics are not stripped (`ecole` does not find `École`). `%`, `_`, `\` and quotes in a query are taken literally.
 - A match that spans formatting (half in bold, say) is counted from the message's source text but cannot be highlighted: highlights work inside single text nodes of the rendered message.
-- All-chats search is a synchronous query in the main process with no index (a `%…%` pattern cannot use one): measured at about 170 ms on a 200 MB database, during which main does nothing else. It runs only on demand, never from a polled path.
+- All-chats search is a synchronous query in the main process. A query of 3 or more characters uses a trigram index and does not read the messages; only a 1-2 character query still scans every user and assistant message of the listed chats (about 170 ms on a 200 MB database under the earlier `LIKE` scan, not re-measured), during which main does nothing else. It runs only on demand, never from a polled path.
 
 ### What it does not do
 
