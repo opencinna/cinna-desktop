@@ -125,6 +125,16 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 - **Window state belongs to the main window only.** The menu-bar tray popover is positioned from its icon and is neither saved nor restored.
 - **Minimal view is a shell state.** The shell root carries `data-minimal` while it is on: the sidebar and its hover peek are hidden and `inert`, the top bar's buttons slide away and are `inert`, and the drag strip stays so the window can still be moved. `data-motion-fade` (Extra UI animation off) turns the slides into fades. See [Minimal View](../../chat/minimal_view/minimal_view.md).
 
+### Startup splash
+
+- **The launch plays a skeleton in the real shell.** On the shell's first mount of a launch, the shell root carries `data-startup-splash` (`hold`, then `reveal`, then removed). Held, the top-bar buttons, the sidebar card, the sidebar tabs and the composer card show only their bare surface with a band flowing through it, the new-chat heading shows a soft fill, and everything else is transparent. The reveal fades the content in where it already sits and fades the band out. The window never shows the interface arriving piece by piece (ux_rules rule 1).
+- **It lives on the real elements, not an overlay copy.** An overlay would be a second layout to keep in step with the first; on the real elements the geometry cannot drift.
+- **Timing.** At least 300 ms, so the step reads as deliberate rather than a flicker. Then it reveals once no TanStack query has been fetching for 50 ms (a query that starts as another settles must not be missed between them). At most 1500 ms, so a slow server never keeps the window blank. Any key or pointer press reveals at once.
+- **Once per window, and only for a launch.** Skipped when the launch went through the login screen, the startup error or onboarding: the shell that follows is not a launch.
+- **Two things are deliberately not blocks.** The stock Cinna logo is a wireframe hidden until clicked, so a placeholder would show something that is not there. A brand logo `<img>` is content, not a block: the content rule cannot hide an `img` inside its own placeholder.
+- **A functional signal (ux_rules rule 16).** It runs with Extra UI animation off; under reduced motion the band holds still.
+- **Known limits.** A launch view with no composer would show a blank main area during the hold (launch is always the new-chat home today). A toast raised at launch is hidden for the hold.
+
 ## Architecture Overview
 
 ```
