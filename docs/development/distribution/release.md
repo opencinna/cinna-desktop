@@ -496,6 +496,10 @@ git reset --hard HEAD~1
 
 After fixing the cause, restart from step 2.
 
+**`release-draft: vX.Y.Z has 2 drafts (…)` stops the build**
+
+The tag already has more than one draft, usually left over from a release before the fix. List them with the step 6 `gh api …/releases` line, keep the one with the most assets (none, if neither has any) and delete the others with `gh api -X DELETE repos/opencinna/cinna-desktop/releases/<id>`, then rerun `release:mac`; it uploads into the draft that is left, replacing any asset already there. The Linux workflow stops on the same message, so do this before pushing the tag.
+
 **Released a broken version that's auto-updating users**
 
 Don't unpublish — `electron-updater` clients that already saw the manifest may already be downloading it, and a missing release URL produces error logs rather than a rollback.
@@ -652,6 +656,7 @@ A clean re-run will redownload Electron (~120 MB per arch from GitHub Releases) 
   - `build:mac`, `build:mac:unsigned` — local macOS builds (no upload)
   - `notarize:dmgs` — standalone DMG notarization (NOT for auto-update release flow)
   - `release:mac` — local macOS build + sign + notarize + upload draft. Needs Apple env vars + `GH_TOKEN`.
+  - `release:mac`, `release:linux` and `release:all` first run `scripts/release-draft.cjs`, which creates the version's draft (or reuses the only one) so electron-builder cannot split the upload across two drafts — see [step 3](#3-build-sign-notarize-upload).
   - `release:linux` — Linux AppImage + deb build + upload draft. Designed for CI; can also run locally on Linux/Docker.
   - `release:all` — both platforms in one invocation, on a Mac: the macOS package requires the [voice input helper](#voice-input-helper), which only a Mac can build.
   - Added runtime dep `electron-updater`.

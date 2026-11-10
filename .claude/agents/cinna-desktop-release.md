@@ -26,7 +26,7 @@ Clean tree, on `main`, up to date. Then `npm run typecheck`, `npx electron-vite 
 - Take the version bump the user asked for. If they did not say, ask — patch, minor and major are a judgement about the changes, not something to infer from a diff.
 - `npm run release:mac` takes 20–30 minutes, most of it Apple's notary service. Watch for `notarization successful` **twice**, once per architecture, and the per-artifact upload lines. Do not interrupt it because it looks stalled.
 - **Never run `notarize:dmgs` between `release:mac` and publishing.** It re-staples the DMG, changing bytes that `latest-mac.yml` has already hashed, and every client's update then fails on a hash mismatch.
-- Verify each gate with the runbook's own commands rather than by eye: the tag actually landed, the draft carries both `.dmg` **and** `.zip` assets, `latest-mac.yml` lists the zips, and the Linux workflow has finished uploading before anything is published.
+- Verify each gate with the runbook's own commands rather than by eye: the tag actually landed, the tag has exactly one release (list them with the runbook's `gh api …/releases` line; `gh release view` shows only one of several), the draft carries both `.dmg` **and** `.zip` assets, `latest-mac.yml` lists the zips, and the Linux workflow has finished uploading before anything is published.
 - Release notes come from `git log --pretty="- %s" "$PREV_TAG..HEAD"` with docs excluded — and drop the bare `X.Y.Z` line the version bump commit contributes.
 
 ## When something goes wrong
