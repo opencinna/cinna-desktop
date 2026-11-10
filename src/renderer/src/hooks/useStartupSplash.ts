@@ -4,8 +4,8 @@ import { useIsFetching } from '@tanstack/react-query'
 /**
  * The launch skeleton. The first time the shell mounts, it carries
  * `data-startup-splash` (main.css, "Startup splash"): its main blocks — the
- * sidebar card and its tabs, the top bar's buttons, the heading and the
- * composer card (`.splash-block`) — show only their surface with a band flowing through
+ * sidebar card, the top bar's buttons, the heading and the composer card
+ * (`.splash-block`) — show only their surface with a band flowing through
  * it, and everything else is held transparent. Once nothing is loading, it
  * reveals: the content fades in where it already is and the band fades out, so
  * the window never shows the interface arriving piece by piece (ux_rules §1).

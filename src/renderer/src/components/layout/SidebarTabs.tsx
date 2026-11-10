@@ -178,7 +178,7 @@ export function SidebarTabs(): React.JSX.Element {
             title={name}
             aria-label={name}
             aria-pressed={isActive}
-            className="sidebar-tab splash-block"
+            className="sidebar-tab"
           >
             <Icon size={14} />
           </button>
