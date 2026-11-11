@@ -25,7 +25,7 @@ import type { SpeechBackend, SpeechStatus, SpeechStreamEvent } from '../../src/s
  * the backend, and the renderer's cloud mark follows it.
  */
 
-const NO_CLOUD: SpeechStatus['cloud'] = { mode: 'off', usable: false, providers: [] }
+const NO_CLOUD: SpeechStatus['cloud'] = { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } }
 const SUPPORTED: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', backend: 'sfspeech', available: true, cloud: NO_CLOUD }
 const UNSUPPORTED: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec', available: false, cloud: NO_CLOUD }
 
@@ -156,7 +156,7 @@ async function pinNoOnDeviceWithGemini(cinna: CinnaApp): Promise<void> {
       return {
         supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec',
         available: mode !== 'off',
-        cloud: { mode, usable: true, providers: [provider] }
+        cloud: { mode, setting: '', service: 'gemini', usable: true, providers: [provider], relay: { available: false } }
       }
     })
   }, GEMINI)
@@ -462,7 +462,7 @@ test.describe('voice input, the cloud mark on a Gemini dictation', () => {
 
   const NO_ON_DEVICE_GEMINI_FALLBACK: SpeechStatus = {
     supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec', available: true,
-    cloud: { mode: 'fallback', usable: true, providers: [GEMINI] }
+    cloud: { mode: 'fallback', setting: '', service: 'gemini', usable: true, providers: [GEMINI], relay: { available: false } }
   }
   const cloudMark = (cinna: CinnaApp) => cinna.page.locator('[data-testid="voice-cloud-mark"]')
   const CLOUD_NOTE = 'Transcribing with Gemini — audio is sent to Google'

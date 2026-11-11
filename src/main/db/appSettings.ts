@@ -65,7 +65,9 @@ export const DEFAULTS: AppSettingsSchema = {
   // Voice input stays on the device unless the user opts in to Gemini.
   voiceCloudTranscription: 'off',
   // Empty = the first usable Gemini provider.
-  voiceCloudProviderId: ''
+  voiceCloudProviderId: '',
+  // Empty = not chosen yet: Settings saves one with the mode; never Gemini implicitly.
+  voiceCloudService: ''
 }
 
 export const appSettingsRepo = {

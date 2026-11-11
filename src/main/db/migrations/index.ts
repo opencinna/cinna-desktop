@@ -36,7 +36,7 @@ import { migrateLocalSchedules } from './local-schedules'
 import { migrateHandovers } from './handovers'
 import { migrateDelegations } from './delegations'
 import { migrateNotes } from './notes'
-import { migrateAppSettings, backfillAiFunctionsCredential, pinLegacyAgentsHome } from './app-settings'
+import { migrateAppSettings, backfillAiFunctionsCredential, pinLegacyAgentsHome, pinVoiceCloudService } from './app-settings'
 import { migrateInboxDismissals } from './inbox-dismissals'
 import { migrateRuntimeModelCatalogs } from './runtime-model-catalogs'
 import { migratePublishedArtifacts } from './published-artifacts'
@@ -174,6 +174,10 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // using the old default keeps it. Reads `agent_roots`, writes `app_settings`,
   // both created above; string comparison only, no filesystem access.
   pinLegacyAgentsHome(sqlite)
+  // Cloud transcription gained a Service setting (the Cinna server relay or
+  // the Gemini key): an install with a mode already on keeps the key it chose.
+  // Writes `app_settings` only; once per database.
+  pinVoiceCloudService(sqlite)
   // The all-chats search index over `messages` and its triggers, last: after
   // every migration that alters or rewrites `messages`, so none of them runs
   // under the triggers or renumbers rowids the index already holds. Its

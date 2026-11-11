@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { adaptDatabase } from '../testSupport/nodeSqlite'
 import { runAllMigrations } from './index'
-import { AI_FUNCTIONS_BACKFILL_MARKER } from './app-settings'
+import { AI_FUNCTIONS_BACKFILL_MARKER, VOICE_CLOUD_SERVICE_PIN_MARKER } from './app-settings'
 
 function migrate(raw: DatabaseSync): void {
   raw.exec('PRAGMA foreign_keys = OFF')
@@ -149,5 +149,52 @@ describe('agents home pin (default moved out of ~/Documents)', () => {
     migrate(elsewhere)
     expect(setting(elsewhere, 'localAgentsHome')).toBeUndefined()
     elsewhere.close()
+  })
+})
+
+describe('voice cloud service pin (the Cinna server relay arrived)', () => {
+  /** An install from before the Service setting: no marker, the cloud mode as given. */
+  function before(mode: string | null, service?: string): DatabaseSync {
+    const raw = new DatabaseSync(':memory:')
+    migrate(raw)
+    raw.prepare('DELETE FROM app_settings').run()
+    const put = raw.prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, 1)')
+    if (mode !== null) put.run('voiceCloudTranscription', JSON.stringify(mode))
+    if (service !== undefined) put.run('voiceCloudService', JSON.stringify(service))
+    return raw
+  }
+
+  it.each(['fallback', 'always'])('pins a cloud mode that was on (%s) to the Gemini key it consented to', (mode) => {
+    for (const service of [undefined, '']) {
+      const raw = before(mode, service)
+      migrate(raw)
+      expect(setting(raw, 'voiceCloudService')).toBe('gemini')
+      expect(setting(raw, VOICE_CLOUD_SERVICE_PIN_MARKER)).toBe('done')
+      raw.close()
+    }
+  })
+
+  it('leaves Off, a never-set mode and an explicit service alone', () => {
+    for (const [mode, service, expected] of [
+      ['off', undefined, undefined],
+      [null, undefined, undefined],
+      ['always', 'core', 'core'],
+      ['fallback', 'gemini', 'gemini']
+    ] as [string | null, string | undefined, string | undefined][]) {
+      const raw = before(mode, service)
+      migrate(raw)
+      expect(setting(raw, 'voiceCloudService')).toBe(expected)
+      raw.close()
+    }
+  })
+
+  it('runs once: an empty service with a mode on afterwards is not read as consent to the key', () => {
+    const raw = new DatabaseSync(':memory:')
+    migrate(raw)
+    expect(setting(raw, VOICE_CLOUD_SERVICE_PIN_MARKER)).toBe('done')
+    raw.prepare(`INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('voiceCloudTranscription', '"always"', 1)`).run()
+    migrate(raw)
+    expect(setting(raw, 'voiceCloudService')).toBeUndefined()
+    raw.close()
   })
 })

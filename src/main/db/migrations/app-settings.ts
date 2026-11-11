@@ -134,3 +134,48 @@ export function pinLegacyAgentsHome(sqlite: Database.Database, home: string = ho
     .prepare('INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
     .run('localAgentsHome', JSON.stringify(legacy), Math.floor(Date.now() / 1000))
 }
+
+/** Marker row for {@link pinVoiceCloudService}; not an `AppSettingsSchema` key. */
+export const VOICE_CLOUD_SERVICE_PIN_MARKER = '__migration.voiceCloudServicePin'
+
+/** A stored setting as `appSettingsRepo.get` reads it: missing, corrupt or not a string is `fallback`. */
+function storedString(sqlite: Database.Database, key: string, fallback: string): string {
+  const row = sqlite.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined
+  if (!row) return fallback
+  try {
+    const parsed: unknown = JSON.parse(row.value)
+    return typeof parsed === 'string' ? parsed : fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * One-time upgrade step for the Cinna server transcription relay. Before it,
+ * cloud transcription had one service, the user's own Gemini key; an install
+ * with a cloud mode on consented to exactly that. The new Service setting's
+ * empty value would let a session move to the Cinna server when the relay
+ * appears and back to the billed key when it goes, so such an install is
+ * pinned to `gemini`. The settings store is installation-global: one scope.
+ *
+ * Runs once per database (the marker is written on every path, fresh
+ * installs included): afterwards Settings saves the service together with the
+ * mode, and an empty service with a mode on never runs on Gemini, so a later
+ * empty value must not be read as consent to the key.
+ */
+export function pinVoiceCloudService(sqlite: Database.Database): void {
+  if (!hasTable(sqlite, 'app_settings')) return
+  const done = sqlite.prepare('SELECT 1 AS done FROM app_settings WHERE key = ?').get(VOICE_CLOUD_SERVICE_PIN_MARKER)
+  if (done) return
+  const now = Math.floor(Date.now() / 1000)
+  const mode = storedString(sqlite, 'voiceCloudTranscription', 'off')
+  const service = storedString(sqlite, 'voiceCloudService', '')
+  if ((mode === 'fallback' || mode === 'always') && service === '') {
+    sqlite
+      .prepare('INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
+      .run('voiceCloudService', JSON.stringify('gemini'), now)
+  }
+  sqlite
+    .prepare('INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(VOICE_CLOUD_SERVICE_PIN_MARKER, JSON.stringify('done'), now)
+}

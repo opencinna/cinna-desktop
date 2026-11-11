@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { SpeechProbe, SpeechStreamEvent, TranscribeResult, VoiceCloudTranscription } from '../../shared/speech'
+import type { SpeechProbe, SpeechRelayStatus, SpeechStreamEvent, TranscribeResult, VoiceCloudService, VoiceCloudTranscription } from '../../shared/speech'
 import type { SpeechEngine, SpeechStreamSession } from './speechEngine'
 
 // The singleton reads the database; these tests inject their own config.
@@ -8,6 +8,8 @@ vi.mock('./geminiCredentials', () => ({
   readCloudConfig: () => ({ mode: 'off', providers: [], chosen: null }),
   resolveGeminiKey: async () => ({ ok: false, message: 'none' })
 }))
+// The production relay wiring reads the database and the network; tests pass their own.
+vi.mock('./coreRelayWiring', () => ({ coreRelayAccess: { status: () => ({ available: false }) }, coreRelayEngine: {} }))
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -15,7 +17,7 @@ vi.mock('../logger/logger', () => ({
 const { createSpeechService } = await import('./speechService')
 
 /** The cloud half every status carries when no cloud engine is wired. */
-const NO_CLOUD = { available: false, cloud: { mode: 'off', usable: false, providers: [] } }
+const NO_CLOUD = { available: false, cloud: { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } } }
 
 function fakeEngine(
   probe: SpeechProbe | (() => Promise<SpeechProbe>),
@@ -229,7 +231,8 @@ describe('speechService', () => {
         transcribe: async () => ({ success: false, code: 'unavailable', message: 'live only' }),
         openStream: (options, sink) => { remoteOptions.push(options); return remote.openStream(options, sink) }
       }
-      const config = { mode, providers: key ? [GEMINI] : [], chosen: key ? GEMINI : null }
+      // As saved since the Service setting exists: a mode turned on names its service.
+      const config = { mode, service: 'gemini' as VoiceCloudService, providers: key ? [GEMINI] : [], chosen: key ? GEMINI : null }
       const service = createSpeechService([macos], { engine: gemini, config: () => config })
       return { service, local, remote, remoteOptions, config }
     }
@@ -283,7 +286,7 @@ describe('speechService', () => {
       const { service } = setup(mode, onDevice, key)
       const status = await service.status()
       expect(status.available).toBe(available)
-      expect(status.cloud).toEqual({ mode, usable: key, providers: key ? [GEMINI] : [] })
+      expect(status.cloud).toEqual({ mode, setting: 'gemini', service: 'gemini', usable: key, providers: key ? [GEMINI] : [], relay: { available: false } })
     })
 
     it('reads the cloud setting fresh on every status and every session', async () => {
@@ -339,6 +342,189 @@ describe('speechService', () => {
       expect(await service.transcribe({ wav })).toEqual({ success: false, code: 'unavailable', message: 'live only' })
       const none = setup('always', 'supported', false)
       expect(await none.service.transcribe({ wav })).toEqual({ success: false, code: 'unavailable', message: 'Add a Gemini provider' })
+    })
+  })
+
+  describe('the Cinna server relay', () => {
+    type OnDevice = 'supported' | 'unsupported' | 'denied'
+    const PROBES: Record<OnDevice, SpeechProbe> = {
+      supported: { supported: true, authorization: 'granted' },
+      unsupported: { supported: false, authorization: 'unknown', reason: 'Speech recognition needs macOS.' },
+      denied: { supported: true, authorization: 'denied' }
+    }
+    const GEMINI = { id: 'g1', name: 'My Gemini' }
+
+    function setup(mode: VoiceCloudTranscription, service: VoiceCloudService, onDevice: OnDevice, key: boolean, relayOn: boolean) {
+      const local = streamDouble()
+      const gemini = streamDouble()
+      const core = streamDouble()
+      const coreOptions: unknown[] = []
+      const engineOf = (id: 'gemini' | 'core', double: ReturnType<typeof streamDouble>, options?: unknown[]): SpeechEngine => ({
+        id,
+        probe: async () => ({ supported: true, authorization: 'granted' }),
+        transcribe: async () => ({ success: false, code: 'unavailable', message: `${id} is live only` }),
+        openStream: (o, sink) => { options?.push(o); return double.openStream(o, sink) }
+      })
+      const relay: { status: SpeechRelayStatus } = { status: relayOn ? { available: true, serverName: 'Acme' } : { available: false } }
+      const config = { mode, service, providers: key ? [GEMINI] : [], chosen: key ? GEMINI : null }
+      const service$ = createSpeechService(
+        [fakeEngine(PROBES[onDevice], undefined, local.openStream)],
+        { engine: engineOf('gemini', gemini), config: () => config },
+        { engine: engineOf('core', core, coreOptions), status: () => relay.status }
+      )
+      return { service: service$, local, gemini, core, coreOptions, relay, config }
+    }
+
+    async function pick(mode: VoiceCloudTranscription, service: VoiceCloudService, onDevice: OnDevice, key: boolean, relayOn: boolean): Promise<string> {
+      const t = setup(mode, service, onDevice, key, relayOn)
+      const events: SpeechStreamEvent[] = []
+      t.service.openStream({}, (e) => events.push(e))
+      await vi.waitFor(() => expect(t.local.sessions.length + t.gemini.sessions.length + t.core.sessions.length + events.length).toBe(1))
+      if (t.local.sessions.length) return 'macos'
+      if (t.gemini.sessions.length) return 'gemini'
+      if (t.core.sessions.length) return 'core'
+      const [event] = events
+      return event.type === 'error' ? `${event.code}: ${event.message}` : JSON.stringify(event)
+    }
+
+    const NO_RELAY = 'unavailable: Transcription through the Cinna server '
+    const NO_KEY = 'unavailable: Add a Gemini provider'
+    const NO_SERVICE = 'unavailable: Cloud transcription has no service chosen. Choose Cinna server or My Gemini key in Settings › Features'
+    const cases: [VoiceCloudTranscription, VoiceCloudService, OnDevice, boolean, boolean, string][] = [
+      // Off never leaves the device, whatever the service.
+      ['off', '', 'supported', true, true, 'macos'],
+      ['off', 'core', 'supported', true, true, 'macos'],
+      ['off', 'gemini', 'unsupported', true, true, 'unavailable: Audio input is not available on this '],
+      // No service saved with a mode on: the relay while it is available, never the billed key.
+      ['always', '', 'supported', true, true, 'core'],
+      ['always', '', 'supported', true, false, NO_SERVICE],
+      ['always', '', 'supported', false, false, NO_SERVICE],
+      ['fallback', '', 'supported', true, true, 'macos'],
+      ['fallback', '', 'denied', true, true, 'macos'],
+      ['fallback', '', 'unsupported', true, true, 'core'],
+      ['fallback', '', 'unsupported', true, false, NO_SERVICE],
+      // A chosen service is never swapped for the other.
+      ['always', 'core', 'supported', true, true, 'core'],
+      ['always', 'core', 'supported', true, false, NO_RELAY],
+      ['fallback', 'core', 'unsupported', true, false, NO_RELAY],
+      ['fallback', 'core', 'supported', true, false, 'macos'],
+      ['always', 'gemini', 'supported', true, true, 'gemini'],
+      ['always', 'gemini', 'supported', false, true, NO_KEY],
+      ['fallback', 'gemini', 'unsupported', false, true, NO_KEY]
+    ]
+    it.each(cases)('%s, service %j, on-device %s, key %s, relay %s → %s', async (mode, service, onDevice, key, relayOn, expected) => {
+      // An error is matched by the start of its sentence.
+      expect((await pick(mode, service, onDevice, key, relayOn)).slice(0, expected.length)).toBe(expected)
+    })
+
+    it.each([
+      ['always', '', false, true, 'core', true, true],
+      // Shown as the key, but not run on it: nothing is chosen.
+      ['always', '', true, false, 'gemini', false, false],
+      ['always', '', false, false, 'gemini', false, false],
+      ['always', 'core', true, false, 'core', false, false],
+      ['always', 'gemini', false, true, 'gemini', false, false],
+      ['off', '', false, true, 'core', true, false],
+      ['fallback', 'core', true, true, 'core', true, true]
+    ] as [VoiceCloudTranscription, VoiceCloudService, boolean, boolean, string, boolean, boolean][])(
+      'status: %s, service %j, key %s, relay %s → effective %s, usable %s, available (no on-device) %s',
+      async (mode, service, key, relayOn, effective, usable, available) => {
+        const t = setup(mode, service, 'unsupported', key, relayOn)
+        const status = await t.service.status()
+        expect(status.cloud).toMatchObject({ mode, setting: service, service: effective, usable, relay: relayOn ? { available: true, serverName: 'Acme' } : { available: false } })
+        expect(status.available).toBe(available)
+      }
+    )
+
+    it('a session asking for the relay gets it whatever the mode, with the replay passed on', async () => {
+      const t = setup('off', 'gemini', 'supported', true, true)
+      t.service.openStream({ engine: 'core-relay', replaySeconds: 4.2, locale: 'en-US' }, () => {})
+      await vi.waitFor(() => expect(t.core.sessions).toHaveLength(1))
+      expect(t.coreOptions[0]).toMatchObject({ engine: 'core-relay', replaySeconds: 4.2, locale: 'en-US', chosenBecause: expect.stringContaining('offer') })
+      expect(t.local.sessions).toHaveLength(0)
+    })
+
+    it('a relay session follows the requested locale, else the on-device engine\'s, else the system\'s, normalised', async () => {
+      const run = async (probeLocale: string | undefined, requested: string | undefined): Promise<unknown> => {
+        const options: unknown[] = []
+        const core: SpeechEngine = {
+          id: 'core',
+          probe: async () => ({ supported: true, authorization: 'granted' }),
+          transcribe: async () => ({ success: false, code: 'unavailable', message: 'live only' }),
+          openStream: (o) => { options.push(o); return { push() {}, stop() {}, cancel() {} } }
+        }
+        const service = createSpeechService(
+          [fakeEngine({ supported: true, authorization: 'granted', ...(probeLocale ? { locale: probeLocale } : {}) })],
+          { engine: core, config: () => ({ mode: 'always', service: 'core', providers: [], chosen: null }) },
+          { engine: core, status: () => ({ available: true, serverName: 'Acme' }) }
+        )
+        service.openStream(requested ? { locale: requested } : {}, () => {})
+        await vi.waitFor(() => expect(options).toHaveLength(1))
+        return (options[0] as { locale?: string }).locale
+      }
+      expect(await run('de_DE', 'fr-FR')).toBe('fr-FR')
+      expect(await run('de_DE', undefined)).toBe('de-DE')
+      const system = Intl.DateTimeFormat().resolvedOptions().locale
+      expect(await run(undefined, undefined)).toBe(system)
+    })
+
+    it('a session asking for the relay when it is gone is refused, and nothing else runs', async () => {
+      const t = setup('always', 'gemini', 'supported', true, false)
+      const events: SpeechStreamEvent[] = []
+      t.service.openStream({ engine: 'core-relay' }, (e) => events.push(e))
+      await vi.waitFor(() => expect(events).toHaveLength(1))
+      expect(events[0]).toMatchObject({ type: 'error', code: 'unavailable', recoverable: false })
+      expect(t.local.sessions.length + t.gemini.sessions.length + t.core.sessions.length).toBe(0)
+    })
+
+    describe('the offer on an on-device failure', () => {
+      async function failOnDevice(error: SpeechStreamEvent, relayOn = true, mode: VoiceCloudTranscription = 'off'): Promise<SpeechStreamEvent> {
+        const t = setup(mode, '', 'supported', false, relayOn)
+        const events: SpeechStreamEvent[] = []
+        t.service.openStream({}, (e) => events.push(e))
+        await vi.waitFor(() => expect(t.local.sessions).toHaveLength(1))
+        t.local.sessions[0].sink(error)
+        return events[0]
+      }
+      const OFFER = { engine: 'core-relay', serverName: 'Acme' }
+
+      it.each(['unavailable', 'failed'] as const)('offers the relay on a fatal %s error, in Off mode too', async (code) => {
+        const event = await failOnDevice({ type: 'error', code, message: 'Broke.', recoverable: false })
+        expect(event).toEqual({ type: 'error', code, message: 'Broke.', recoverable: false, offer: OFFER })
+      })
+
+      it.each(['denied', 'busy', 'no-speech'] as const)('never offers on %s', async (code) => {
+        const event = await failOnDevice({ type: 'error', code, message: 'No.', recoverable: false })
+        expect(event).not.toHaveProperty('offer')
+      })
+
+      it('never offers on a recoverable error or when the relay is not available', async () => {
+        expect(await failOnDevice({ type: 'error', code: 'failed', message: 'x', recoverable: true })).not.toHaveProperty('offer')
+        expect(await failOnDevice({ type: 'error', code: 'failed', message: 'x', recoverable: false }, false)).not.toHaveProperty('offer')
+      })
+
+      it('never offers when a cloud session fails, Gemini or the relay itself', async () => {
+        const viaGemini = setup('always', 'gemini', 'supported', true, true)
+        const geminiEvents: SpeechStreamEvent[] = []
+        viaGemini.service.openStream({}, (e) => geminiEvents.push(e))
+        await vi.waitFor(() => expect(viaGemini.gemini.sessions).toHaveLength(1))
+        viaGemini.gemini.sessions[0].sink({ type: 'error', code: 'failed', message: 'x', recoverable: false })
+        expect(geminiEvents[0]).not.toHaveProperty('offer')
+        const viaCore = setup('always', 'core', 'supported', true, true)
+        const coreEvents: SpeechStreamEvent[] = []
+        viaCore.service.openStream({}, (e) => coreEvents.push(e))
+        await vi.waitFor(() => expect(viaCore.core.sessions).toHaveLength(1))
+        viaCore.core.sessions[0].sink({ type: 'error', code: 'unavailable', message: 'x', recoverable: false })
+        expect(coreEvents[0]).not.toHaveProperty('offer')
+      })
+
+      it('never offers when no engine could open (the choice failed)', async () => {
+        const t = setup('always', 'core', 'supported', true, false)
+        const events: SpeechStreamEvent[] = []
+        t.service.openStream({}, (e) => events.push(e))
+        await vi.waitFor(() => expect(events).toHaveLength(1))
+        expect(events[0]).not.toHaveProperty('offer')
+      })
     })
   })
 })

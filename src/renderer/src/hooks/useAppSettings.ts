@@ -42,7 +42,7 @@ export function useAppSettings() {
 
 /** The settings main's `speech:status` is derived from (the cloud half). */
 function isVoiceCloudSetting(key: unknown): boolean {
-  return key === 'voiceCloudTranscription' || key === 'voiceCloudProviderId'
+  return key === 'voiceCloudTranscription' || key === 'voiceCloudProviderId' || key === 'voiceCloudService'
 }
 
 /**

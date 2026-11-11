@@ -2,7 +2,8 @@ import { ipcMain, type MessagePortMain } from 'electron'
 import { userActivation } from '../auth/activation'
 import { createLogger } from '../logger/logger'
 import { speechService } from '../speech/speechService'
-import type { SpeechStatus, SpeechStreamCommand, SpeechStreamEvent, TranscribeRequest, TranscribeResult } from '../../shared/speech'
+import { coreRelayAccess } from '../speech/coreRelayWiring'
+import type { SpeechRelayUsageResult, SpeechStatus, SpeechStreamCommand, SpeechStreamEvent, SpeechStreamOptions, TranscribeRequest, TranscribeResult } from '../../shared/speech'
 import { ipcHandle } from './_wrap'
 
 const logger = createLogger('speech-ipc')
@@ -11,6 +12,27 @@ const logger = createLogger('speech-ipc')
 const MAX_WAV_BYTES = 32 * 1024 * 1024
 /** One streamed audio chunk: the recorder sends ~100 ms (3.2 KB); 64 KB is 2 s. */
 export const MAX_STREAM_CHUNK_BYTES = 64 * 1024
+
+/** The most a continued session replays: the renderer keeps at most this much unconfirmed audio. */
+export const MAX_REPLAY_SECONDS = 60
+
+/**
+ * The renderer's stream options, kept only where well-formed: a non-empty
+ * `locale`; `engine` only as `core-relay` (the user accepted an offer); and
+ * `replaySeconds` only beside it, a finite number from 0, at most
+ * {@link MAX_REPLAY_SECONDS}. Anything else is dropped, never trusted.
+ */
+export function parseSpeechStreamOptions(options: unknown): SpeechStreamOptions {
+  const raw = (options && typeof options === 'object' ? options : {}) as Record<string, unknown>
+  const parsed: SpeechStreamOptions = {}
+  if (typeof raw.locale === 'string' && raw.locale) parsed.locale = raw.locale
+  if (raw.engine === 'core-relay') {
+    parsed.engine = 'core-relay'
+    const replay = raw.replaySeconds
+    if (typeof replay === 'number' && Number.isFinite(replay) && replay >= 0) parsed.replaySeconds = Math.min(replay, MAX_REPLAY_SECONDS)
+  }
+  return parsed
+}
 
 /** A frame from the renderer's end of a stream port, or null when it breaks the contract. */
 export function parseSpeechStreamCommand(data: unknown): SpeechStreamCommand | null {
@@ -54,9 +76,7 @@ function openSpeechStream(port: MessagePortMain, options: unknown): void {
     post({ type: 'error', code: 'failed', message: 'Session not activated — user must authenticate first', recoverable: false })
     return
   }
-  const raw = (options ?? {}) as { locale?: unknown }
-  const locale = typeof raw.locale === 'string' && raw.locale ? raw.locale : undefined
-  const session = speechService.openStream({ locale }, post)
+  const session = speechService.openStream(parseSpeechStreamOptions(options), post)
   port.on('message', (message) => {
     if (!open) return
     const command = parseSpeechStreamCommand(message.data)
@@ -89,6 +109,12 @@ function openSpeechStream(port: MessagePortMain, options: unknown): void {
 
 export function registerSpeechHandlers(): void {
   ipcHandle('speech:status', (): Promise<SpeechStatus> => speechService.status())
+
+  // This month's dictation on the profile's Cinna server, for Settings. Failures are data.
+  ipcHandle('speech:relay-usage', async (): Promise<SpeechRelayUsageResult> => {
+    if (!userActivation.isActivated()) return { ok: false, message: 'Sign in to a Cinna server to see its dictation minutes.' }
+    return coreRelayAccess.usage()
+  })
 
   // Failures come back as data: a thrown code would not reach the renderer.
   ipcHandle('speech:transcribe', async (_event, data: TranscribeRequest): Promise<TranscribeResult> => {

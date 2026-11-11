@@ -28,6 +28,7 @@ import { handoverScheduler } from './services/handoverScheduler'
 import { trayService } from './host/desktop/trayService'
 import { notificationService } from './host/desktop/notificationService'
 import { speechService } from './speech/speechService'
+import { coreRelayAccess } from './speech/coreRelayWiring'
 import { syncTrayFromSettings } from './host/desktop/traySync'
 import { createLogger } from './logger/logger'
 import { installLogBroadcast } from './host/desktop/logBroadcast'
@@ -493,6 +494,9 @@ function startup(): void {
   // Whether voice input is available (macOS speech recognition): probed once,
   // off the startup path; `speech:status` awaits the cached answer.
   void speechService.startProbe()
+  // Whether the active profile's Cinna server relays dictation: read fresh on
+  // each profile activation (and switch), never awaited by `speech:status`.
+  userActivation.onProfileReady(() => { void coreRelayAccess.refresh() })
 
   // Linux (and, later, Windows) deliver the URL by re-launching the app with it
   // appended to argv rather than through `open-url`; the E2E suite uses the

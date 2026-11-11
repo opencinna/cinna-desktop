@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SpeechStreamEvent, SpeechStreamHandle, TranscribeResult } from '../../../../../shared/speech'
-import { useVoiceRecorder, type DictationCallbacks } from './useVoiceRecorder'
+import { confirmUnconfirmed, keepUnconfirmed, MAX_UNCONFIRMED_SECONDS, useVoiceRecorder, type DictationCallbacks } from './useVoiceRecorder'
 
 // The audio graph, as far as the hook touches it.
 const track = { stop: vi.fn(), label: 'Built-in Microphone', muted: false, readyState: 'live', getSettings: () => ({ sampleRate: 48000, channelCount: 1 }), addEventListener: vi.fn() }
@@ -113,6 +113,122 @@ describe('useVoiceRecorder, streaming', () => {
     expect(dictation.onFinal).not.toHaveBeenCalled()
   })
 
+  describe('an offer to continue on the Cinna server', () => {
+    const OFFER = { engine: 'core-relay' as const, serverName: 'Acme' }
+    function setupWithOffer() {
+      const onText = vi.fn()
+      const onError = vi.fn()
+      const onOffer = vi.fn()
+      const dictation = { onSessionStart: vi.fn(), onPartial: vi.fn(), onFinal: vi.fn(), onSessionEnd: vi.fn(), onOffer } satisfies DictationCallbacks
+      const hook = renderHook(() => useVoiceRecorder({ deviceId: null, onText, onError, dictation }))
+      return { onText, onError, hook, dictation, onOffer }
+    }
+    const block = (samples: number, value = 0.5): void => {
+      act(() => worklet!.port.onmessage!({ data: new Float32Array(samples).fill(value) } as MessageEvent<Float32Array>))
+    }
+
+    it('keeps the audio since the last final and hands it over instead of the error', async () => {
+      const { onOffer, onError, dictation, hook } = setupWithOffer()
+      await record(hook, 3200)
+      act(() => streamed!.emit({ type: 'final', text: 'Confirmed.' }))
+      // After the final: two full chunks and a 100-sample tail not yet sent.
+      block(3300, 0.25)
+      act(() => streamed!.emit({ type: 'error', code: 'failed', message: 'It broke.', recoverable: false, offer: OFFER }))
+      expect(onError).not.toHaveBeenCalledWith('It broke.')
+      expect(dictation.onSessionEnd).toHaveBeenCalledWith(false)
+      expect(dictation.onSessionEnd.mock.invocationCallOrder[0]).toBeLessThan(onOffer.mock.invocationCallOrder[0])
+      const offer = onOffer.mock.calls[0][0]
+      expect(offer).toMatchObject({ message: 'It broke.', serverName: 'Acme', stopped: false })
+      // The final kept only its last second (here the 0.2 s before it), then what came after, the unsent tail included.
+      expect(offer.replay.map((chunk: Uint8Array) => chunk.byteLength)).toEqual([3200, 3200, 3200, 3200, 200])
+      expect(offer.replaySeconds).toBe(0.4)
+      expect(hook.result.current.state).toBe('idle')
+    })
+
+    it('a final drops what it confirmed but the last second, so words spoken while it was in flight are replayed', async () => {
+      const { onOffer, hook } = setupWithOffer()
+      // 3 s before the final: 30 chunks of 100 ms.
+      await record(hook, 48_000)
+      act(() => streamed!.emit({ type: 'final', text: 'Confirmed.' }))
+      block(1600, 0.25)
+      act(() => streamed!.emit({ type: 'error', code: 'failed', message: 'It broke.', recoverable: false, offer: OFFER }))
+      const offer = onOffer.mock.calls[0][0]
+      // The last second before the final (10 chunks), then the chunk after it.
+      expect(offer.replay).toHaveLength(11)
+      expect(offer.replaySeconds).toBe(1.1)
+    })
+
+    it('a continuation after stop waits longer for a long replay', async () => {
+      const { onOffer, onError, hook } = setupWithOffer()
+      await record(hook, 3200)
+      act(() => streamed!.emit({ type: 'error', code: 'failed', message: 'It broke.', recoverable: false, offer: OFFER }))
+      expect(onOffer).toHaveBeenCalled()
+      vi.useFakeTimers()
+      try {
+        // 60 s replayed: the server has 30 s more than the plain 20 s to finish.
+        act(() => hook.result.current.continueOnRelay({ replay: [new Uint8Array(60 * 32_000)], replaySeconds: 60, stopped: true }))
+        expect(hook.result.current.state).toBe('transcribing')
+        act(() => { vi.advanceTimersByTime(50_000) })
+        expect(onError).not.toHaveBeenCalledWith('Transcription took too long.')
+        act(() => { vi.advanceTimersByTime(5_001) })
+        expect(onError).toHaveBeenCalledWith('Transcription took too long.')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('continueOnRelay while a dictation runs says so instead of dropping the replay', async () => {
+      const { onError, hook } = setupWithOffer()
+      await record(hook, 3200)
+      openStream.mockClear()
+      act(() => hook.result.current.continueOnRelay({ replay: [new Uint8Array(3200)], replaySeconds: 0.1, stopped: false }))
+      expect(onError).toHaveBeenCalledWith('A dictation is already running.')
+      expect(openStream).not.toHaveBeenCalled()
+    })
+
+    it('without an onOffer handler an offer is a plain error', async () => {
+      const { onError, hook } = setup()
+      await record(hook, 2000)
+      act(() => streamed!.emit({ type: 'error', code: 'failed', message: 'It broke.', recoverable: false, offer: OFFER }))
+      expect(onError).toHaveBeenCalledWith('It broke.')
+    })
+
+    it('continueOnRelay opens the relay stream with replaySeconds, replays first, then streams the mic', async () => {
+      const { onOffer, dictation, hook } = setupWithOffer()
+      await record(hook, 3200)
+      act(() => streamed!.emit({ type: 'error', code: 'unavailable', message: 'Gone.', recoverable: false, offer: OFFER }))
+      const offer = onOffer.mock.calls[0][0]
+      worklet = null
+      openStream.mockClear()
+      act(() => hook.result.current.continueOnRelay({ replay: offer.replay, replaySeconds: offer.replaySeconds, stopped: false }))
+      expect(openStream).toHaveBeenCalledWith({ engine: 'core-relay', replaySeconds: 0.2 }, expect.any(Function))
+      expect(dictation.onSessionStart).toHaveBeenCalledTimes(2)
+      expect(streamed!.handle.pushed).toEqual(offer.replay)
+      await waitFor(() => expect(worklet).not.toBeNull())
+      block(1600, 0.75)
+      // The replayed 0.2 s, then the live chunk.
+      expect(streamed!.handle.pushed.map((chunk) => chunk.byteLength)).toEqual([3200, 3200, 3200])
+      expect(new Int16Array(streamed!.handle.pushed[2].buffer)[0]).toBe(Math.round(0.75 * 0x7fff - 0.5))
+      expect(hook.result.current.state).toBe('recording')
+    })
+
+    it('an offer after the user stopped continues without the mic and finishes', async () => {
+      const { onOffer, hook } = setupWithOffer()
+      await record(hook, 5000)
+      act(() => hook.result.current.toggle())
+      await waitFor(() => expect(streamed!.handle.stop).toHaveBeenCalled())
+      act(() => streamed!.emit({ type: 'error', code: 'failed', message: 'It broke.', recoverable: false, offer: OFFER }))
+      const offer = onOffer.mock.calls[0][0]
+      expect(offer.stopped).toBe(true)
+      getUserMedia.mockClear()
+      act(() => hook.result.current.continueOnRelay({ replay: offer.replay, replaySeconds: offer.replaySeconds, stopped: true }))
+      expect(streamed!.handle.pushed.map((chunk) => chunk.byteLength)).toEqual([3200, 3200, 3200, 400])
+      expect(streamed!.handle.stop).toHaveBeenCalled()
+      expect(hook.result.current.state).toBe('transcribing')
+      expect(getUserMedia).not.toHaveBeenCalled()
+    })
+  })
+
   it('only logs a recoverable error', async () => {
     const { dictation, onError, hook } = setup()
     await record(hook, 2000)
@@ -174,5 +290,35 @@ describe('useVoiceRecorder, streaming', () => {
     act(() => hook.result.current.toggle())
     await waitFor(() => expect(onText).toHaveBeenCalledWith('batch words'))
     expect(openStream).not.toHaveBeenCalled()
+  })
+})
+
+describe('confirmUnconfirmed', () => {
+  it('keeps the newest chunks that make up the kept span, and drops the rest', () => {
+    const live = { unconfirmed: [] as Uint8Array[], unconfirmedBytes: 0 }
+    for (let i = 1; i <= 5; i++) keepUnconfirmed(live, new Uint8Array(10).fill(i))
+    confirmUnconfirmed(live, 25)
+    expect(live.unconfirmed.map((chunk) => chunk[0])).toEqual([3, 4, 5])
+    expect(live.unconfirmedBytes).toBe(30)
+    confirmUnconfirmed(live, 0)
+    expect(live.unconfirmed).toEqual([])
+    expect(live.unconfirmedBytes).toBe(0)
+  })
+})
+
+describe('keepUnconfirmed', () => {
+  it('drops the oldest chunks past the cap, never the newest', () => {
+    const live = { unconfirmed: [] as Uint8Array[], unconfirmedBytes: 0 }
+    for (let i = 1; i <= 4; i++) keepUnconfirmed(live, new Uint8Array(10).fill(i), 25)
+    expect(live.unconfirmed.map((chunk) => chunk[0])).toEqual([3, 4])
+    expect(live.unconfirmedBytes).toBe(20)
+    keepUnconfirmed(live, new Uint8Array(40).fill(9), 25)
+    expect(live.unconfirmed.map((chunk) => chunk[0])).toEqual([9])
+  })
+
+  it('holds 60 seconds by default', () => {
+    const live = { unconfirmed: [] as Uint8Array[], unconfirmedBytes: 0 }
+    for (let i = 0; i < 700; i++) keepUnconfirmed(live, new Uint8Array(3200))
+    expect(live.unconfirmedBytes).toBe(MAX_UNCONFIRMED_SECONDS * 32_000)
   })
 })

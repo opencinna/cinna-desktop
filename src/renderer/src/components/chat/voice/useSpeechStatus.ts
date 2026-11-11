@@ -1,7 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
-import { isVoiceCloudTranscription, type SpeechCloudProvider, type SpeechCloudStatus, type SpeechStatus } from '../../../../../shared/speech'
+import { isVoiceCloudService, isVoiceCloudTranscription, type SpeechCloudProvider, type SpeechCloudStatus, type SpeechRelayStatus, type SpeechRelayUsageResult, type SpeechStatus } from '../../../../../shared/speech'
 
-const NO_CLOUD: SpeechCloudStatus = { mode: 'off', usable: false, providers: [] }
+const NO_CLOUD: SpeechCloudStatus = { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } }
+
+function asRelay(value: unknown): SpeechRelayStatus {
+  if (!value || typeof value !== 'object') return { available: false }
+  const relay = value as Partial<SpeechRelayStatus>
+  if (relay.available !== true) return { available: false }
+  return typeof relay.serverName === 'string' && relay.serverName ? { available: true, serverName: relay.serverName } : { available: true }
+}
 const UNSUPPORTED: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', available: false, cloud: NO_CLOUD }
 
 function asCloud(value: unknown): SpeechCloudStatus {
@@ -10,7 +17,18 @@ function asCloud(value: unknown): SpeechCloudStatus {
   const providers = Array.isArray(cloud.providers)
     ? cloud.providers.filter((p): p is SpeechCloudProvider => !!p && typeof p.id === 'string' && typeof p.name === 'string')
     : []
-  return { mode: isVoiceCloudTranscription(cloud.mode) ? cloud.mode : 'off', usable: cloud.usable === true && providers.length > 0, providers }
+  const relay = asRelay(cloud.relay)
+  // An older main has no service: Gemini, usable with a provider.
+  const service = cloud.service === 'core' ? 'core' : 'gemini'
+  const usable = cloud.usable === true && (service === 'core' ? relay.available : providers.length > 0)
+  return {
+    mode: isVoiceCloudTranscription(cloud.mode) ? cloud.mode : 'off',
+    setting: isVoiceCloudService(cloud.setting) ? cloud.setting : '',
+    service,
+    usable,
+    providers,
+    relay
+  }
 }
 
 /** A well-formed status, or unsupported: tests and older preloads have no `speech` API. */
@@ -37,9 +55,11 @@ export async function fetchSpeechStatus(): Promise<SpeechStatus> {
  * Whether the composer offers voice input. Main probes the on-device engine
  * once at startup; until authorization reads `granted` main re-reads it, so
  * this refetches on window focus — coming back from System Settings enables
- * the button. The cloud half (setting, usable Gemini providers) is read fresh
- * by main; the query is invalidated when an app setting or a provider changes
- * (`useAppSettings`, `useProviders`).
+ * the button. The cloud half (settings, usable Gemini providers, the Cinna
+ * server relay's last known availability) is read by main without waiting on
+ * the network; the query is invalidated when an app setting or a provider
+ * changes (`useAppSettings`, `useProviders`) and when main publishes
+ * `speech:status-changed` (`App.tsx`).
  */
 export function useSpeechStatus(): SpeechStatus {
   const { data } = useQuery({
@@ -64,3 +84,28 @@ export function speechBlocked(status: SpeechStatus): boolean {
 }
 
 export const SPEECH_BLOCKED_HINT = 'Allow Cinna in System Settings › Privacy & Security › Speech Recognition'
+
+/** This month's dictation on the Cinna server, for Settings; failures are data. Fetched while the row shows. */
+export const SPEECH_RELAY_USAGE_QUERY_KEY = ['speech', 'relay-usage'] as const
+
+/** This month's dictation on the Cinna server, read only while `enabled` (the row shows); undefined until it answers. */
+export function useSpeechRelayUsage(enabled: boolean): SpeechRelayUsageResult | undefined {
+  const { data } = useQuery({
+    queryKey: SPEECH_RELAY_USAGE_QUERY_KEY,
+    queryFn: fetchSpeechRelayUsage,
+    enabled,
+    staleTime: 60_000,
+    retry: false
+  })
+  return data
+}
+
+export async function fetchSpeechRelayUsage(): Promise<SpeechRelayUsageResult> {
+  const speech = (window.api as { speech?: { relayUsage?: () => Promise<SpeechRelayUsageResult> } } | undefined)?.speech
+  if (typeof speech?.relayUsage !== 'function') return { ok: false, message: 'Restart Cinna to see the dictation minutes.' }
+  try {
+    return await speech.relayUsage()
+  } catch {
+    return { ok: false, message: 'Could not read the dictation minutes.' }
+  }
+}

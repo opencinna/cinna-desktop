@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SpeechStreamEvent } from '../../shared/speech'
 
 const ipcOnHandlers = new Map<string, (...args: unknown[]) => unknown>()
+const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>()
 vi.mock('electron', () => ({
   ipcMain: { on: (channel: string, handler: (...args: unknown[]) => unknown) => { ipcOnHandlers.set(channel, handler) } }
 }))
-vi.mock('./_wrap', () => ({ ipcHandle: () => undefined }))
+vi.mock('./_wrap', () => ({ ipcHandle: (channel: string, handler: (...args: unknown[]) => unknown) => { ipcHandlers.set(channel, handler) } }))
+const relayUsage = vi.fn(async () => ({ ok: true, enabled: true, usedSeconds: 60, capSeconds: null, periodEnd: '' }))
+vi.mock('../speech/coreRelayWiring', () => ({ coreRelayAccess: { usage: () => relayUsage() } }))
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -18,7 +21,7 @@ let sink: ((event: SpeechStreamEvent) => void) | null = null
 const openStream = vi.fn((_options: unknown, s: (event: SpeechStreamEvent) => void) => { sink = s; return session })
 vi.mock('../speech/speechService', () => ({ speechService: { openStream: (...args: [unknown, (event: SpeechStreamEvent) => void]) => openStream(...args) } }))
 
-const { registerSpeechHandlers, parseSpeechStreamCommand, MAX_STREAM_CHUNK_BYTES } = await import('./speech.ipc')
+const { registerSpeechHandlers, parseSpeechStreamCommand, parseSpeechStreamOptions, MAX_STREAM_CHUNK_BYTES, MAX_REPLAY_SECONDS } = await import('./speech.ipc')
 registerSpeechHandlers()
 
 class FakePort extends EventEmitter {
@@ -62,7 +65,44 @@ describe('parseSpeechStreamCommand', () => {
   })
 })
 
+describe('parseSpeechStreamOptions', () => {
+  it('keeps a locale, and the relay engine with its replay seconds', () => {
+    expect(parseSpeechStreamOptions({ locale: 'de-DE' })).toEqual({ locale: 'de-DE' })
+    expect(parseSpeechStreamOptions({ engine: 'core-relay', replaySeconds: 3.5 })).toEqual({ engine: 'core-relay', replaySeconds: 3.5 })
+    expect(parseSpeechStreamOptions({ engine: 'core-relay', replaySeconds: 0 })).toEqual({ engine: 'core-relay', replaySeconds: 0 })
+  })
+  it('drops any other engine, and replay seconds without the relay engine', () => {
+    expect(parseSpeechStreamOptions({ engine: 'gemini-live', replaySeconds: 3 })).toEqual({})
+    expect(parseSpeechStreamOptions({ engine: 'macos' })).toEqual({})
+    expect(parseSpeechStreamOptions({ replaySeconds: 3 })).toEqual({})
+  })
+  it('drops malformed replay seconds and caps large ones', () => {
+    for (const replaySeconds of [-1, Number.NaN, Number.POSITIVE_INFINITY, '3', null]) {
+      expect(parseSpeechStreamOptions({ engine: 'core-relay', replaySeconds })).toEqual({ engine: 'core-relay' })
+    }
+    expect(parseSpeechStreamOptions({ engine: 'core-relay', replaySeconds: 600 })).toEqual({ engine: 'core-relay', replaySeconds: MAX_REPLAY_SECONDS })
+  })
+  it('reads garbage as no options', () => {
+    expect(parseSpeechStreamOptions(null)).toEqual({})
+    expect(parseSpeechStreamOptions('core-relay')).toEqual({})
+    expect(parseSpeechStreamOptions({ locale: '' })).toEqual({})
+  })
+})
+
+describe('speech:relay-usage', () => {
+  it('answers the relay usage when activated, and data when not', async () => {
+    expect(await ipcHandlers.get('speech:relay-usage')?.({})).toMatchObject({ ok: true, usedSeconds: 60 })
+    activated = false
+    expect(await ipcHandlers.get('speech:relay-usage')?.({})).toMatchObject({ ok: false, message: expect.any(String) })
+  })
+})
+
 describe('speech:stream', () => {
+  it('passes the validated relay options to the service', () => {
+    open({ locale: 'en-US', engine: 'core-relay', replaySeconds: 2, extra: 'x' })
+    expect(openStream).toHaveBeenCalledWith({ locale: 'en-US', engine: 'core-relay', replaySeconds: 2 }, expect.any(Function))
+  })
+
   it('opens a session with the locale from the payload and forwards commands', () => {
     const port = open({ locale: 'de-DE' })
     expect(port.started).toBe(true)

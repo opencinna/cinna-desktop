@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { SpeechStatus } from '../../../../../shared/speech'
 
 type RecorderOptions = { onText: (text: string) => void; onError: (message: string | null) => void; dictation?: import('./useVoiceRecorder').DictationCallbacks }
@@ -11,6 +11,7 @@ const recorder = vi.hoisted(() => ({
   live: null as 'idle' | 'recording' | 'transcribing' | null,
   current: () => recorder.live ?? recorder.state,
   toggle: vi.fn(),
+  continueOnRelay: vi.fn(),
   options: null as RecorderOptions | null
 }))
 vi.mock('./useVoiceRecorder', () => ({
@@ -51,17 +52,18 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
   return createElement(QueryClientProvider, { client }, children)
 }
 
-const NO_CLOUD: SpeechStatus['cloud'] = { mode: 'off', usable: false, providers: [] }
+const NO_CLOUD: SpeechStatus['cloud'] = { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } }
 const supported: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', available: true, cloud: NO_CLOUD }
 const GEMINI_ONLY: SpeechStatus = {
   supported: false, engine: null, authorization: 'unknown', reason: 'Speech recognition needs macOS.', available: true,
-  cloud: { mode: 'fallback', usable: true, providers: [{ id: 'g1', name: 'Gemini' }] }
+  cloud: { mode: 'fallback', setting: '', service: 'gemini', usable: true, providers: [{ id: 'g1', name: 'Gemini' }], relay: { available: false } }
 }
 
 beforeEach(() => {
   recorder.state = 'idle'
   recorder.live = null
   recorder.toggle.mockReset()
+  recorder.continueOnRelay.mockReset()
   status.mockReset()
   localStorage.removeItem('cinna-voice-input-device')
   useUIStore.setState({ voiceInputDeviceId: null, showVoiceInput: true })
@@ -90,14 +92,14 @@ describe('VoiceInputButton', () => {
     fireEvent.click(button)
     expect(recorder.toggle).toHaveBeenCalledTimes(1)
     unmount()
-    status.mockResolvedValue({ ...GEMINI_ONLY, available: false, cloud: { mode: 'fallback', usable: false, providers: [] } })
+    status.mockResolvedValue({ ...GEMINI_ONLY, available: false, cloud: { mode: 'fallback', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } } })
     const second = render(createElement(VoiceInputButton, { onText: vi.fn(), onError: vi.fn(), onSend: vi.fn() }), { wrapper })
     await waitFor(() => expect(status).toHaveBeenCalledTimes(2))
     expect(second.container.innerHTML).toBe('')
   })
 
   it('is not blocked by a denied on-device permission while cloud transcription is on Always', async () => {
-    status.mockResolvedValue({ ...supported, authorization: 'denied', cloud: { mode: 'always', usable: true, providers: [{ id: 'g1', name: 'Gemini' }] } })
+    status.mockResolvedValue({ ...supported, authorization: 'denied', cloud: { mode: 'always', setting: '', service: 'gemini', usable: true, providers: [{ id: 'g1', name: 'Gemini' }], relay: { available: false } } })
     const onError = vi.fn()
     render(createElement(VoiceInputButton, { onText: vi.fn(), onError, onSend: vi.fn() }), { wrapper })
     fireEvent.click(await screen.findByRole('button', { name: 'Audio input' }))
@@ -132,6 +134,132 @@ describe('VoiceInputButton', () => {
     view.rerender(createElement(VoiceInputButton, props))
     expect(screen.queryByTestId('voice-cloud-mark')).toBeNull()
     expect(screen.getByRole('button', { name: 'Audio input' }).getAttribute('aria-describedby')).toBeNull()
+  })
+
+  it('names the Cinna server in the cloud mark while the relay transcribes', async () => {
+    status.mockResolvedValue({ ...supported, cloud: { ...NO_CLOUD, relay: { available: true, serverName: 'Acme' } } })
+    const props = { onText: vi.fn(), onError: vi.fn(), onSend: vi.fn(), dictation: { draftKey: 'chat-1', setDraft: vi.fn() } }
+    const view = render(createElement(VoiceInputButton, props), { wrapper })
+    await screen.findByRole('button', { name: 'Audio input' })
+    recorder.state = 'recording'
+    act(() => { recorder.options?.dictation?.onSessionStart() })
+    act(() => { recorder.options?.dictation?.onBackend?.('core-relay') })
+    view.rerender(createElement(VoiceInputButton, props))
+    const button = screen.getByRole('button', { name: 'Stop recording' })
+    expect(screen.getByTestId('voice-cloud-mark')).toBeTruthy()
+    expect(document.getElementById(button.getAttribute('aria-describedby') ?? '')?.textContent).toBe('Transcribing on Acme: audio leaves this computer.')
+    expect(button.getAttribute('title')).not.toContain('Google')
+  })
+
+  describe('the offer to continue on the Cinna server', () => {
+    const OFFER = { message: 'Speech recognition stopped unexpectedly.', serverName: 'Acme', replay: [new Uint8Array(32_000), new Uint8Array(32_000)], replaySeconds: 2, stopped: false }
+
+    /** A composer whose draft the dictation writes, with the caret where the test puts it. */
+    async function mountComposer(initial: string) {
+      const composer = document.createElement('textarea')
+      document.body.appendChild(composer)
+      onTestFinished(() => composer.remove())
+      composer.value = initial
+      const draft = { text: initial }
+      const setDraft = vi.fn((update: (current: string) => string) => {
+        draft.text = update(draft.text)
+        composer.value = draft.text
+      })
+      const onError = vi.fn()
+      const props = { onText: vi.fn(), onError, onSend: vi.fn(), composerRef: { current: composer }, dictation: { draftKey: 'chat-1', setDraft } }
+      status.mockResolvedValue(supported)
+      const view = render(createElement(VoiceInputButton, props), { wrapper })
+      await screen.findByRole('button', { name: 'Audio input' })
+      return { composer, draft, onError, view, props }
+    }
+
+    function failWithOffer(): void {
+      act(() => { recorder.options?.dictation?.onSessionEnd(false) })
+      act(() => { recorder.options?.dictation?.onOffer?.(OFFER) })
+    }
+
+    it('asks in a dialog instead of a toast; Keep closes it and sends nothing', async () => {
+      const { onError } = await mountComposer('')
+      act(() => { recorder.options?.dictation?.onSessionStart() })
+      failWithOffer()
+      const dialog = screen.getByRole('dialog', { name: 'Dictation stopped' })
+      expect(dialog.textContent).toContain('Speech recognition stopped unexpectedly.')
+      expect(dialog.textContent).toContain('Continue with Acme? The last 2 seconds that were not transcribed yet will be sent to Acme, and dictation continues there. If you keep the text, the 2 seconds not yet transcribed are discarded.')
+      expect(onError).not.toHaveBeenCalledWith(expect.any(String))
+      // The safe choice has focus: Enter on arrival sends nothing.
+      expect(document.activeElement?.textContent).toBe('Keep the text')
+      fireEvent.click(screen.getByRole('button', { name: 'Keep the text' }))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(recorder.continueOnRelay).not.toHaveBeenCalled()
+    })
+
+    it('Escape is Keep', async () => {
+      await mountComposer('')
+      act(() => { recorder.options?.dictation?.onSessionStart() })
+      failWithOffer()
+      fireEvent.keyDown(document, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      expect(recorder.continueOnRelay).not.toHaveBeenCalled()
+    })
+
+    it('Continue starts the relay session with the saved audio, and its text lands right after the failed dictation', async () => {
+      const { composer, draft } = await mountComposer('Start. End')
+      // Dictating at the caret after "Start.".
+      composer.setSelectionRange(6, 6)
+      act(() => { recorder.options?.dictation?.onSessionStart() })
+      act(() => { recorder.options?.dictation?.onFinal('one') })
+      expect(draft.text).toBe('Start. one End')
+      failWithOffer()
+      // The caret moved meanwhile; the continuation must not follow it.
+      composer.setSelectionRange(0, 0)
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(recorder.continueOnRelay).toHaveBeenCalledWith({ replay: OFFER.replay, replaySeconds: 2, stopped: false })
+      act(() => { recorder.options?.dictation?.onSessionStart() })
+      act(() => { recorder.options?.dictation?.onFinal('two') })
+      expect(draft.text).toBe('Start. one two End')
+    })
+
+    it('names the verb Finish after a stop, and says nothing is discarded when nothing waits', async () => {
+      await mountComposer('')
+      act(() => { recorder.options?.dictation?.onSessionStart() })
+      act(() => { recorder.options?.dictation?.onSessionEnd(false) })
+      act(() => { recorder.options?.dictation?.onOffer?.({ ...OFFER, replay: [], replaySeconds: 0, stopped: true }) })
+      const dialog = screen.getByRole('dialog', { name: 'Dictation stopped' })
+      expect(screen.getByRole('button', { name: 'Finish' })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+      expect(dialog.textContent).not.toContain('discarded')
+    })
+
+    it('the headphone button neither starts a dictation nor sends while the offer is asked', async () => {
+      const { props } = await mountComposer('')
+      act(() => { recorder.options?.dictation?.onSessionStart() })
+      failWithOffer()
+      act(() => { media.handlers?.toggle() })
+      act(() => { media.handlers?.send() })
+      expect(recorder.toggle).not.toHaveBeenCalled()
+      expect(props.onSend).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      expect(recorder.continueOnRelay).toHaveBeenCalledTimes(1)
+      // Answered: the headphone button works again.
+      act(() => { media.handlers?.toggle() })
+      expect(recorder.toggle).toHaveBeenCalledTimes(1)
+    })
+
+    it('a pending headphone send from the failed session is dropped', async () => {
+      const { props } = await mountComposer('')
+      recorder.state = 'recording'
+      recorder.live = 'recording'
+      act(() => { recorder.options?.dictation?.onSessionStart() })
+      act(() => { media.handlers?.send() })
+      recorder.state = 'idle'
+      recorder.live = null
+      failWithOffer()
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      act(() => { recorder.options?.dictation?.onSessionStart() })
+      act(() => { recorder.options?.dictation?.onSessionEnd(true) })
+      expect(props.onSend).not.toHaveBeenCalled()
+    })
   })
 
   it('toggles recording on click', async () => {

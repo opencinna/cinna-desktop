@@ -3,13 +3,15 @@ import { llmProviderRepo, type LlmProviderRow } from '../db/llmProviders'
 import { getManagedResourceScopes } from '../auth/scope'
 import { decryptApiKey } from '../security/keystore'
 import { createLogger } from '../logger/logger'
-import type { SpeechCloudProvider, VoiceCloudTranscription } from '../../shared/speech'
+import type { SpeechCloudProvider, VoiceCloudService, VoiceCloudTranscription } from '../../shared/speech'
 
 const logger = createLogger('speech')
 
 /** What cloud transcription is set to and can use, without decrypting anything. */
 export interface CloudTranscriptionConfig {
   mode: VoiceCloudTranscription
+  /** The Service setting (`''` = the Cinna server when its relay is available, else Gemini). Optional for older callers: absent is `''`. */
+  service?: VoiceCloudService
   /** Usable Gemini providers, in repo order. */
   providers: SpeechCloudProvider[]
   /** The one a session would bill: the chosen id when usable, else the first. */
@@ -40,7 +42,7 @@ export function readCloudConfig(): CloudTranscriptionConfig {
   const rows = llmProviderRepo.listByUserIds(getManagedResourceScopes())
   const providers = rows.filter(isUsableGemini).map((row) => ({ id: row.id, name: row.name }))
   const chosenRow = pick(rows, appSettingsRepo.get('voiceCloudProviderId'))
-  return { mode, providers, chosen: chosenRow ? { id: chosenRow.id, name: chosenRow.name } : null }
+  return { mode, service: appSettingsRepo.get('voiceCloudService'), providers, chosen: chosenRow ? { id: chosenRow.id, name: chosenRow.name } : null }
 }
 
 /**

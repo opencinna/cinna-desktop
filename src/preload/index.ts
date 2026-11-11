@@ -7,7 +7,7 @@ import type { AgentEngine } from '../shared/engine'
 import type { JobExecuteResult } from '../shared/jobs'
 import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
 import type { AutonomousTaskStart } from '../shared/taskRuntime'
-import { isSpeechStreamEvent, type SpeechStatus, type SpeechStreamCommand, type SpeechStreamEvent, type SpeechStreamHandle, type SpeechStreamOptions, type TranscribeRequest, type TranscribeResult } from '../shared/speech'
+import { isSpeechStreamEvent, SPEECH_STATUS_CHANGED_CHANNEL, type SpeechRelayUsageResult, type SpeechStatus, type SpeechStreamCommand, type SpeechStreamEvent, type SpeechStreamHandle, type SpeechStreamOptions, type TranscribeRequest, type TranscribeResult } from '../shared/speech'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type {
@@ -2780,6 +2780,14 @@ const api = {
   speech: {
     /** Whether voice input works here, and through which engine. Probed once in main. */
     status: (): Promise<SpeechStatus> => ipcRenderer.invoke('speech:status'),
+    /** Main's relay availability changed: refetch `status()`. Returns an unsubscribe. */
+    onStatusChanged: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on(SPEECH_STATUS_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(SPEECH_STATUS_CHANGED_CHANNEL, listener)
+    },
+    /** This month's dictation on the profile's Cinna server. Failures are data (`ok: false`). */
+    relayUsage: (): Promise<SpeechRelayUsageResult> => ipcRenderer.invoke('speech:relay-usage'),
     /** A 16-bit PCM mono WAV → text. Failures are data (`success: false`, `code`). */
     transcribe: (request: TranscribeRequest): Promise<TranscribeResult> =>
       ipcRenderer.invoke('speech:transcribe', request),
@@ -2812,7 +2820,11 @@ const api = {
       const post = (command: SpeechStreamCommand): void => {
         if (!ended) channel.port1.postMessage(command)
       }
-      ipcRenderer.postMessage('speech:stream', { locale: options?.locale }, [channel.port2])
+      ipcRenderer.postMessage('speech:stream', {
+        locale: options?.locale,
+        ...(options?.engine ? { engine: options.engine } : {}),
+        ...(typeof options?.replaySeconds === 'number' ? { replaySeconds: options.replaySeconds } : {})
+      }, [channel.port2])
       return {
         push: (pcm) => { if (!stopped) post({ type: 'audio', pcm }) },
         stop: () => {

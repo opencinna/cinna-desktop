@@ -15,7 +15,7 @@ import { isWorkComplexity } from '../../shared/modelFamilies'
 import { isAiSpendingLevel } from '../../shared/aiSpendingLevel'
 import { isClaudeAuthMode } from '../../shared/claudeAuthMode'
 import { isCapabilityState } from '../../shared/capabilities'
-import { isVoiceCloudTranscription } from '../../shared/speech'
+import { isVoiceCloudService, isVoiceCloudTranscription } from '../../shared/speech'
 
 const logger = createLogger('app-settings')
 
@@ -286,6 +286,11 @@ const VALUE_CHECKS: {
   voiceCloudTranscription: (value) => {
     if (!isVoiceCloudTranscription(value)) {
       throw new AppSettingsError('invalid_value', 'Choose Off, When on-device is unavailable, or Always.')
+    }
+  },
+  voiceCloudService: (value) => {
+    if (!isVoiceCloudService(value)) {
+      throw new AppSettingsError('invalid_value', 'Choose Cinna server or My Gemini key.')
     }
   },
   notesCapability: (value) => assertCapabilityDecision(value),

@@ -20,8 +20,30 @@ const SAMPLE_RATE = 16000
 const MIN_SAMPLES = SAMPLE_RATE / 4
 /** Streamed audio goes to main in chunks of this many samples (100 ms). */
 const STREAM_CHUNK_SAMPLES = SAMPLE_RATE / 10
-/** After stop, how long to wait for the engine's last words before giving up. */
-const FINISH_TIMEOUT_MS = 20_000
+/**
+ * After stop, how long to wait for the engine's last words before giving up.
+ * Above main's own limits for the relay (10 s to an open socket, then 10 s
+ * after the stop frame), so main's specific error arrives before this one.
+ */
+const FINISH_TIMEOUT_MS = 25_000
+/**
+ * A continuation's replay is transcribed after the stop too: this much longer
+ * per replayed second (main's relay gives the server the same per second).
+ */
+const FINISH_MS_PER_REPLAY_SECOND = 500
+/**
+ * Audio not yet confirmed by a final is kept for a continuation on the Cinna
+ * server; at most this many seconds of it, the oldest dropped first (the
+ * replay main accepts is capped the same).
+ */
+export const MAX_UNCONFIRMED_SECONDS = 60
+const MAX_UNCONFIRMED_BYTES = MAX_UNCONFIRMED_SECONDS * SAMPLE_RATE * 2
+/**
+ * Kept past a final: the words spoken while that final was in flight are in
+ * this audio, and no later final may have confirmed them yet.
+ */
+export const KEEP_AFTER_FINAL_SECONDS = 1
+const KEEP_AFTER_FINAL_BYTES = KEEP_AFTER_FINAL_SECONDS * SAMPLE_RATE * 2
 
 /** Running levels, so a streamed recording need not keep its samples for the log line. */
 interface Levels {
@@ -52,6 +74,42 @@ interface LiveSession {
   ended: boolean
   finishTimer: ReturnType<typeof setTimeout> | null
   backend: SpeechBackend | null
+  /** PCM chunks pushed since the last final, oldest first, capped at {@link MAX_UNCONFIRMED_SECONDS}. */
+  unconfirmed: Uint8Array[]
+  unconfirmedBytes: number
+  /** Replayed at the start of a continued session: counts as recorded for the "nothing recorded" check. */
+  replaySamples: number
+}
+
+/** A chunk sent to the engine, kept until a final confirms it; the oldest go past the cap. */
+export function keepUnconfirmed(live: Pick<LiveSession, 'unconfirmed' | 'unconfirmedBytes'>, chunk: Uint8Array, maxBytes = MAX_UNCONFIRMED_BYTES): void {
+  live.unconfirmed.push(chunk)
+  live.unconfirmedBytes += chunk.byteLength
+  while (live.unconfirmedBytes > maxBytes && live.unconfirmed.length > 1) {
+    live.unconfirmedBytes -= live.unconfirmed.shift()!.byteLength
+  }
+}
+
+/**
+ * A final confirmed the audio before it: drop it, except the last
+ * {@link KEEP_AFTER_FINAL_SECONDS}, which may hold words the final does not.
+ */
+export function confirmUnconfirmed(live: Pick<LiveSession, 'unconfirmed' | 'unconfirmedBytes'>, keepBytes = KEEP_AFTER_FINAL_BYTES): void {
+  while (live.unconfirmed.length > 0 && live.unconfirmedBytes - live.unconfirmed[0].byteLength >= keepBytes) {
+    live.unconfirmedBytes -= live.unconfirmed.shift()!.byteLength
+  }
+}
+
+/** The user may continue a failed dictation on the Cinna server: what to tell them, and what would be sent. */
+export interface DictationOffer {
+  /** The failure, as main put it. */
+  message: string
+  serverName: string
+  /** The unconfirmed audio, oldest first: replayed before the live audio if the user agrees. */
+  replay: Uint8Array[]
+  replaySeconds: number
+  /** It failed after the user had stopped: a continuation only finishes the replay, the mic stays off. */
+  stopped: boolean
 }
 
 function releaseSession(session: Session): void {
@@ -146,6 +204,11 @@ export interface DictationCallbacks {
   onBackend?: (backend: SpeechBackend) => void
   /** The session is over: normally, or after a freeze, cancel or failure. `completed` only for the engine's own `stop`. */
   onSessionEnd: (completed: boolean) => void
+  /**
+   * The session failed and main offers the Cinna server: called after
+   * `onSessionEnd`, instead of the error toast. Without it the error is a toast.
+   */
+  onOffer?: (offer: DictationOffer) => void
 }
 
 /**
@@ -175,6 +238,11 @@ export function useVoiceRecorder({
   toggle: () => void
   /** Streaming only: stop listening now and keep what is shown (`freeze`) or only what is confirmed (`cancel`). */
   end: () => void
+  /**
+   * The user accepted an offer: a new session on the Cinna server's relay,
+   * the saved audio replayed first, then the mic live again.
+   */
+  continueOnRelay: (offer: Omit<DictationOffer, 'message' | 'serverName'>) => void
 } {
   const [state, setState] = useState<VoiceRecorderState>('idle')
   const stateRef = useRef<VoiceRecorderState>('idle')
@@ -222,6 +290,8 @@ export function useVoiceRecorder({
         dictation?.onPartial(event.text)
         return
       case 'final':
+        // Confirmed: what came before it needs no replay, but the last second may hold words spoken while it was in flight.
+        confirmUnconfirmed(live)
         dictation?.onFinal(event.text)
         return
       case 'stop':
@@ -233,13 +303,42 @@ export function useVoiceRecorder({
           logger.warn('dictation engine reported a recoverable error', { code: event.code, message: event.message })
           return
         }
-        logger.warn('dictation failed', { code: event.code, message: event.message })
+        logger.warn('dictation failed', { code: event.code, message: event.message, offered: !!event.offer })
+        if (event.offer && dictation?.onOffer) {
+          // Audio still waiting to fill a chunk was never sent: it is unconfirmed too.
+          const replay = live.pendingLength > 0 ? [...live.unconfirmed, pcmBytes(live.pending, live.pendingLength)] : [...live.unconfirmed]
+          const bytes = replay.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+          const stopped = session.stopped
+          finishLive(session, false)
+          dictation.onOffer({
+            message: event.message,
+            serverName: event.offer.serverName,
+            replay,
+            replaySeconds: Math.round((bytes / 2 / SAMPLE_RATE) * 10) / 10,
+            stopped
+          })
+          return
+        }
         finishLive(session, false)
         callbacks.current.onError(event.message)
     }
   }, [finishLive])
 
-  const start = useCallback(async () => {
+  /** No more audio: the engine finalizes, and gets {@link FINISH_TIMEOUT_MS} to answer. */
+  const finishStream = useCallback((session: Session, live: LiveSession) => {
+    move('transcribing')
+    live.handle.stop()
+    const timeoutMs = FINISH_TIMEOUT_MS + Math.round((live.replaySamples / SAMPLE_RATE) * FINISH_MS_PER_REPLAY_SECOND)
+    live.finishTimer = setTimeout(() => {
+      if (live.ended) return
+      logger.warn('dictation did not finish in time', { timeoutMs })
+      live.handle.cancel()
+      finishLive(session, false)
+      callbacks.current.onError('Transcription took too long.')
+    }, timeoutMs)
+  }, [move, finishLive])
+
+  const start = useCallback(async (continuation?: Omit<DictationOffer, 'message' | 'serverName'>) => {
     const session: Session = { stream: null, context: null, chunks: [], stopped: false, live: null }
     sessionRef.current = session
     callbacks.current.onError(null)
@@ -255,11 +354,30 @@ export function useVoiceRecorder({
         pendingLength: 0,
         ended: false,
         finishTimer: null,
-        backend: null
+        backend: null,
+        unconfirmed: [],
+        unconfirmedBytes: 0,
+        replaySamples: 0
       }
       session.live = live
       callbacks.current.dictation?.onSessionStart()
-      live.handle = api.stream({}, (event) => onStreamEvent(session, event))
+      const options: SpeechStreamOptions = continuation ? { engine: 'core-relay', replaySeconds: continuation.replaySeconds } : {}
+      live.handle = api.stream(options, (event) => onStreamEvent(session, event))
+      if (continuation) {
+        // The failed session's unconfirmed audio goes first, in one burst.
+        for (const chunk of continuation.replay) {
+          live.handle.push(chunk)
+          keepUnconfirmed(live, chunk)
+          live.replaySamples += chunk.byteLength / 2
+        }
+        logger.info('dictation continues on the Cinna server', { replaySeconds: continuation.replaySeconds, chunks: continuation.replay.length, stopped: continuation.stopped })
+        if (continuation.stopped) {
+          // The user had stopped before the failure: finish what was said, no mic.
+          session.stopped = true
+          finishStream(session, live)
+          return
+        }
+      }
     }
     try {
       session.stream = await openMic(callbacks.current.deviceId)
@@ -303,7 +421,11 @@ export function useVoiceRecorder({
         }
         if (live.ended || session.stopped) return
         noteLevels(live.levels, event.data)
-        for (const chunk of appendPcm(live, event.data)) live.handle.push(pcmBytes(chunk))
+        for (const chunk of appendPcm(live, event.data)) {
+          const bytes = pcmBytes(chunk)
+          live.handle.push(bytes)
+          keepUnconfirmed(live, bytes)
+        }
       }
       // Pulled through a silent gain to the destination, so the graph runs
       // without playing the mic back.
@@ -327,7 +449,7 @@ export function useVoiceRecorder({
         callbacks.current.onError(micErrorMessage(err))
       }
     }
-  }, [move, onStreamEvent, finishLive])
+  }, [move, onStreamEvent, finishLive, finishStream])
 
   /** Streaming: no more audio; the engine finalizes and answers `stop`. */
   const stopLive = useCallback(async (session: Session, live: LiveSession) => {
@@ -336,7 +458,11 @@ export function useVoiceRecorder({
     if (live.ended) return
     session.stopped = true
     releaseSession(session)
-    if (live.pendingLength > 0) live.handle.push(pcmBytes(live.pending, live.pendingLength))
+    if (live.pendingLength > 0) {
+      const bytes = pcmBytes(live.pending, live.pendingLength)
+      live.handle.push(bytes)
+      keepUnconfirmed(live, bytes)
+    }
     live.pendingLength = 0
     const { samples, chunks, peak, sumSquares } = live.levels
     const recorded = {
@@ -348,22 +474,14 @@ export function useVoiceRecorder({
     if (chunks === 0) logger.warn('recording got no audio from the recorder', recorded)
     else if (peak === 0) logger.warn('recording is silent (peak below 0.0001)', recorded)
     else logger.info('recording stopped', recorded)
-    if (samples < MIN_SAMPLES) {
+    if (samples + live.replaySamples < MIN_SAMPLES) {
       live.handle.cancel()
       finishLive(session, false)
       callbacks.current.onError('Nothing was recorded.')
       return
     }
-    move('transcribing')
-    live.handle.stop()
-    live.finishTimer = setTimeout(() => {
-      if (live.ended) return
-      logger.warn('dictation did not finish in time')
-      live.handle.cancel()
-      finishLive(session, false)
-      callbacks.current.onError('Transcription took too long.')
-    }, FINISH_TIMEOUT_MS)
-  }, [move, finishLive])
+    finishStream(session, live)
+  }, [finishLive, finishStream])
 
   const stop = useCallback(async () => {
     const session = sessionRef.current
@@ -442,6 +560,17 @@ export function useVoiceRecorder({
     }
   }, [])
 
+  const continueOnRelay = useCallback((offer: Omit<DictationOffer, 'message' | 'serverName'>) => {
+    // The button keeps the mic and the headphone button from starting one while
+    // the offer is asked; should one run anyway, say so rather than drop the replay.
+    if (stateRef.current !== 'idle') {
+      logger.warn('a continuation on the Cinna server was refused: a dictation is running', { replaySeconds: offer.replaySeconds })
+      callbacks.current.onError('A dictation is already running.')
+      return
+    }
+    void start(offer)
+  }, [start])
+
   const current = useCallback(() => stateRef.current, [])
-  return { state, current, toggle, end }
+  return { state, current, toggle, end, continueOnRelay }
 }

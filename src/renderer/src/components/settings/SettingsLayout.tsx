@@ -276,7 +276,8 @@ export function SettingsStatusRow({
   action
 }: {
   tone: 'ok' | 'warning' | 'neutral'
-  label: string
+  /** Text, or an element when the line needs more (a truncating span with a title). */
+  label: ReactNode
   /** One line under the label; omitted when there is nothing true to add. */
   detail?: ReactNode
   action?: ReactNode

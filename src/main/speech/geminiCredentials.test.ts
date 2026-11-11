@@ -52,6 +52,7 @@ describe('Gemini credentials for transcription', () => {
     provider({ id: 'managed', name: 'Team Gemini', userId: 'alice' })
     const config = readCloudConfig()
     expect(config.mode).toBe('off')
+    expect(config.service).toBe('')
     expect(config.providers.map((p) => p.id).sort()).toEqual(['managed', 'mine'])
     expect(JSON.stringify(config)).not.toContain('key-')
   })

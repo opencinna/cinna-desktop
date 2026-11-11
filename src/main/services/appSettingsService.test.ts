@@ -242,3 +242,13 @@ it('defaults voice cloud transcription to off and the first Gemini provider, and
   expect(() => appSettingsService.set('voiceCloudTranscription', true)).toThrow()
   expect(appSettingsService.getAll().voiceCloudTranscription).toBe('always')
 })
+
+it('defaults the voice cloud service to automatic and accepts only automatic, core and gemini', () => {
+  expect(appSettingsService.getAll().voiceCloudService).toBe('')
+  appSettingsService.set('voiceCloudService', 'core')
+  appSettingsService.set('voiceCloudService', 'gemini')
+  expect(appSettingsService.getAll().voiceCloudService).toBe('gemini')
+  expect(() => appSettingsService.set('voiceCloudService', 'openai')).toThrow(/Cinna server or My Gemini key/)
+  appSettingsService.set('voiceCloudService', '')
+  expect(appSettingsService.getAll().voiceCloudService).toBe('')
+})

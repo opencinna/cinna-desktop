@@ -7,7 +7,7 @@
 import type { AiSpendingLevel } from './aiSpendingLevel'
 import type { ClaudeAuthMode } from './claudeAuthMode'
 import type { CapabilityState } from './capabilities'
-import type { VoiceCloudTranscription } from './speech'
+import type { VoiceCloudService, VoiceCloudTranscription } from './speech'
 
 export interface AppSettingsSchema {
   /** Concurrent autonomous tasks and agent calls on this device. */
@@ -279,6 +279,12 @@ export interface AppSettingsSchema {
    * usable one. A value naming no usable provider also falls to the first.
    */
   voiceCloudProviderId: string
+  /**
+   * Where cloud transcription sends audio: `'core'` or `'gemini'`, that one
+   * only, never swapped silently. `''` (the default) is not chosen yet: a
+   * session then runs on the relay while it is available, never on Gemini.
+   */
+  voiceCloudService: VoiceCloudService
 }
 
 export type AppSettingKey = keyof AppSettingsSchema

@@ -6,9 +6,11 @@ import { useUIStore } from '../../../stores/ui.store'
 import { useToastStore } from '../../../stores/toast.store'
 import { registerMediaToggle } from './mediaKeys'
 import { SPEECH_BLOCKED_HINT, speechBlocked, useSpeechStatus } from './useSpeechStatus'
-import { useVoiceRecorder, type DictationCallbacks } from './useVoiceRecorder'
+import { useVoiceRecorder, type DictationCallbacks, type DictationOffer } from './useVoiceRecorder'
 import { commitFinal, startSpan, type DictationSpan } from './dictationSpan'
 import { useLiveDictationStore, type LiveDictationControls } from './liveDictation.store'
+import { VoiceRelayOfferDialog } from './VoiceRelayOfferDialog'
+import { isCloudBackend, type SpeechBackend } from '../../../../../shared/speech'
 
 interface Microphone {
   deviceId: string
@@ -32,6 +34,15 @@ const RECORDING = `${BUTTON} text-[var(--color-danger)] hover:bg-[var(--color-bg
 const TRANSCRIBING = `${BUTTON} text-[var(--color-text-muted)] cursor-wait`
 
 export const CLOUD_TRANSCRIPTION_NOTE = 'Transcribing with Gemini — audio is sent to Google'
+
+/** The cloud mark's note for this session's backend: who receives the audio. */
+export function cloudTranscriptionNote(backend: SpeechBackend, serverName: string | undefined): string {
+  if (backend === 'core-relay') {
+    const name = serverName || 'the Cinna server'
+    return `Transcribing on ${name}: audio leaves this computer.`
+  }
+  return CLOUD_TRANSCRIPTION_NOTE
+}
 
 /** Where a live dictation writes: its composer's draft key and that draft's text setter. */
 export interface DictationTarget {
@@ -71,11 +82,12 @@ export function VoiceInputButton({
   const status = useSpeechStatus()
   const shown = useUIStore((s) => s.showVoiceInput)
   if (!status.available || !shown) return null
-  return <VoiceInputControl blocked={speechBlocked(status)} onText={onText} onError={onError} onSend={onSend} composerRef={composerRef} dictation={dictation} />
+  return <VoiceInputControl blocked={speechBlocked(status)} relayServerName={status.cloud.relay.serverName} onText={onText} onError={onError} onSend={onSend} composerRef={composerRef} dictation={dictation} />
 }
 
 function VoiceInputControl({
   blocked,
+  relayServerName,
   onText,
   onError,
   onSend,
@@ -83,6 +95,8 @@ function VoiceInputControl({
   dictation
 }: {
   blocked: boolean
+  /** The Cinna server's name, for the cloud mark's note while the relay transcribes. */
+  relayServerName?: string
   onText: (text: string) => void
   onSend: () => void
   onError: (message: string | null) => void
@@ -113,8 +127,17 @@ function VoiceInputControl({
   target.current = dictation
   const span = useRef<DictationSpan | null>(null)
   const partial = useRef('')
-  // This session's audio goes to Google: the cloud mark, until the session ends.
-  const [cloud, setCloud] = useState(false)
+  // The span a session ended with, for an offer to continue it.
+  const endedSpan = useRef<DictationSpan | null>(null)
+  // A continuation on the Cinna server writes on from here, not at the caret.
+  const resumeSpan = useRef<DictationSpan | null>(null)
+  // On-device dictation failed and the Cinna server could continue it: asked in a dialog.
+  const [offer, setOffer] = useState<(DictationOffer & { span: DictationSpan | null }) | null>(null)
+  // Read by the headphone button's handlers, which are not render-bound.
+  const offerOpen = useRef(false)
+  offerOpen.current = offer !== null
+  // This session's audio leaves the computer (Gemini or the Cinna server): the cloud mark, until the session ends.
+  const [cloud, setCloud] = useState<{ backend: SpeechBackend; serverName?: string } | null>(null)
   const finishing = useRef(false)
   const controls = useRef<LiveDictationControls>({ freeze: () => {}, cancel: () => {}, send: () => {} })
   const publish = useCallback(() => {
@@ -142,7 +165,9 @@ function VoiceInputControl({
     onSessionStart: () => {
       const textarea = composerRef?.current instanceof HTMLTextAreaElement ? composerRef.current : null
       const draft = textarea?.value ?? ''
-      span.current = startSpan(textarea?.selectionStart ?? draft.length, textarea?.selectionEnd ?? draft.length, draft.length)
+      // A continuation picks up where the failed dictation's confirmed text ends.
+      span.current = resumeSpan.current ?? startSpan(textarea?.selectionStart ?? draft.length, textarea?.selectionEnd ?? draft.length, draft.length)
+      resumeSpan.current = null
       partial.current = ''
       finishing.current = false
       publish()
@@ -158,10 +183,11 @@ function VoiceInputControl({
       partial.current = ''
       publish()
     },
-    onBackend: (backend) => setCloud(backend === 'gemini-live'),
+    onBackend: (backend) => setCloud(isCloudBackend(backend) ? { backend, serverName: relayName.current } : null),
     onSessionEnd: (completed) => {
-      setCloud(false)
+      setCloud(null)
       const t = target.current
+      endedSpan.current = span.current
       span.current = null
       partial.current = ''
       finishing.current = false
@@ -173,9 +199,30 @@ function VoiceInputControl({
       if (!sendAfterText.current) return
       sendAfterText.current = false
       setLanded((count) => count + 1)
+    },
+    // Instead of the error toast: the dialog asks before any audio leaves.
+    // onSessionEnd ran first and dropped a pending send-after-text, on
+    // purpose: the user is asked a question in between, so a send firing on
+    // its own once the continued text lands would surprise them.
+    onOffer: (next) => {
+      const ended = endedSpan.current
+      endedSpan.current = null
+      setOffer({ ...next, span: ended })
     }
   } : undefined, [!!dictation, composerRef, publish, writeFinal]) // eslint-disable-line react-hooks/exhaustive-deps
-  const { state, current, toggle, end } = useVoiceRecorder({ deviceId, onText: handleText, onError: handleError, dictation: callbacks })
+  const relayName = useRef(relayServerName)
+  relayName.current = relayServerName
+  const { state, current, toggle, end, continueOnRelay } = useVoiceRecorder({ deviceId, onText: handleText, onError: handleError, dictation: callbacks })
+  const keepAfterOffer = useCallback(() => {
+    setOffer(null)
+  }, [])
+  const continueAfterOffer = useCallback(() => {
+    if (!offer) return
+    setOffer(null)
+    resumeSpan.current = offer.span
+    relayName.current = offer.serverName
+    continueOnRelay({ replay: offer.replay, replaySeconds: offer.replaySeconds, stopped: offer.stopped })
+  }, [offer, continueOnRelay])
   useEffect(() => {
     const now = state === 'transcribing'
     if (finishing.current === now || !span.current) return
@@ -188,6 +235,9 @@ function VoiceInputControl({
 
   // Blocked: a click explains instead of recording audio that cannot be transcribed.
   const activate = useCallback(() => {
+    // The offer dialog is a question: no dictation starts under it (Continue
+    // would have to drop its replay), so the headphone button waits for the answer.
+    if (offerOpen.current) return
     if (blocked && state === 'idle') onError(SPEECH_BLOCKED_HINT)
     else toggle()
   }, [blocked, state, onError, toggle])
@@ -196,6 +246,8 @@ function VoiceInputControl({
   // Transcribing: send once transcribed.
   // Reads the recorder's live state: the rendered one can lag a transition.
   const send = useCallback(() => {
+    // Nor does the headphone double click send the draft under the question.
+    if (offerOpen.current) return
     const now = current()
     if (now === 'idle') {
       onSend()
@@ -302,8 +354,9 @@ function VoiceInputControl({
       : blocked
         ? SPEECH_BLOCKED_HINT
         : 'Audio input · right-click to choose the microphone'
-  const showCloud = cloud && state !== 'idle'
-  const title = showCloud ? `${stateTitle} · ${CLOUD_TRANSCRIPTION_NOTE}` : stateTitle
+  const showCloud = cloud !== null && state !== 'idle'
+  const cloudNote = cloud ? cloudTranscriptionNote(cloud.backend, cloud.serverName) : ''
+  const title = showCloud ? `${stateTitle} · ${cloudNote}` : stateTitle
 
   return (
     <>
@@ -335,7 +388,7 @@ function VoiceInputControl({
           <>
             <Cloud size={9} strokeWidth={2.5} aria-hidden="true" data-testid="voice-cloud-mark"
               className="pointer-events-none absolute right-0 bottom-0 text-[var(--color-text)]" />
-            <span id={cloudNoteId} className="sr-only">{CLOUD_TRANSCRIPTION_NOTE}</span>
+            <span id={cloudNoteId} className="sr-only">{cloudNote}</span>
           </>
         )}
       </button>
@@ -361,6 +414,16 @@ function VoiceInputControl({
           {/* Always on here: turning it off hides the button this menu belongs to. */}
           <MenuSwitchItem label="Show audio input" checked onToggle={hide} />
         </ContextMenu>
+      )}
+      {offer && (
+        <VoiceRelayOfferDialog
+          message={offer.message}
+          serverName={offer.serverName}
+          replaySeconds={offer.replaySeconds}
+          stopped={offer.stopped}
+          onContinue={continueAfterOffer}
+          onKeep={keepAfterOffer}
+        />
       )}
     </>
   )
