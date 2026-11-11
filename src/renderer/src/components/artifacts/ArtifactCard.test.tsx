@@ -346,10 +346,36 @@ describe('the card', () => {
     const share = screen.getByRole('button', { name: 'Share Q3 churn' })
     fireEvent.click(share)
     await screen.findByRole('dialog', { name: 'Share Q3 churn' })
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Only me' })))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Only me' })))
+    expect(document.activeElement!.getAttribute('aria-pressed')).toBe('true')
     fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Share Q3 churn' })).toBeNull()
     expect(document.activeElement).toBe(share)
+  })
+
+  it('Share…: a change in flight leaves the segments focusable (aria-disabled, not disabled); the arrow keys move the choice', async () => {
+    let answer: (value: unknown) => void = () => {}
+    setVisibility.mockReturnValue(new Promise((r) => { answer = r }))
+    wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
+    await screen.findByRole('dialog', { name: 'Share Q3 churn' })
+    const onlyMe = screen.getByRole('button', { name: 'Only me' }) as HTMLButtonElement
+    await waitFor(() => expect(document.activeElement).toBe(onlyMe))
+    fireEvent.keyDown(onlyMe, { key: 'ArrowRight' })
+    const everyone = screen.getByRole('button', { name: 'Everyone' }) as HTMLButtonElement
+    expect(setVisibility).toHaveBeenCalledWith(ID, 'instance')
+    expect(document.activeElement).toBe(everyone)
+    // While it runs: still enabled (focus stays), inert by aria-disabled, and a second pick is ignored.
+    expect(everyone.disabled).toBe(false)
+    expect(everyone.getAttribute('aria-disabled')).toBe('true')
+    expect(onlyMe.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(onlyMe)
+    expect(setVisibility).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      answer({ ok: true, detail: { ...detail, visibility: 'instance' } })
+    })
+    expect(everyone.hasAttribute('aria-disabled')).toBe(false)
+    expect(everyone.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('revoking asks in the row; a revoked link stays in place, marked, until the popover closes', async () => {
@@ -400,13 +426,20 @@ describe('the card', () => {
     wrap(<ArtifactCard artifact={artifact} instanceName="Acme" />)
     fireEvent.click(screen.getByRole('button', { name: 'Share Q3 churn' }))
     const popover = await screen.findByRole('dialog', { name: 'Share Q3 churn' })
-    await waitFor(() => expect((screen.getByRole('radio', { name: 'Only me' }) as HTMLInputElement).disabled).toBe(false))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Only me' }) as HTMLButtonElement).disabled).toBe(false))
     expect(popover.textContent).toContain('None yet')
+    // Short segments in a group named by its heading; the line under them names the server.
+    const who = within(popover).getByRole('group', { name: 'Who can see it' })
+    expect(within(who).getAllByRole('button').map((button) => button.textContent)).toEqual(['Only me', 'Everyone'])
+    const line = popover.querySelector('[data-visibility-line]') as HTMLElement
+    expect(line.textContent).toBe('Only you, and anyone with a public link')
+    expect(line.title).toBe(line.textContent)
     await act(async () => {
-      fireEvent.click(screen.getByRole('radio', { name: 'Everyone on Acme' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Everyone' }))
     })
     expect(setVisibility).toHaveBeenCalledWith(ID, 'instance')
-    expect((screen.getByRole('radio', { name: 'Everyone on Acme' }) as HTMLInputElement).checked).toBe(true)
+    expect(screen.getByRole('button', { name: 'Everyone' }).getAttribute('aria-pressed')).toBe('true')
+    expect(line.textContent).toBe('Everyone on Acme can open it')
     const create = screen.getByRole('button', { name: 'Create public link' })
     // Wide enough for "Copied" too: the label swap moves nothing.
     expect(create.className).toContain('min-w-[8.75rem]')

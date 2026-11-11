@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../stores/logger.store', () => ({
@@ -35,6 +35,12 @@ const inspect = vi.fn()
 const publish = vi.fn()
 const answerApproval = vi.fn()
 
+/** A segment of a segmented group, by its words; `aria-pressed` says which one is chosen. */
+function segment(name: string): HTMLButtonElement {
+  return screen.getByRole('button', { name }) as HTMLButtonElement
+}
+const pressed = (name: string): boolean => segment(name).getAttribute('aria-pressed') === 'true'
+
 function open(): void {
   act(() => {
     useArtifactPublishStore.getState().open({ agentId: 'folder:a', path: '/agent/reports/q3', kind: 'dir', chatId: 'chat-1', messageId: 'm1' })
@@ -58,7 +64,11 @@ describe('the Publish dialog', () => {
     expect(screen.getByRole('dialog', { name: 'Publish to Cinna' })).toBeTruthy()
     // "Reading…" once, in the list; the kind and total lines hold their height empty.
     expect(screen.getAllByText('Reading…')).toHaveLength(1)
-    expect(screen.getByRole('list', { name: 'Files to publish' }).textContent).toBe('Reading…')
+    // The list's place says it is reading, in the list's own surface.
+    expect(document.querySelector('[data-artifact-files-block]')!.textContent).toBe('Reading…')
+    // The named list itself is busy, so a wait on it by name sees the read.
+    expect(screen.getByRole('list', { name: 'Files to publish' }).textContent).toBe('')
+    expect(screen.getByRole('list', { name: 'Files to publish' }).getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('[data-artifact-total]')!.textContent).toBe('\u00a0')
     await act(async () => {})
     expect(inspect).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/reports/q3' })
@@ -66,11 +76,23 @@ describe('the Publish dialog', () => {
     expect(screen.getByText('Mini-site · opens index.html')).toBeTruthy()
     const rows = screen.getAllByRole('listitem').map((row) => row.textContent)
     expect(rows).toEqual(['.envsecret file', 'data.csv100 B', 'index.html2 KB'])
+    expect(screen.getByRole('list', { name: 'Files to publish' }).hasAttribute('aria-busy')).toBe(false)
     expect(screen.getByText('.env').className).toContain('line-through')
     expect(screen.getByText('2 KB of 50 MB')).toBeTruthy()
     expect(screen.getByText('A new artifact on Acme')).toBeTruthy()
-    expect((screen.getByRole('radio', { name: 'Only me' }) as HTMLInputElement).checked).toBe(true)
-    expect(screen.getByRole('radio', { name: 'Everyone on Acme' })).toBeTruthy()
+    const who = screen.getByRole('group', { name: 'Who can see it' })
+    expect(within(who).getAllByRole('button').map((button) => [button.textContent, button.getAttribute('aria-pressed')])).toEqual([
+      ['Only me', 'true'],
+      ['Everyone', 'false'],
+      ['Anyone with a link', 'false']
+    ])
+    // Short segments; the line under them says what the choice means and names the server, its whole text in the tooltip.
+    const line = document.querySelector('[data-visibility-line]') as HTMLElement
+    expect(line.textContent).toBe('Only you can open it on Acme')
+    expect(line.title).toBe('Only you can open it on Acme')
+    fireEvent.click(segment('Everyone'))
+    expect(line.textContent).toBe('Everyone on Acme can open it')
+    expect(line.title).toBe('Everyone on Acme can open it')
   })
 
   it('offers Update, preselected, for a path published before, and publishes with the choices', async () => {
@@ -80,10 +102,14 @@ describe('the Publish dialog', () => {
     render(<PublishArtifactDialog />)
     open()
     await act(async () => {})
-    expect((screen.getByRole('radio', { name: 'Update “Q3 churn” (rev 3)' }) as HTMLInputElement).checked).toBe(true)
+    expect(within(screen.getByRole('group', { name: 'Artifact' })).getAllByRole('button')).toHaveLength(2)
+    expect(pressed('Update rev 3')).toBe(true)
+    expect(pressed('New artifact')).toBe(false)
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Q3 churn')
-    expect((screen.getByRole('radio', { name: 'Everyone on Acme' }) as HTMLInputElement).checked).toBe(true)
-    fireEvent.click(screen.getByRole('radio', { name: 'Anyone with a link' }))
+    expect(pressed('Everyone')).toBe(true)
+    fireEvent.click(segment('Anyone with a link'))
+    expect(pressed('Anyone with a link')).toBe(true)
+    expect(pressed('Everyone')).toBe(false)
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
     })
@@ -144,13 +170,46 @@ describe('the Publish dialog', () => {
     expect(overlay.className).not.toContain('items-center')
   })
 
-  it('gives the truncated Update choice its full words as a tooltip', async () => {
+  it('names the Update choice by its short words, the full title in its tooltip, under a visible Artifact label', async () => {
     inspect.mockResolvedValue({ ok: true, inspection: inspection({ previous: { artifactId: ID, title: 'A very long title of a quarterly report', revision: 3, visibility: 'private' } }) })
     render(<PublishArtifactDialog />)
     open()
     await act(async () => {})
-    const label = screen.getByRole('radio', { name: 'Update “A very long title of a quarterly report” (rev 3)' }).closest('label')!
-    expect(label.getAttribute('title')).toBe('Update “A very long title of a quarterly report” (rev 3)')
+    // Its accessible name is what it shows (rule 10); the long title is in the tooltip.
+    const update = segment('Update rev 3')
+    expect(update.textContent).toBe('Update rev 3')
+    expect(update.getAttribute('title')).toBe('Update “A very long title of a quarterly report” (rev 3)')
+    // Labelled above, like every field: the group is named by the visible label.
+    const group = screen.getByRole('group', { name: 'Artifact' })
+    const label = document.getElementById(group.getAttribute('aria-labelledby')!)!
+    expect(label.textContent).toBe('Artifact')
+    expect(label.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('adopts the previous audience while the files load, a press on the pressed choice not counting as a pick', async () => {
+    let answer: (value: unknown) => void = () => {}
+    inspect.mockReturnValue(new Promise((r) => { answer = r }))
+    render(<PublishArtifactDialog />)
+    open()
+    // Only me is pressed already: pressing it again is not a choice of the user's.
+    expect(pressed('Only me')).toBe(true)
+    fireEvent.click(segment('Only me'))
+    await act(async () => {
+      answer({ ok: true, inspection: inspection({ previous: { artifactId: ID, title: 'Q3 churn', revision: 3, visibility: 'instance' } }) })
+    })
+    expect(pressed('Everyone')).toBe(true)
+  })
+
+  it('keeps a real pick made while the files load over the previous audience', async () => {
+    let answer: (value: unknown) => void = () => {}
+    inspect.mockReturnValue(new Promise((r) => { answer = r }))
+    render(<PublishArtifactDialog />)
+    open()
+    fireEvent.click(segment('Anyone with a link'))
+    await act(async () => {
+      answer({ ok: true, inspection: inspection({ previous: { artifactId: ID, title: 'Q3 churn', revision: 3, visibility: 'instance' } }) })
+    })
+    expect(pressed('Anyone with a link')).toBe(true)
   })
 
   it('offers a start page for a folder without index.html', async () => {
@@ -160,10 +219,18 @@ describe('the Publish dialog', () => {
     open()
     await act(async () => {})
     expect(screen.getByText('2 files')).toBeTruthy()
-    // The picker has its own row, inside the list's fixed block.
-    expect(screen.getByRole('combobox').closest('[data-artifact-files-block]')).toBeTruthy()
-    expect(screen.getByRole('combobox').closest('[data-artifact-kind]')).toBeNull()
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'b.html' } })
+    // The picker has its own row, inside the list's fixed block, its label above it like Title's.
+    const picker = screen.getByRole('button', { name: 'Start page' })
+    expect(picker.closest('[data-artifact-files-block]')).toBeTruthy()
+    expect(picker.previousElementSibling!.textContent).toBe('Start page')
+    expect(picker.parentElement!.className).toContain('flex-col')
+    expect(picker.closest('[data-artifact-kind]')).toBeNull()
+    expect(picker.textContent).toBe('None — browse the files')
+    fireEvent.click(picker)
+    const menu = screen.getByRole('menu', { name: 'Start page' })
+    expect(within(menu).getAllByRole('menuitemradio').map((item) => item.textContent)).toEqual(['None — browse the files', 'a.html', 'b.html'])
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'b.html' }))
+    expect(picker.textContent).toBe('b.html')
     // The picker names the page; the kind line does not repeat it.
     expect(document.querySelector('[data-artifact-kind]')!.textContent).toBe('Mini-site')
     await act(async () => {
@@ -172,7 +239,7 @@ describe('the Publish dialog', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ entry: 'b.html' }))
   })
 
-  it('says a refusal inside the dialog and closes nothing; gone switches to Publish as new', async () => {
+  it('says a refusal inside the dialog and closes nothing; gone switches to New artifact', async () => {
     inspect.mockResolvedValue({ ok: true, inspection: inspection({ previous: { artifactId: ID, title: 'Q3 churn', revision: 3, visibility: 'private' } }) })
     publish.mockResolvedValue({ ok: false, code: 'gone', message: 'This artifact is no longer on the instance. Publish it as new instead.' })
     render(<PublishArtifactDialog />)
@@ -181,9 +248,16 @@ describe('the Publish dialog', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
     })
-    expect(screen.getByRole('alert').textContent).toMatch(/no longer on the instance/)
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toMatch(/no longer on the instance/)
+    // Under the buttons, whole and last in the dialog: nothing above it moves.
+    const footer = alert.closest('[data-dialog-footer]')!
+    expect(footer.contains(screen.getByRole('button', { name: 'Publish' }))).toBe(true)
+    expect(alert.previousElementSibling!.contains(screen.getByRole('button', { name: 'Publish' }))).toBe(true)
+    expect(footer.lastElementChild).toBe(alert)
+    expect(alert.className).not.toContain('line-clamp')
     expect(screen.getByRole('dialog')).toBeTruthy()
-    expect((screen.getByRole('radio', { name: 'Publish as new' }) as HTMLInputElement).checked).toBe(true)
+    expect(pressed('New artifact')).toBe(true)
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
@@ -211,7 +285,7 @@ describe('the Publish dialog', () => {
     expect(screen.getByRole('button', { name: 'Publish' })).toBeTruthy()
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Agent title')
     expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value).toBe('Agent words')
-    fireEvent.click(screen.getByRole('radio', { name: 'Everyone on Acme' }))
+    fireEvent.click(segment('Everyone'))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
     })

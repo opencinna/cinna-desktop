@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
-import { CANCEL, DialogShell, ErrorLine, FIELD_BASE, PRIMARY } from '../agents/local/sharing/ShareDialogs'
+import { CANCEL, DIALOG_LABEL, DialogFooter, DialogShell, FIELD_BASE, PRIMARY } from '../agents/local/sharing/ShareDialogs'
+import { VisibilitySegments } from './VisibilitySegments'
+import { ManagedList, ManagedListMessage, ManagedListPicker, ManagedListRow } from '../ui/ManagedList'
 import { useArtifactPublishStore, type PublishRequest } from '../../stores/artifactPublish.store'
 import { useArtifactsSupport } from '../../hooks/useArtifacts'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -39,6 +41,31 @@ const PHASE_LABEL = { packing: 'Packing…', uploading: 'Uploading…', sharing:
 type Inspected = { status: 'loading' } | { status: 'ready'; inspection: ArtifactInspection } | { status: 'failed'; message: string }
 
 /**
+ * A choice of a few, as the Theme pills in Settings › Features: one bordered
+ * group of buttons, the pressed one in the active-nav tint.
+ */
+const SEGMENTS = 'flex min-w-0 max-w-full shrink-0 rounded-md border border-[var(--color-border)] p-0.5'
+function segment(pressed: boolean): string {
+  return `rounded px-2.5 py-1 text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+    pressed ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'
+  }`
+}
+
+/** Who can see it: short labels, the server named in the line under the group. */
+const VISIBILITY_OPTIONS: Array<{ value: PublishVisibility; label: string }> = [
+  { value: 'private', label: 'Only me' },
+  { value: 'instance', label: 'Everyone' },
+  { value: 'link', label: 'Anyone with a link' }
+]
+
+/** What a visibility means, naming the server: the line under the group. */
+export function publishVisibilityLine(visibility: PublishVisibility, instanceName: string): string {
+  if (visibility === 'instance') return `Everyone on ${instanceName} can open it`
+  if (visibility === 'link') return 'A public link is made — anyone with it can open it'
+  return `Only you can open it on ${instanceName}`
+}
+
+/**
  * The Publish dialog: one global instance, opened from a file reference's
  * menu or the file preview, driven by {@link useArtifactPublishStore}.
  *
@@ -47,9 +74,12 @@ type Inspected = { status: 'loading' } | { status: 'ready'; inspection: Artifact
  * block with the start-page picker's own row when the folder needs one, so
  * the picker's arrival only shortens the list), the total line, the Update /
  * Publish-as-new line, Who can see it — so nothing moves while the user types
- * or the inspection lands. Top-anchored: a refusal renders last, under the
- * buttons, lengthens the dialog downward and closes nothing; while
- * publishing the dialog cannot be dismissed and the button says the phase.
+ * or the inspection lands. The two choices are segmented groups, the start
+ * page the managed list's field picker and the files a managed list.
+ * Top-anchored, the fields scrolling between the heading and the buttons at a
+ * small window: a refusal renders in the footer beside the buttons, in a
+ * height reserved for it, and closes nothing; while publishing the dialog cannot be
+ * dismissed and the button says the phase.
  */
 export function PublishArtifactDialog(): React.JSX.Element | null {
   const request = useArtifactPublishStore((s) => s.request)
@@ -100,7 +130,7 @@ function PublishArtifactDialogBody({ request }: { request: PublishRequest }): Re
     }
   }, [request.agentId, request.path])
 
-  // A refusal saying the artifact is gone switches to Publish as new.
+  // A refusal saying the artifact is gone switches to New artifact.
   useEffect(() => {
     if (goneArtifactId && target === goneArtifactId) setTarget(null)
   }, [goneArtifactId, target])
@@ -157,171 +187,188 @@ function PublishArtifactDialogBody({ request }: { request: PublishRequest }): Re
     })
   }
 
-  const radioClass = 'flex items-center gap-2 text-xs text-[var(--color-text)]'
-  const label = 'block text-[11px] text-[var(--color-text-muted)] mb-1'
+  const label = `${DIALOG_LABEL} mb-1`
+  // The segment says the revision; its tooltip the whole title too (rule 10: named by what it shows).
+  const updateText = previous ? `Update rev ${previous.revision}` : ''
+  const updateTitle = previous ? `Update “${previous.title}” (rev ${previous.revision})` : ''
   return (
     <DialogShell
       title={request.approval?.agentName ? `Publish for ${request.approval.agentName}` : 'Publish to Cinna'}
       pending={publishing}
       onDismiss={close}
       initialFocusRef={titleRef}
-      width="w-[34rem]"
+      width="w-[36rem]"
       align="top"
     >
       <form
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto"
+        className="flex min-h-0 flex-1 flex-col gap-3"
         onSubmit={(event) => {
           event.preventDefault()
           submit()
         }}
       >
-        <div>
-          <label htmlFor="artifact-title" className={label}>Title</label>
-          <input
-            id="artifact-title"
-            ref={titleRef}
-            value={title}
-            maxLength={200}
-            disabled={publishing}
-            onChange={(event) => {
-              touched.current.title = true
-              setTitle(event.target.value)
-            }}
-            className={`w-full ${FIELD_BASE}`}
-          />
-        </div>
-        <div>
-          <label htmlFor="artifact-description" className={label}>Description</label>
-          <textarea
-            id="artifact-description"
-            value={description}
-            rows={2}
-            maxLength={2000}
-            disabled={publishing}
-            placeholder="Optional"
-            onChange={(event) => setDescription(event.target.value)}
-            className={`w-full resize-none ${FIELD_BASE}`}
-          />
-        </div>
+        <div className="-mx-1 min-h-0 flex-1 space-y-3 overflow-y-auto px-1 pb-0.5">
+          <div>
+            <label htmlFor="artifact-title" className={label}>Title</label>
+            <input
+              id="artifact-title"
+              ref={titleRef}
+              value={title}
+              maxLength={200}
+              disabled={publishing}
+              onChange={(event) => {
+                touched.current.title = true
+                setTitle(event.target.value)
+              }}
+              className={`w-full ${FIELD_BASE}`}
+            />
+          </div>
+          <div>
+            <label htmlFor="artifact-description" className={label}>Description</label>
+            <textarea
+              id="artifact-description"
+              value={description}
+              rows={2}
+              maxLength={2000}
+              disabled={publishing}
+              placeholder="Optional"
+              onChange={(event) => setDescription(event.target.value)}
+              className={`w-full resize-none ${FIELD_BASE}`}
+            />
+          </div>
 
-        {/* The kind line: one row in every state. */}
-        <div className="flex h-7 items-center gap-2 text-xs text-[var(--color-text-secondary)]" data-artifact-kind>
-          <span className="truncate">{kindLine}</span>
-        </div>
+          {/* The kind line: one line in every state. */}
+          <div className="flex h-[1lh] items-center gap-2 text-[13px] text-[var(--color-text-secondary)]" data-artifact-kind>
+            <span className="truncate">{kindLine}</span>
+          </div>
 
-        {/* Reserved: the picker's row and the list share one fixed block, so the picker's arrival only shortens the list. */}
-        <div className="flex h-40 flex-col gap-2" data-artifact-files-block>
-          {picker && (
-            <label className="flex h-7 shrink-0 items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
-              <span className="shrink-0">Start page</span>
-              <select
-                value={entry}
-                disabled={publishing}
-                onChange={(event) => setEntry(event.target.value)}
-                className={`min-w-0 flex-1 py-0.5 ${FIELD_BASE}`}
+          {/* Reserved: the start page (its label above the picker) and the list
+              share one fixed block, so the picker's arrival only shortens the
+              list. At 13px, so 1lh is a line of the label and of the field:
+              the label (1lh + mb-1 0.25rem), the field (1lh + py-1.5 0.75rem +
+              2px border), the gap (0.5rem), then three settings rows
+              (3 × --ml-row-h 40px) and the surface's padding (2 × 3px). */}
+          <div className="flex h-[calc(2lh+1.5rem+128px)] flex-col gap-2 text-[13px]" data-artifact-files-block>
+            {picker && (
+              <div className="flex shrink-0 flex-col">
+                <span aria-hidden="true" className={label}>Start page</span>
+                <ManagedListPicker
+                  variant="field"
+                  value={entry}
+                  options={[
+                    { value: '', label: 'None — browse the files' },
+                    ...inspection.entryCandidates.map((candidate) => ({ value: candidate, label: candidate }))
+                  ]}
+                  label="Start page"
+                  menuLabel="Start page"
+                  title={entry || 'None — browse the files'}
+                  disabled={publishing}
+                  onChange={setEntry}
+                  className="w-full"
+                />
+              </div>
+            )}
+            <div className="min-h-0 flex-1 [&>div]:h-full">
+              <ManagedList
+                aria-label="Files to publish"
+                aria-busy={inspected.status === 'loading'}
+                surfaceClassName="h-full overflow-y-auto"
+                message={
+                  inspected.status === 'loading' ? (
+                    <ManagedListMessage role="status">
+                      <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />
+                      Reading…
+                    </ManagedListMessage>
+                  ) : inspected.status === 'failed' ? (
+                    <ManagedListMessage role="alert" tone="danger">
+                      {inspected.message}
+                    </ManagedListMessage>
+                  ) : undefined
+                }
               >
-                <option value="">None — browse the files</option>
-                {inspection.entryCandidates.map((candidate) => (
-                  <option key={candidate} value={candidate}>{candidate}</option>
+                {rows.map((row) => (
+                  <ManagedListRow
+                    key={row.path}
+                    title={
+                      <span className={row.reason ? 'text-[var(--color-text-muted)] line-through' : undefined}>{row.path}</span>
+                    }
+                    titleMono
+                    titleClassName="font-normal"
+                    titleTooltip={row.reason ? `${row.path} — left out: ${row.reason}` : row.path}
+                    meta={row.reason ?? formatArtifactBytes(row.size ?? 0)}
+                  />
                 ))}
-              </select>
-            </label>
-          )}
+              </ManagedList>
+            </div>
+          </div>
           <div
-            role="list"
-            aria-label="Files to publish"
-            aria-busy={inspected.status === 'loading' || undefined}
-            className="min-h-0 flex-1 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] py-1"
+            data-artifact-total
+            className={`h-[1lh] truncate text-[13px] ${inspection?.overLimits || inspection?.files.length === 0 ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-muted)]'}`}
           >
-            {inspected.status === 'loading' && (
-              <div className="flex h-full items-center justify-center gap-1.5 text-xs text-[var(--color-text-muted)]">
-                <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden />
-                Reading…
-              </div>
-            )}
-            {inspected.status === 'failed' && (
-              <p role="alert" className="flex h-full items-center justify-center px-3 text-center text-xs text-[var(--color-danger)]">
-                {inspected.message}
-              </p>
-            )}
-            {rows.map((row) => (
-              <div
-                key={row.path}
-                role="listitem"
-                className="flex items-center gap-2 px-2.5 py-0.5 font-mono text-[11px]"
-                title={row.reason ? `${row.path} — left out: ${row.reason}` : row.path}
-              >
-                <span className={`min-w-0 flex-1 truncate ${row.reason ? 'text-[var(--color-text-muted)] line-through' : 'text-[var(--color-text)]'}`}>
-                  {row.path}
+            {totalLine}
+          </div>
+
+          {/* Update or new: one row in every state, the segmented group's height, so its arrival moves nothing. */}
+          <div>
+            <span id="artifact-target-label" className={label}>Artifact</span>
+            <div className="flex h-[2.125rem] items-center">
+              {previous ? (
+                <div role="group" aria-labelledby="artifact-target-label" className={SEGMENTS}>
+                  <button
+                    type="button"
+                    aria-pressed={updating}
+                    disabled={publishing}
+                    title={updateTitle}
+                    onClick={() => setTarget(previous.artifactId)}
+                    className={`shrink-0 whitespace-nowrap ${segment(updating)}`}
+                  >
+                    {updateText}
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={!updating}
+                    disabled={publishing}
+                    onClick={() => setTarget(null)}
+                    className={`shrink-0 whitespace-nowrap ${segment(!updating)}`}
+                  >
+                    New artifact
+                  </button>
+                </div>
+              ) : (
+                <span className="text-[13px] text-[var(--color-text-muted)]">
+                  {inspection ? `A new artifact on ${instanceName}` : '\u00a0'}
                 </span>
-                <span className="shrink-0 text-[10px] text-[var(--color-text-muted)]">
-                  {row.reason ?? formatArtifactBytes(row.size ?? 0)}
-                </span>
-              </div>
-            ))}
+              )}
+            </div>
+          </div>
+
+          <div>
+            <span id="artifact-visibility-label" className={label}>Who can see it</span>
+            <VisibilitySegments
+              options={VISIBILITY_OPTIONS}
+              value={visibility}
+              labelledBy="artifact-visibility-label"
+              line={publishVisibilityLine(visibility, instanceName)}
+              disabled={publishing}
+              // Called for a new value only: picking the pressed one again is not a choice,
+              // so the previous artifact's audience is still adopted while the files load.
+              onPick={(value) => {
+                touched.current.visibility = true
+                setVisibility(value)
+              }}
+            />
           </div>
         </div>
-        <div
-          data-artifact-total
-          className={`h-4 text-[11px] ${inspection?.overLimits || inspection?.files.length === 0 ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-muted)]'}`}
-        >
-          {totalLine}
-        </div>
 
-        {/* Update or new: a line in every state, so its arrival moves nothing. */}
-        <div className="flex h-6 items-center gap-4" role="radiogroup" aria-label="Publish as">
-          {previous ? (
-            <>
-              <label className={`${radioClass} min-w-0`} title={`Update “${previous.title}” (rev ${previous.revision})`}>
-                <input type="radio" name="artifact-target" checked={updating} disabled={publishing} onChange={() => setTarget(previous.artifactId)} />
-                <span className="truncate">Update “{previous.title}” (rev {previous.revision})</span>
-              </label>
-              <label className={`${radioClass} shrink-0`}>
-                <input type="radio" name="artifact-target" checked={!updating} disabled={publishing} onChange={() => setTarget(null)} />
-                Publish as new
-              </label>
-            </>
-          ) : (
-            <span className="text-xs text-[var(--color-text-muted)]">
-              {inspection ? `A new artifact on ${instanceName}` : ' '}
-            </span>
-          )}
-        </div>
-
-        <fieldset className="space-y-1.5" disabled={publishing}>
-          <legend className={label}>Who can see it</legend>
-          {(
-            [
-              ['private', 'Only me'],
-              ['instance', `Everyone on ${instanceName}`],
-              ['link', 'Anyone with a link']
-            ] as Array<[PublishVisibility, string]>
-          ).map(([value, text]) => (
-            <label key={value} className={radioClass}>
-              <input
-                type="radio"
-                name="artifact-visibility"
-                checked={visibility === value}
-                onChange={() => {
-                  touched.current.visibility = true
-                  setVisibility(value)
-                }}
-              />
-              {text}
-            </label>
-          ))}
-        </fieldset>
-
-        <div className="flex justify-end gap-2 pt-1">
+        <DialogFooter error={error}>
           <button type="button" className={CANCEL} disabled={publishing} onClick={close}>
             Cancel
           </button>
           <button type="submit" className={PRIMARY} disabled={publishing || blocked} aria-busy={publishing || undefined}>
-            {publishing && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden />}
+            {publishing && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />}
             {publishing ? (phase ? PHASE_LABEL[phase] : 'Publishing…') : 'Publish'}
           </button>
-        </div>
-        <ErrorLine error={error} />
+        </DialogFooter>
       </form>
     </DialogShell>
   )

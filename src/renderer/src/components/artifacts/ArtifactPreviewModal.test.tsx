@@ -234,8 +234,8 @@ describe('the artifact preview', () => {
     const preview = screen.getByRole('dialog', { name: 'Preview of Q3 at a glance' })
     // Portaled into the preview, so the modal dialog contains it.
     expect(preview.contains(popover)).toBe(true)
-    await waitFor(() => expect((within(popover).getByRole('radio', { name: 'Only me' }) as HTMLInputElement).disabled).toBe(false))
-    fireEvent.mouseDown(within(popover).getByRole('radio', { name: 'Only me' }))
+    await waitFor(() => expect((within(popover).getByRole('button', { name: 'Only me' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.mouseDown(within(popover).getByRole('button', { name: 'Only me' }))
     expect(screen.getByRole('dialog', { name: 'Share Q3 at a glance' })).toBeTruthy()
     expect(screen.getByRole('dialog', { name: 'Preview of Q3 at a glance' })).toBeTruthy()
 

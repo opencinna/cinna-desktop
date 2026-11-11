@@ -262,7 +262,7 @@ async function publishFromDesktop(cinna: CinnaApp, chatId: string, link: Locator
   const dialog = await openPublishOn(page, link)
   await expect(dialog.locator('[data-artifact-kind]')).toHaveText(kindLine)
   await dialog.getByLabel('Title', { exact: true }).fill(title)
-  await expect(dialog.getByRole('radio', { name: 'Only me', exact: true })).toBeChecked()
+  await expect(dialog.getByRole('group', { name: 'Who can see it', exact: true }).getByRole('button', { name: 'Only me', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
   await expect(dialog).toHaveCount(0, { timeout: 60_000 })
   let fresh: { id: string; url: string } | null = null
@@ -423,7 +423,7 @@ test('G2 the card the desktop drew when it published shows a grant made on core'
   await card(page, G2_TITLE).locator('[data-artifact-card-body]').hover()
   await card(page, G2_TITLE).getByRole('button', { name: `Share ${G2_TITLE}`, exact: true }).click()
   const share = page.getByRole('dialog', { name: `Share ${G2_TITLE}`, exact: true })
-  await expect(share.getByRole('radio', { name: 'Only me', exact: true })).toBeEnabled({ timeout: 30_000 })
+  await expect(share.getByRole('group', { name: 'Who can see it', exact: true }).getByRole('button', { name: 'Only me', exact: true })).toBeEnabled({ timeout: 30_000 })
   await page.keyboard.press('Escape')
   await expect(card(page, G2_TITLE)).toContainText('rev 1 · only you · shared with 1 person', { timeout: 15_000 })
 })

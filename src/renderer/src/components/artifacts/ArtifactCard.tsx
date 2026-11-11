@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Check, Copy, ExternalLink, FileText, Globe, Link2, Loader2, Share2, Trash2, TriangleAlert, X, CircleAlert } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
+import { VisibilitySegments, type VisibilitySegment } from './VisibilitySegments'
 import { ARTIFACTS_KEY, useArtifactDetail, useArtifactsSupport } from '../../hooks/useArtifacts'
 import { useAuthStore } from '../../stores/auth.store'
 import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
@@ -158,6 +159,16 @@ const LINK_ROW_ICON = 'rounded p-1 text-[var(--color-text-muted)] transition-col
 const ICON_TIP =
   'pointer-events-none absolute left-1/2 top-full z-20 mt-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--color-text)] opacity-0 shadow-lg transition-opacity duration-100 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100'
 
+const SHARE_VISIBILITY_OPTIONS: Array<VisibilitySegment<ArtifactVisibility>> = [
+  { value: 'private', label: 'Only me' },
+  { value: 'instance', label: 'Everyone' }
+]
+
+/** What the audience means, naming the server; a public link is a separate fact, listed below it. */
+function shareVisibilityLine(visibility: ArtifactVisibility, instanceName: string): string {
+  return visibility === 'instance' ? `Everyone on ${instanceName} can open it` : 'Only you, and anyone with a public link'
+}
+
 /**
  * Share…: who can see it, and the public links — two independent facts.
  * Reads core's current state each time it opens (the local row follows).
@@ -251,10 +262,10 @@ export function SharePopover({
   const detail: ArtifactDetail | null = outcome?.ok ? outcome.detail : null
   const visibility: ArtifactVisibility = detail?.visibility ?? artifact.visibility
 
-  // The checked choice takes the focus once it can (the radios wait for core's answer).
+  // The pressed choice takes the focus once it can (the segments wait for core's answer).
   useEffect(() => {
     if (!popover.open || !detail || !popover.style || focused.current) return
-    const checked = popoverRef.current?.querySelector<HTMLInputElement>('input[type="radio"]:checked')
+    const checked = popoverRef.current?.querySelector<HTMLButtonElement>('[data-share-visibility] button[aria-pressed="true"]')
     if (checked) {
       checked.focus()
       focused.current = true
@@ -294,6 +305,8 @@ export function SharePopover({
     }
   }
 
+  // The choice being sent, pressed while it runs (the native radio checked at once too).
+  const pendingVisibility: ArtifactVisibility | null = busy?.startsWith('visibility-') ? (busy.slice('visibility-'.length) as ArtifactVisibility) : null
   const sectionLabel = 'mb-1 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]'
   return createPortal(
     <div
@@ -313,27 +326,20 @@ export function SharePopover({
           </button>
         </div>
       )}
-      <div role="radiogroup" aria-label="Who can see it">
-        <div className={sectionLabel}>Who can see it</div>
-        {(
-          [
-            ['private', 'Only me'],
-            ['instance', `Everyone on ${instanceName || 'the instance'}`]
-          ] as Array<[ArtifactVisibility, string]>
-        ).map(([value, text]) => (
-          <label key={value} className="flex items-center gap-2 py-0.5 text-[var(--color-text)]">
-            <input
-              type="radio"
-              name={`share-${artifact.id}`}
-              checked={visibility === value}
-              // Not disabled while busy: a radio that is disabled drops the keyboard focus.
-              disabled={!detail}
-              onChange={() => void act(`visibility-${value}`, () => window.api.artifacts.setVisibility(artifact.id, value))}
-            />
-            {text}
-            {busy === `visibility-${value}` && <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden />}
-          </label>
-        ))}
+      <div data-share-visibility>
+        <div id={`share-visibility-${artifact.id}`} className={sectionLabel}>Who can see it</div>
+        <VisibilitySegments
+          scale="chrome"
+          options={SHARE_VISIBILITY_OPTIONS}
+          value={pendingVisibility ?? visibility}
+          labelledBy={`share-visibility-${artifact.id}`}
+          line={shareVisibilityLine(pendingVisibility ?? visibility, instanceName || 'the instance')}
+          // Waits for core's answer; inert, not disabled, while a change runs, so the focus stays.
+          disabled={!detail}
+          inert={busy !== null}
+          busy={pendingVisibility !== null}
+          onPick={(value) => void act(`visibility-${value}`, () => window.api.artifacts.setVisibility(artifact.id, value))}
+        />
       </div>
       <div>
         {/* The heading's row holds Create public link: a new link's row grows below, moving nothing under the pointer. */}
@@ -501,7 +507,10 @@ export function ArtifactCard({
   // Opens toward the larger side of the window: a card near the top would
   // hang an above-popover off the top edge, one near the composer the bottom.
   const [placement, setPlacement] = useState<'above-left' | 'below-left'>('above-left')
-  const popover = usePopover<HTMLButtonElement, HTMLDivElement>(placement, { keepTopWhileOpen: true })
+  // Above, it sits over the card's main box rather than the Share button in
+  // the drawer under it, so it never hides the card's title.
+  const mainRef = useRef<HTMLSpanElement>(null)
+  const popover = usePopover<HTMLButtonElement, HTMLDivElement>(placement, { keepTopWhileOpen: true, aboveAnchorRef: mainRef })
   const warning = useArtifactPublishStore((s) => s.warnings[artifact.id])
   const openPreview = useArtifactPreviewStore((s) => s.open)
   const [message, setMessage] = useState<string | null>(null)
@@ -534,6 +543,7 @@ export function ArtifactCard({
       }}
     >
       <span
+        ref={mainRef}
         data-artifact-card-main
         data-ambient-card
         className="ambient-button relative z-[1] block rounded-lg border border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl"
@@ -607,7 +617,10 @@ export function ArtifactCard({
             onClick={() => {
               if (!popover.open) {
                 const rect = popover.triggerRef.current?.getBoundingClientRect()
-                setPlacement(rect && rect.top < window.innerHeight / 2 ? 'below-left' : 'above-left')
+                // Above hangs from the card's top, not the trigger's, so that is the room above.
+                const roomAbove = mainRef.current?.getBoundingClientRect().top ?? rect?.top ?? 0
+                const roomBelow = rect ? window.innerHeight - rect.bottom : 0
+                setPlacement(rect && roomBelow >= roomAbove ? 'below-left' : 'above-left')
               }
               popover.setOpen(!popover.open)
             }}
