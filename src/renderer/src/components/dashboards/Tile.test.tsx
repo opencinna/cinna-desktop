@@ -114,6 +114,8 @@ describe('a markdown tile', () => {
 
 
 describe('a metrics tile', () => {
+  // The view formats in the user's locale (48.200 under de-DE), so expect the same.
+  const VALUE = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(48200)
   const DATA = { items: [1, 2, 3, 4].map((n) => ({ id: `k${n}`, label: `KPI ${n}`, value: 48200, delta: 3, trend: [1, 3, 2] })) }
   const body = (size: 's' | 'm' | 'wide' | 'l' | 'tall') =>
     render(
@@ -129,7 +131,7 @@ describe('a metrics tile', () => {
   it.each(['s', 'm', 'wide'] as const)('a two-row tile (%s) is short: 22 px values on cards that share its height, never scrolled', (size) => {
     // Mutation: drop `short` from TileBody's MetricsView and this fails.
     body(size)
-    const value = screen.getAllByText('48,200')[0]
+    const value = screen.getAllByText(VALUE)[0]
     expect(value.className).toContain('text-[22px]')
     const grid = screen.getByTestId('metrics-view')
     expect(grid.className).toContain('auto-rows-[minmax(0,1fr)]')
@@ -138,12 +140,12 @@ describe('a metrics tile', () => {
 
   it.each(['l', 'tall'] as const)('a four-row tile (%s) keeps the 28 px value', (size) => {
     body(size)
-    expect(screen.getAllByText('48,200')[0].className).toContain('text-[28px]')
+    expect(screen.getAllByText(VALUE)[0].className).toContain('text-[28px]')
     expect(screen.getByTestId('metrics-view').className).not.toContain('overflow-hidden')
   })
 
   it('defaults to the tall scale where no size is known', () => {
     render(<MetricsView data={DATA} />)
-    expect(screen.getAllByText('48,200')[0].className).toContain('text-[28px]')
+    expect(screen.getAllByText(VALUE)[0].className).toContain('text-[28px]')
   })
 })
