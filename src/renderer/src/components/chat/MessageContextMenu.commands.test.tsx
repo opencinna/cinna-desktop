@@ -54,11 +54,11 @@ const items = (): string[] => within(screen.getByRole('menu')).getAllByRole('men
 
 describe('messageMenuItems with a command', () => {
   it('adds Run, Run in background and Edit and Run… for a safe command, Edit and Run… alone otherwise', () => {
-    expect(messageMenuItems(undefined, false, { auto: true })).toEqual([['copy-text', 'save-text'], ['run', 'run-background', 'edit-run']])
-    expect(messageMenuItems(undefined, false, { auto: false })).toEqual([['copy-text', 'save-text'], ['edit-run']])
-    expect(messageMenuItems(undefined, true)).toEqual([['copy-text', 'save-text']])
+    expect(messageMenuItems(undefined, { canPublish: false, command: { auto: true } })).toEqual([['copy-text', 'save-text'], ['run', 'run-background', 'edit-run']])
+    expect(messageMenuItems(undefined, { canPublish: false, command: { auto: false } })).toEqual([['copy-text', 'save-text'], ['edit-run']])
+    expect(messageMenuItems(undefined, { canPublish: true })).toEqual([['copy-text', 'save-text']])
     // Notes off: no Save to Notes anywhere, and no group left empty by it.
-    expect(messageMenuItems(undefined, false, { auto: false }, false)).toEqual([['copy-text'], ['edit-run']])
+    expect(messageMenuItems(undefined, { canPublish: false, command: { auto: false }, saveToNotes: false })).toEqual([['copy-text'], ['edit-run']])
   })
 })
 

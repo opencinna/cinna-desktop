@@ -7,9 +7,9 @@ vi.mock('../../stores/logger.store', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { useMessageContextMenu } from './MessageContextMenu'
+import { messageMenuItems, useFileRefContextMenu, useMessageContextMenu } from './MessageContextMenu'
 import { MessageBubble } from './MessageBubble'
-import { FileRefContext, type FileRefScope } from './fileRefs'
+import { FileRefContext, type FileRefScope, type FileRefTarget } from './fileRefs'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useToastStore } from '../../stores/toast.store'
@@ -481,5 +481,161 @@ describe('placement', () => {
     const y = window.innerHeight - 150 - 8 - 20
     const { before } = await positionsAround(y)
     expect(before).toEqual({ top: '', bottom: '28px' })
+  })
+})
+
+describe('messageMenuItems with Pin file', () => {
+  const target = (r: AgentFileRef): FileRefTarget => ({ agentId: 'folder:a', ref: r })
+
+  it('puts Pin file first, in a group of its own, for a file of a folder agent', () => {
+    expect(messageMenuItems(target(ref('docs/plan.md')), { canPublish: false, saveToNotes: true, pinnable: true })).toEqual([
+      ['pin'],
+      ['copy-contents', 'save-contents'],
+      ['copy-path', 'reveal', 'reference']
+    ])
+    // Any file kind: a credential or binary file keeps its path-only menu below.
+    expect(messageMenuItems(target(ref('.env')), { canPublish: true, saveToNotes: true, pinnable: true })).toEqual([['pin'], ['copy-path', 'reveal', 'reference']])
+    expect(messageMenuItems(target(ref('out/report.html')), { canPublish: true, saveToNotes: true, pinnable: true })).toEqual([
+      ['pin'],
+      ['open-in-browser'],
+      ['copy-contents', 'save-contents'],
+      ['copy-path', 'reveal', 'reference'],
+      ['publish']
+    ])
+  })
+
+  it('has no Pin file for a folder, or for an agent that is not a folder agent', () => {
+    expect(messageMenuItems(target(ref('pulled', { kind: 'dir' })), { canPublish: false, saveToNotes: true, pinnable: true })).toEqual([['copy-path', 'reveal', 'reference']])
+    expect(messageMenuItems(target(ref('docs/plan.md')), { canPublish: false, saveToNotes: true, pinnable: false })).toEqual([
+      ['copy-contents', 'save-contents'],
+      ['copy-path', 'reveal', 'reference']
+    ])
+    expect(messageMenuItems(undefined, { canPublish: false, saveToNotes: true, pinnable: true })).toEqual([['copy-text', 'save-text']])
+  })
+
+  it('offers only Unpin file and Copy full path for a file known to be gone', () => {
+    expect(messageMenuItems(target(ref('out/report.html')), { canPublish: true, saveToNotes: true, pinnable: true, missing: true })).toEqual([['pin'], ['copy-path']])
+    expect(messageMenuItems(target(ref('docs/plan.md')), { canPublish: false, saveToNotes: false, pinnable: true, missing: true })).toEqual([['pin'], ['copy-path']])
+    expect(messageMenuItems(target(ref('docs/plan.md')), { canPublish: false, saveToNotes: true, pinnable: false, missing: true })).toEqual([['copy-path']])
+  })
+
+  it('keeps Pin file first with Notes off', () => {
+    expect(messageMenuItems(target(ref('docs/plan.md')), { canPublish: false, saveToNotes: false, pinnable: true })).toEqual([
+      ['pin'],
+      ['copy-contents'],
+      ['copy-path', 'reveal', 'reference']
+    ])
+  })
+})
+
+describe('Pin file in the menu', () => {
+  const listPins = vi.fn()
+  const setPin = vi.fn()
+  let client: QueryClient
+
+  beforeEach(() => {
+    listPins.mockReset().mockResolvedValue({ success: true, pins: [] })
+    setPin.mockReset().mockResolvedValue({ success: true, pinned: true })
+    Object.assign(window.api.agentFiles, { listPins, setPin })
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(['agents'], [{ id: 'folder:a', name: 'GFCA', enabled: true, capabilities: { cwd: true } }])
+  })
+
+  const mountPinnable = (ui: React.ReactNode = <Harness />) =>
+    render(ui, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> })
+
+  it('offers Pin file first, pins the file for the agent it resolved for, closes, and refetches the pins', async () => {
+    mountPinnable()
+    openOn('docs/plan.md')
+    expect(itemNames()[0]).toBe('Pin file')
+    expect(screen.queryAllByRole('separator')).toHaveLength(2)
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Pin file' }).getAttribute('aria-disabled')).toBeNull())
+    listPins.mockResolvedValue({ success: true, pins: [{ path: '/agent/docs/plan.md', displayPath: 'docs/plan.md', inside: true, rank: 1, exists: true }] })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Pin file' }))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(setPin).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/docs/plan.md', pinned: true })
+    // Owned above the menu: the refetch runs although the menu has gone.
+    await waitFor(() => expect(client.getQueryData(['agent-pinned-files', 'folder:a'])).toHaveLength(1))
+    expect(listPins).toHaveBeenCalledTimes(2)
+  })
+
+  it('says Unpin file for a pinned file', async () => {
+    listPins.mockResolvedValue({ success: true, pins: [{ path: '/agent/docs/plan.md', displayPath: 'docs/plan.md', inside: true, rank: 1, exists: true }] })
+    mountPinnable()
+    openOn('docs/plan.md')
+    expect(await screen.findByRole('menuitem', { name: 'Unpin file' })).toBe(screen.getAllByRole('menuitem')[0])
+  })
+
+  it('waits, without acting, until the pins have loaded', async () => {
+    listPins.mockReturnValue(new Promise(() => {}))
+    mountPinnable()
+    openOn('docs/plan.md')
+    const item = screen.getByRole('menuitem', { name: 'Pin file' })
+    expect(item.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(item)
+    expect(setPin).not.toHaveBeenCalled()
+  })
+
+  it("says main's reason in the menu, which stays open, and puts the list back", async () => {
+    setPin.mockResolvedValue({ success: false, code: 'not_found', error: 'That file is no longer there.' })
+    mountPinnable()
+    openOn('docs/plan.md')
+    await waitFor(() => expect(client.getQueryData(['agent-pinned-files', 'folder:a'])).toEqual([]))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Pin file' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('That file is no longer there.')
+    expect(screen.getByRole('menu')).toBeTruthy()
+    await waitFor(() => expect(client.getQueryData(['agent-pinned-files', 'folder:a'])).toEqual([]))
+  })
+
+  it('offers no Pin file for a folder, or for an agent that is not a folder agent', () => {
+    mountPinnable()
+    openOn('pulled')
+    expect(itemNames()).not.toContain('Pin file')
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    client.setQueryData(['agents'], [{ id: 'folder:a', name: 'GFCA', enabled: true, capabilities: { cwd: false } }])
+    openOn('docs/plan.md')
+    expect(itemNames()).not.toContain('Pin file')
+    expect(listPins).not.toHaveBeenCalled()
+  })
+})
+
+describe('the same menu outside the transcript', () => {
+  const listPins = vi.fn()
+  const setPin = vi.fn()
+  const pinned = ref('docs/plan.md')
+
+  function Row() {
+    const context = useFileRefContextMenu('chat-1')
+    return (
+      <>
+        <button type="button" onContextMenu={(event) => {
+          event.preventDefault()
+          context.openFor({ agentId: 'folder:a', ref: pinned }, { x: 40, y: 40 })
+        }}>plan.md</button>
+        {context.menu}
+      </>
+    )
+  }
+
+  beforeEach(() => {
+    listPins.mockReset().mockResolvedValue({ success: true, pins: [{ path: pinned.path, displayPath: pinned.displayPath, inside: true, rank: 1, exists: true }] })
+    setPin.mockReset().mockResolvedValue({ success: true, pinned: false })
+    Object.assign(window.api.agentFiles, { listPins, setPin })
+  })
+
+  it('offers what the transcript offers for that file, Unpin file first, and its actions work', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(['agents'], [{ id: 'folder:a', name: 'GFCA', enabled: true, capabilities: { cwd: true } }])
+    render(<Row />, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> })
+    fireEvent.contextMenu(screen.getByText('plan.md'))
+    await screen.findByRole('menuitem', { name: 'Unpin file' })
+    expect(itemNames()).toEqual(['Unpin file', 'Copy contents', 'Save to Notes', 'Copy full path', 'Show in the folder', 'Reference in a new chat'])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy full path' }))
+    await waitFor(() => expect(clipboardText).toHaveBeenCalledWith('/agent/docs/plan.md'))
+
+    fireEvent.contextMenu(screen.getByText('plan.md'))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Unpin file' }))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(setPin).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/docs/plan.md', pinned: false })
   })
 })

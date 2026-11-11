@@ -5,6 +5,7 @@ import { useChatStore } from '../stores/chat.store'
 import { useAuthStore } from '../stores/auth.store'
 import { useRunEventHandler } from './useChatStream'
 import { useAfterTurnAgentStatus } from './useAgentStatus'
+import { pinnedFilesKey } from './usePinnedFiles'
 
 /** The longest a next turn waits on the ended turn's saved read before it shows anyway. */
 export const HELD_RUN_MAX_MS = 2000
@@ -72,6 +73,13 @@ export function useLiveRunWatch(): void {
       if (event.type === 'updated' && event.action.type === 'success' && event.query.queryKey[0] === 'chat' && event.query.queryKey[1] === chatId) void settle()
     })
     const refresh = (): void => { void queryClient.invalidateQueries({ queryKey: ['chat', chatId] }) }
+    // A turn may have deleted or recreated a pinned file: the chat's root
+    // agent's pins (the card's) are stat-ed again; every agent's when the chat
+    // is not cached.
+    const refreshPins = (): void => {
+      const agentId = queryClient.getQueryData<{ agentId?: string | null }>(['chat', chatId])?.agentId
+      void queryClient.invalidateQueries({ queryKey: agentId ? pinnedFilesKey(agentId) : ['agent-pinned-files'] })
+    }
     const receive = (message: RunWatchMessage): void => {
       if (!current()) return
       if (held) {
@@ -137,11 +145,13 @@ export function useLiveRunWatch(): void {
         void settle()
         void queryClient.invalidateQueries({ queryKey: ['chats'] })
         void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+        refreshPins()
         return
       }
       if (message.type !== 'event') return
       if (replayAvailable) handleRun(chatId, message.event)
       if (message.event.type === 'done' || message.event.type === 'error') {
+        refreshPins()
         const agentId = message.agentId
         if (agentId) {
           refreshStatus(agentId)

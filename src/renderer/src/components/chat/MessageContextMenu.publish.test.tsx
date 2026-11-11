@@ -86,7 +86,7 @@ describe('Publish… in the reference menu', () => {
       expect(items()).not.toContain('Publish…')
       fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
     }
-    expect(messageMenuItems(undefined, true)).toEqual([['copy-text', 'save-text']])
+    expect(messageMenuItems(undefined, { canPublish: true })).toEqual([['copy-text', 'save-text']])
   })
 
   it('is not offered when the instance does not keep artifacts, or the answer is for another profile', () => {

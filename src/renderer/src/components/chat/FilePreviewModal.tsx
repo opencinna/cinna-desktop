@@ -51,7 +51,8 @@ import {
 } from '../../stores/filePreview.store'
 import { useFileDownloadStore } from '../../stores/fileDownload.store'
 import { MAX_PREVIEW_BYTES } from '../../../../shared/filePreview'
-import { agentFileName, isCredentialFileRef } from '../../../../shared/agentFiles'
+import { agentFileName, isCredentialFileRef, type AgentFileRef } from '../../../../shared/agentFiles'
+import { pinnedFilesKey, useIsFilePinned, useTogglePinnedFile } from '../../hooks/usePinnedFiles'
 import { useArtifactsSupport } from '../../hooks/useArtifacts'
 import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -217,6 +218,47 @@ function useCardEntrance({
 const NO_SUBSCRIPTION = (): (() => void) => () => undefined
 
 /**
+ * The ⋯ menu with Pin file / Unpin file, for a file of a folder agent. A
+ * component of its own because it needs a query client, which the preview
+ * otherwise does without; it owns the toggle, so it outlives the menu that
+ * offers it. The pin goes to the agent the preview was opened for.
+ */
+function PinnableFileActionsMenu({ agentId, fileRef, ...props }: React.ComponentProps<typeof FileActionsMenu> & {
+  agentId: string
+  fileRef: AgentFileRef
+}): React.JSX.Element {
+  const pinned = useIsFilePinned(agentId, fileRef.path)
+  const toggle = useTogglePinnedFile()
+  const onTogglePin = (): void => {
+    // Not loaded yet: the item cannot say which it is, so it does nothing.
+    if (pinned === undefined) return
+    useFilePreviewStore.setState({ actionError: null })
+    toggle.mutate(
+      { agentId, path: fileRef.path, displayPath: fileRef.displayPath, inside: fileRef.inside, pinned: !pinned }
+    )
+  }
+  // The answer is read here, not in a `mutate` callback; the list itself is
+  // rolled back by the hook, whether or not the preview is still open.
+  const result = toggle.data
+  const thrown = toggle.error
+  useEffect(() => {
+    if (result && !result.success) {
+      useFilePreviewStore.setState({ actionError: { action: 'pin', code: result.code, reason: result.error } })
+    } else if (thrown) {
+      useFilePreviewStore.setState({ actionError: { action: 'pin', code: null, reason: 'Could not change the pin.' } })
+    }
+  }, [result, thrown])
+  return <FileActionsMenu {...props} pinned={pinned} onTogglePin={onTogglePin} />
+}
+
+/** The ⋯ menu, with Pin file / Unpin file when `pin` names a folder agent's file. */
+function PreviewFileActions({ pin, ...props }: React.ComponentProps<typeof FileActionsMenu> & {
+  pin: { agentId: string; fileRef: AgentFileRef } | null
+}): React.JSX.Element {
+  return pin ? <PinnableFileActionsMenu {...props} {...pin} /> : <FileActionsMenu {...props} />
+}
+
+/**
  * The agent of `chatId` as the chat query last loaded it, followed as the
  * cache changes; undefined before it loaded, and where no query client is
  * mounted. Read from the cache rather than fetched: the preview never asks
@@ -247,6 +289,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
   const { close, openAgentFileExternally, revealAgentFile, openInBrowser, runAgentFile } = live
   const activeChatId = useChatStore((s) => s.activeChatId)
   const activeChatAgentId = useCachedChatAgentId(activeChatId)
+  const queryClient = useContext(QueryClientContext)
   const contentsOpen = useUIStore((s) => s.previewContentsOpen)
   const { supported: canPublish } = useArtifactsSupport()
   const togglePreviewContents = useUIStore((s) => s.togglePreviewContents)
@@ -280,6 +323,13 @@ export function FilePreviewModal(): React.JSX.Element | null {
     pendingAction,
     actionError
   } = exiting && exitView ? exitView : live
+  // An agent file the preview found gone may be pinned: the agent's pins are
+  // stat-ed again, so the Pinned files card marks it missing now, not on the
+  // next focus.
+  const goneTarget = live.target?.type === 'agentFile' && !live.isLoading && live.errorCode === 'not_found' ? live.target : null
+  useEffect(() => {
+    if (goneTarget && queryClient) void queryClient.invalidateQueries({ queryKey: pinnedFilesKey(goneTarget.agentId) })
+  }, [goneTarget, queryClient])
   const download = useFileDownloadStore((s) => s.download)
   const isDownloading = useFileDownloadStore((s) =>
     attachment ? s.downloadingIds.has(attachment.id) : false
@@ -540,6 +590,14 @@ export function FilePreviewModal(): React.JSX.Element | null {
       : (attachmentTarget?.filename ?? '')
   // A folder only reaches the modal when showing it failed: no file actions.
   const fileActions = agentFile?.ref.kind === 'file'
+  // Pin file / Unpin file for a file of a folder agent (from the cached agents; main checks again).
+  const pinnable =
+    fileActions &&
+    queryClient !== undefined &&
+    queryClient
+      .getQueryData<Array<{ id: string; capabilities?: { cwd?: boolean } | null }>>(['agents'])
+      ?.find((agent) => agent.id === agentFile.agentId)?.capabilities?.cwd === true
+  const pin = pinnable && agentFile ? { agentId: agentFile.agentId, fileRef: agentFile.ref } : null
   // A file the body already says has gone: its actions could only fail, and
   // their error would repeat the body, so a click would look like nothing.
   const fileGone = !isLoading && error !== null && errorCode === 'not_found'
@@ -744,8 +802,9 @@ export function FilePreviewModal(): React.JSX.Element | null {
               </button>
             )}
             {fileActions && (
-              <FileActionsMenu
+              <PreviewFileActions
                 key={targetKey}
+                pin={pin}
                 dismissed={exiting}
                 pendingAction={pendingAction === 'run' ? null : pendingAction}
                 fileGone={fileGone}

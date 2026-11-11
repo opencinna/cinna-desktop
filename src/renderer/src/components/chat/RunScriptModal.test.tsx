@@ -175,6 +175,28 @@ describe('the Run Script window', () => {
     expect(line().value).toBe('ls second')
   })
 
+  it('previews the script under its canonical path, as main resolves it, so the preview\'s pin matches the card', async () => {
+    const resolve = vi.fn(async () => ({
+      success: true,
+      refs: [{ text: '/Users/me/agents/a/scripts/check.py', source: 'span', path: '/real/agents/a/scripts/check.py', displayPath: 'scripts/check.py', kind: 'file', inside: true }]
+    }))
+    Object.assign((window.api as unknown as { agentFiles: object }).agentFiles, { resolve })
+    const { useFilePreviewStore } = await import('../../stores/filePreview.store')
+    const openAgentFile = vi.spyOn(useFilePreviewStore.getState(), 'openAgentFile').mockResolvedValue()
+    try {
+      mount()
+      openOn('uv run scripts/check.py italy')
+      fireEvent.click(screen.getByRole('button', { name: 'More run actions' }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Preview source' }))
+      await waitFor(() => expect(openAgentFile).toHaveBeenCalled())
+      expect(resolve).toHaveBeenCalledWith({ agentId: 'folder:a', entries: [{ text: '/Users/me/agents/a/scripts/check.py', source: 'span' }] })
+      expect(openAgentFile.mock.calls[0][0]).toBe('folder:a')
+      expect(openAgentFile.mock.calls[0][1]).toMatchObject({ path: '/real/agents/a/scripts/check.py', text: 'scripts/check.py', inside: true })
+    } finally {
+      openAgentFile.mockRestore()
+    }
+  })
+
   it('counts a long line\'s soft wraps in its rows, measured at open', () => {
     const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
     const rect = HTMLElement.prototype.getBoundingClientRect

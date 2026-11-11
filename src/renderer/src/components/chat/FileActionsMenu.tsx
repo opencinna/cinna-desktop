@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Copy, ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal, Upload } from 'lucide-react'
+import { Check, Copy, ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal, Pin, PinOff, Upload } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
 import { MODAL_HEADER_ICON } from '../ui/modalHeader'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
@@ -30,10 +30,18 @@ interface FileActionsMenuProps {
   onPublish?: () => void
   /** The preview is fading out: an open menu goes with it. */
   dismissed: boolean
+  /**
+   * Offered for a file of a folder agent: Pin file / Unpin file, first, with a
+   * separator after it. Unpin stays available for a file that has gone.
+   */
+  onTogglePin?: () => void
+  /** Whether the file is pinned; undefined while the agent's pins load (the item waits). */
+  pinned?: boolean
 }
 
 /**
- * The file preview's ⋯ menu: Open, Open in browser (HTML only), Open folder and
+ * The file preview's ⋯ menu: Pin file / Unpin file first for a folder
+ * agent's file, then Open, Open in browser (HTML only), Open folder and
  * Copy content for a file an agent named, then Publish under a separator when
  * the file can be published (it was a header button; it is as occasional as these).
  *
@@ -59,7 +67,9 @@ export function FileActionsMenu({
   copyDisabled,
   copied,
   onPublish,
-  dismissed
+  dismissed,
+  onTogglePin,
+  pinned
 }: FileActionsMenuProps): React.JSX.Element {
   const menu = usePopover<HTMLButtonElement>('below-right')
   const { open, setOpen, triggerRef, popoverRef } = menu
@@ -170,6 +180,21 @@ export function FileActionsMenu({
             className={MENU_SURFACE}
             {...{ [PREVIEW_POPOVER_ATTR]: '' }}
           >
+            {onTogglePin && (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={MENU_ITEM}
+                  disabled={pinned === undefined || (!pinned && fileGone)}
+                  onClick={() => run(onTogglePin)}
+                >
+                  {pinned ? <PinOff size={12} /> : <Pin size={12} />}
+                  {pinned ? 'Unpin file' : 'Pin file'}
+                </button>
+                <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
+              </>
+            )}
             <button type="button" role="menuitem" className={MENU_ITEM} disabled={disabled} onClick={() => run(onOpen)}>
               <ExternalLink size={12} />
               Open

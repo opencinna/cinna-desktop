@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Copy, ExternalLink, FileText, FolderOpen, Loader2, Minus, MoreHorizontal, Paperclip, SquareTerminal, X } from 'lucide-react'
+import type { AgentFileRef } from '../../../../shared/agentFiles'
 import type { SessionActivityItem } from '../../../../shared/sessionActivity'
 import { COMMAND_COLUMNS, homeDisplayPath, type UserCommandEnd, type UserCommandOutputFrame } from '../../../../shared/userCommands'
 import { buildCommand, commandScript, editCommand, preferredFlag, preferredOffFlag, readCommand, type ScriptForm, type ScriptValues } from '../../../../shared/scriptArgs'
@@ -443,9 +444,8 @@ function RunScriptCard({ view, exiting, onExited }: {
             }}
             onPreview={() => {
               if (!agentId || !scriptPath || !script) return
-              void useFilePreviewStore.getState().openAgentFile(
-                agentId, { text: script, path: scriptPath, displayPath: script, kind: 'file', inside: true }, null, view.messageId
-              )
+              void previewRef(agentId, script, scriptPath).then((ref) =>
+                useFilePreviewStore.getState().openAgentFile(agentId, ref, null, view.messageId))
             }}
             onOpenFolder={() => {
               if (!agentId) return
@@ -558,6 +558,23 @@ function RunScriptCard({ view, exiting, onExited }: {
     </div>,
     document.body
   )
+}
+
+/**
+ * The script as the preview names it: canonical, as main resolves a
+ * transcript reference (`agentFiles.resolve`), so the preview's Pin file /
+ * Unpin file compares and stores the same path the card holds. The joined
+ * path is kept when main finds nothing there; the preview then says so.
+ */
+async function previewRef(agentId: string, script: string, scriptPath: string): Promise<AgentFileRef> {
+  const joined: AgentFileRef = { text: script, path: scriptPath, displayPath: script, kind: 'file', inside: true }
+  try {
+    const result = await window.api.agentFiles.resolve({ agentId, entries: [{ text: scriptPath, source: 'span' }] })
+    const hit = result.success ? result.refs[0] : undefined
+    return hit && hit.kind === 'file' ? { ...hit, text: script } : joined
+  } catch {
+    return joined
+  }
 }
 
 /** The window's ⋯ menu: the occasional actions on the script, its folder, the command and the output. */

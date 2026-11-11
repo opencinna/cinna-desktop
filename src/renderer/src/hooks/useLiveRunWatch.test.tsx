@@ -99,6 +99,19 @@ describe('selected chat live subscription', () => {
     }
   })
 
+  it('stats the chat’s root agent’s pinned files again when a turn ends, and only that agent’s', () => {
+    client.setQueryData(['chat', 'a'], { id: 'a', agentId: 'folder:root', messages: [], activeRunId: null })
+    client.setQueryData(['agent-pinned-files', 'folder:root'], [])
+    client.setQueryData(['agent-pinned-files', 'folder:other'], [])
+    mount()
+    emit(snapshot('r', [], 0))
+    emit({ type: 'event', runId: 'r', sequence: 1, agentId: 'folder:sub', event: delta('working') })
+    expect(client.getQueryState(['agent-pinned-files', 'folder:root'])?.isInvalidated).toBe(false)
+    emit({ type: 'event', runId: 'r', sequence: 2, agentId: 'folder:sub', event: { type: 'done' } as RunEvent })
+    expect(client.getQueryState(['agent-pinned-files', 'folder:root'])?.isInvalidated).toBe(true)
+    expect(client.getQueryState(['agent-pinned-files', 'folder:other'])?.isInvalidated).toBe(false)
+  })
+
   it('replays once, ignores overlapping sequence delivery, detaches without cancel and isolates another chat', () => {
     const view = mount()
     emit(snapshot('r', [{ type: 'request-id', requestId: 'req' }, delta('one')], 2))

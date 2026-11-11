@@ -1,7 +1,7 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type KeyboardEvent } from 'react'
+import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { useQueryClient } from '@tanstack/react-query'
-import { Cog, Copy, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, Play, SquarePen, Upload, type LucideIcon } from 'lucide-react'
+import { QueryClientContext, useQueryClient } from '@tanstack/react-query'
+import { Cog, Copy, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, Pin, PinOff, Play, SquarePen, Upload, type LucideIcon } from 'lucide-react'
 import {
   agentFileContentKind,
   isCredentialFileRef,
@@ -9,7 +9,8 @@ import {
   type AgentFileConsentPurpose,
   type AgentFilePathInput,
   type AgentFileRef,
-  type AgentFileTextUse
+  type AgentFileTextUse,
+  type SetPinnedAgentFileResult
 } from '../../../../shared/agentFiles'
 import { previewKindFor } from '../../../../shared/filePreview'
 import type { ComposerPathRef } from '../../../../shared/pathMentions'
@@ -20,6 +21,7 @@ import { useArtifactsSupport } from '../../hooks/useArtifacts'
 import { useToastStore } from '../../stores/toast.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useCapabilities } from '../../hooks/useCapabilities'
+import { togglePinnedFile, useIsFilePinned, type TogglePinnedFileInput } from '../../hooks/usePinnedFiles'
 import { authorizeAgentFile, readAgentFileText } from '../../utils/agentFileAccess'
 import { startableAgent } from '../../utils/appShortcuts'
 import { fileNoteFromContents } from '../../utils/fileNote'
@@ -57,6 +59,8 @@ interface MenuState {
   file?: FileRefTarget
   /** The right-clicked code that is not a file reference: the menu looks for a command in it. */
   code?: { element: HTMLElement; text: string }
+  /** The file is known to be gone (a pin whose file was deleted): only what works without it is offered. */
+  missing?: boolean
 }
 
 /** Room kept below a top-anchored menu for an error row (two lines of `text-xs`). */
@@ -66,6 +70,7 @@ const ERROR_ROW_RESERVE = 48
 type MenuPosition = { left: number; top: number; bottom?: undefined } | { left: number; bottom: number; top?: undefined }
 
 export type MessageMenuItem =
+  | 'pin'
   | 'copy-text'
   | 'save-text'
   | 'open-in-browser'
@@ -78,6 +83,16 @@ export type MessageMenuItem =
   | 'run'
   | 'run-background'
   | 'edit-run'
+
+/** The options of {@link messageMenuItems}; each defaults to off, `saveToNotes` to on. */
+export interface MessageMenuOptions {
+  canPublish?: boolean
+  command?: { auto: boolean }
+  /** Notes on (the default); off drops Save to Notes. */
+  saveToNotes?: boolean
+  pinnable?: boolean
+  missing?: boolean
+}
 
 /**
  * The menu's items, in groups separated by a divider. Decided once, from the
@@ -94,14 +109,28 @@ export type MessageMenuItem =
  * `command` (code that is not a file reference holds a command, in a local
  * agent's message) adds a last group: Run, Run in background and Edit and
  * Run… for one that looks safe, Edit and Run… alone for any other.
+ *
+ * `pinnable` (the reference's agent is a folder agent, `capabilities.cwd`)
+ * puts Pin file / Unpin file first, in a group of its own, for a file — never
+ * for a folder. The pin goes to the agent the reference resolved for.
+ *
+ * `missing` (the file is known to be gone — a pinned file's row says so)
+ * leaves only what works without it: Unpin file and Copy full path.
  */
-export function messageMenuItems(file: FileRefTarget | undefined, canPublish = false, command?: { auto: boolean }, saveToNotes = true): MessageMenuItem[][] {
+export function messageMenuItems(file: FileRefTarget | undefined, options: MessageMenuOptions = {}): MessageMenuItem[][] {
+  const { canPublish = false, command, saveToNotes = true, pinnable = false, missing = false } = options
+  if (file && missing) {
+    return pinnable && file.ref.kind === 'file' ? [['pin'], ['copy-path']] : [['copy-path']]
+  }
   // Notes off (Settings → Features → Capabilities): no Save to Notes, and a
-  // group it leaves empty goes with it.
+  // group it leaves empty goes with it. The other options are passed on whole.
   if (!saveToNotes) {
-    return messageMenuItems(file, canPublish, command)
+    return messageMenuItems(file, { ...options, saveToNotes: true })
       .map((group) => group.filter((item) => item !== 'save-text' && item !== 'save-contents'))
       .filter((group) => group.length > 0)
+  }
+  if (file && pinnable && file.ref.kind === 'file') {
+    return [['pin'], ...messageMenuItems(file, { ...options, pinnable: false })]
   }
   if (!file) {
     if (!command) return [['copy-text', 'save-text']]
@@ -215,17 +244,64 @@ export function menuCommandOf(
   return { text, messageId, agentId: agent?.id ?? null, folder: agent?.localPath ?? null, auto: looksAutoRunnable(text) }
 }
 
-export function useMessageContextMenu(chatId: string) {
+/**
+ * The menu's owner: its open state and what outlives it. The pin toggle is
+ * handed down from here rather than owned by the menu, which unmounts on the
+ * click that runs it (TanStack drops a `mutate`-level callback of an unmounted
+ * caller): it runs as a mutation of the client's own cache. No query client
+ * is needed until the menu acts, so a transcript mounted without one still
+ * renders. Shared by
+ * the transcript ({@link useMessageContextMenu}) and the Pinned files card
+ * ({@link useFileRefContextMenu}), so both open the same menu with the same
+ * actions.
+ */
+function useMenuHost(chatId: string) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const nextId = useRef(0)
   const profileId = useAuthStore((s) => s.currentUser?.id)
   const { supported: canPublish } = useArtifactsSupport()
+  const queryClient = useContext(QueryClientContext)
+  const onTogglePin = useCallback((input: TogglePinnedFileInput): Promise<SetPinnedAgentFileResult> =>
+    queryClient ? togglePinnedFile(queryClient, input) : Promise.reject(new Error('No query client')), [queryClient])
   const close = useCallback(() => setMenu(null), [])
   const closeCurrent = useCallback(() => setMenu((current) => current === menu ? null : current), [menu])
   useEffect(close, [chatId, profileId, close])
+  const open = useCallback((state: Omit<MenuState, 'id'>) => setMenu({ ...state, id: ++nextId.current }), [])
+  return {
+    open,
+    close,
+    menu: menu
+      ? <MessageContextMenu key={menu.id} {...menu} chatId={chatId} canPublish={canPublish} onTogglePin={onTogglePin} onClose={closeCurrent} />
+      : null
+  }
+}
+
+/**
+ * The same menu for a file reference shown outside the transcript — a row of
+ * the Pinned files card: `openFor(target, point)` offers exactly what a
+ * right-click on that reference in the transcript would (Unpin file first,
+ * when it is pinned), with the same actions. `{ missing: true }`, for a file
+ * known to be gone, offers only Unpin file and Copy full path.
+ */
+export function useFileRefContextMenu(chatId: string) {
+  const host = useMenuHost(chatId)
+  const { open } = host
+  const openFor = useCallback((
+    file: FileRefTarget,
+    point: { x: number; y: number },
+    highlight?: HTMLElement,
+    options?: { missing?: boolean }
+  ) => {
+    open({ text: file.ref.path, file, highlight, x: point.x, y: point.y, missing: options?.missing === true })
+  }, [open])
+  return { openFor, close: host.close, menu: host.menu }
+}
+
+export function useMessageContextMenu(chatId: string) {
+  const { open, close, menu } = useMenuHost(chatId)
   const onContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (!(event.target instanceof Element) || event.target.closest('input, textarea, [contenteditable="true"]')) {
-      setMenu(null)
+      close()
       return
     }
     const point = event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined
@@ -236,22 +312,30 @@ export function useMessageContextMenu(chatId: string) {
     const file = link?.file ?? (code && code.element.tagName === 'CODE' ? fileRefTargetOf(code.element) ?? undefined : undefined)
     const text = link?.file.ref.path ?? code?.text ?? selected
     if (!text.trim()) {
-      setMenu(null)
+      close()
       return
     }
     event.preventDefault()
     const rect = event.target.getBoundingClientRect()
     const highlight = link?.element ?? code?.element
     // Commands are looked for only where no file reference was found.
-    setMenu({ id: ++nextId.current, text, highlight, file, code: code && !file ? code : undefined, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
-  }, [])
-  return {
-    onContextMenu,
-    menu: menu ? <MessageContextMenu key={menu.id} {...menu} chatId={chatId} canPublish={canPublish} onClose={closeCurrent} /> : null
-  }
+    open({ text, highlight, file, code: code && !file ? code : undefined, x: event.clientX || rect.left, y: event.clientY || rect.bottom })
+  }, [open, close])
+  return { onContextMenu, menu }
 }
 
-function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPublish, onClose }: MenuState & { chatId: string; canPublish: boolean; onClose: () => void }) {
+/** Whether the reference's agent is a folder agent, from the cached agents (main checks again). */
+function folderAgentOf(file: FileRefTarget | undefined, agents: readonly AgentData[] | undefined): boolean {
+  if (!file) return false
+  return agents?.find((agent) => agent.id === file.agentId)?.capabilities?.cwd === true
+}
+
+function MessageContextMenu({ x, y, text, highlight, file, code, missing, chatId, canPublish, onTogglePin, onClose }: MenuState & {
+  chatId: string
+  canPublish: boolean
+  onTogglePin: (input: TogglePinnedFileInput) => Promise<SetPinnedAgentFileResult>
+  onClose: () => void
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<MenuPosition>({ left: x, top: y })
   const [error, setError] = useState<string | null>(null)
@@ -267,6 +351,10 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
   const [command] = useState(() => code
     ? menuCommandOf(code, queryClient.getQueryData<CachedChat>(['chat', chatId]), queryClient.getQueryData<AgentData[]>(['agents']))
     : undefined)
+  // Decided once, at open, from the cached agents, like `command`.
+  const [pinnable] = useState(() => file?.ref.kind === 'file' && folderAgentOf(file, queryClient.getQueryData<AgentData[]>(['agents'])))
+  // Undefined until the agent's pins have loaded: the item waits rather than guess its label.
+  const pinned = useIsFilePinned(pinnable && file ? file.agentId : null, pinnable && file ? file.ref.path : null)
   // A block right-clicked mid-stream keeps growing under its outline; the
   // action takes the block as it is now, not as it was at the right-click.
   const payload = (): string => (highlight?.isConnected ? codeText(highlight) : text)
@@ -436,6 +524,18 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
   }
 
   const actions: Record<MessageMenuItem, () => Promise<void>> = {
+    'pin': () => run('pin', async (fail) => {
+      if (!file || pinned === undefined) return
+      const result = await onTogglePin({
+        agentId: file.agentId,
+        path: file.ref.path,
+        displayPath: file.ref.displayPath,
+        inside: file.ref.inside,
+        pinned: !pinned
+      })
+      if (result.success) onClose()
+      else fail(result.error)
+    }, pinned ? 'Could not unpin the file.' : 'Could not pin the file.'),
     'copy-text': () => run('copy-text', async () => {
       await navigator.clipboard.writeText(payload())
       onClose()
@@ -505,6 +605,7 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
   }
 
   const labels: Record<MessageMenuItem, [string, LucideIcon]> = {
+    'pin': pinned ? ['Unpin file', PinOff] : ['Pin file', Pin],
     'copy-text': ['Copy text', Copy],
     'save-text': ['Save to Notes', NotebookPen],
     'open-in-browser': ['Open in browser', Globe],
@@ -521,7 +622,7 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
   }
   // Decided once, at open: nothing appears or disappears while the menu is open.
   const notesEnabled = useCapabilities().notesEnabled
-  const [groups] = useState(() => messageMenuItems(file, canPublish, command, notesEnabled))
+  const [groups] = useState(() => messageMenuItems(file, { canPublish, command, saveToNotes: notesEnabled, pinnable, missing }))
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (['Escape', 'Tab', 'PageUp', 'PageDown'].includes(event.key)) {
@@ -561,13 +662,16 @@ function MessageContextMenu({ x, y, text, highlight, file, code, chatId, canPubl
           {group.map((item) => {
             const [label, Icon] = labels[item]
             const running = busyItem === item
+            // The pin item before the agent's pins have loaded: it cannot yet say which it is.
+            const waiting = item === 'pin' && pinned === undefined
+            const dimmed = (busyItem !== null && !running) || waiting
             return (
               <button key={item} type="button" role="menuitem" data-menu-item={item}
-                aria-disabled={busyItem !== null || undefined} aria-busy={running || undefined}
-                className={`${itemClass} ${busyItem !== null && !running ? 'opacity-50' : ''}`}
+                aria-disabled={busyItem !== null || waiting || undefined} aria-busy={running || undefined}
+                className={`${itemClass} ${dimmed ? 'opacity-50' : ''}`}
                 onPointerEnter={focusItem} onPointerMove={focusItem}
                 onClick={() => {
-                  if (!acting.current) void actions[item]()
+                  if (!acting.current && !waiting) void actions[item]()
                 }}>
                 {running
                   ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden />

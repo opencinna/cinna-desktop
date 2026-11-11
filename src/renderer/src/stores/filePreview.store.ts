@@ -96,7 +96,8 @@ export function isRunnableScriptRef(ref: AgentFileRef, text: string): boolean {
 
 /** A header action (Open / Open folder / Open in browser / Run…) that failed, shown inline under the header. */
 export interface PreviewActionError {
-  action: PreviewAction
+  /** `pin`: Pin file / Unpin file in the ⋯ menu, which has no pending state of its own. */
+  action: PreviewAction | 'pin'
   /** Null when the call itself threw rather than answering. */
   code: AgentFileErrorCode | null
   reason: string
@@ -239,7 +240,7 @@ export function agentFileErrorText(
  */
 export function actionErrorText(actionError: PreviewActionError): string {
   // Main's sentence for Run… already says what could not be done.
-  if (actionError.code === 'launch_failed' || actionError.action === 'run') return actionError.reason
+  if (actionError.code === 'launch_failed' || actionError.action === 'run' || actionError.action === 'pin') return actionError.reason
   if (actionError.action === 'browser') return `Couldn't open it in the browser: ${actionError.reason}`
   return actionError.action === 'open'
     ? `Couldn't open it: ${actionError.reason}`
