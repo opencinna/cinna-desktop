@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { Check, Loader2, Mic } from 'lucide-react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react'
+import { Check, Cloud, Loader2, Mic } from 'lucide-react'
 import { CONTEXT_MENU_ITEM, CONTEXT_MENU_SURFACE, ContextMenu } from '../../ui/ContextMenu'
 import { MenuSwitchItem } from '../../ui/MenuSwitchItem'
 import { useUIStore } from '../../../stores/ui.store'
@@ -24,12 +24,14 @@ async function listMicrophones(): Promise<Microphone[]> {
     .map((device, index) => ({ deviceId: device.deviceId, label: device.label || `Microphone ${index + 1}` }))
 }
 
-const BUTTON = 'p-1.5 rounded-lg transition-colors'
+const BUTTON = 'relative p-1.5 rounded-lg transition-colors'
 const IDLE = `${BUTTON} text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]`
 const BLOCKED = `${BUTTON} text-[var(--color-text-muted)] opacity-40`
 // Recording: the same microphone, red and pulsing, so it never reads as the turn's Stop.
 const RECORDING = `${BUTTON} text-[var(--color-danger)] hover:bg-[var(--color-bg-hover)]`
 const TRANSCRIBING = `${BUTTON} text-[var(--color-text-muted)] cursor-wait`
+
+export const CLOUD_TRANSCRIPTION_NOTE = 'Transcribing with Gemini — audio is sent to Google'
 
 /** Where a live dictation writes: its composer's draft key and that draft's text setter. */
 export interface DictationTarget {
@@ -41,7 +43,9 @@ export interface DictationTarget {
  * The composer's voice input: click to record, click again to stop. Where main
  * streams, the words appear at the caret while the user speaks (see
  * `liveDictation.store.ts`); otherwise the text lands in the composer after stop. Right-click picks the microphone. Rendered only
- * where main reports a speech engine; the box is the same in every state, so
+ * where main reports voice input available (on-device, or Gemini by the
+ * user's setting); while a session runs on Gemini a small cloud mark sits in
+ * the button's corner; the box is the same in every state, so
  * nothing beside it moves (ux_rules §1). The headphone button toggles it too
  * (see `mediaKeys.ts`); its double click sends the composer, and while
  * recording it stops, transcribes and sends. Errors go to the composer's
@@ -66,7 +70,7 @@ export function VoiceInputButton({
 }): React.JSX.Element | null {
   const status = useSpeechStatus()
   const shown = useUIStore((s) => s.showVoiceInput)
-  if (!status.supported || !shown) return null
+  if (!status.available || !shown) return null
   return <VoiceInputControl blocked={speechBlocked(status)} onText={onText} onError={onError} onSend={onSend} composerRef={composerRef} dictation={dictation} />
 }
 
@@ -109,6 +113,8 @@ function VoiceInputControl({
   target.current = dictation
   const span = useRef<DictationSpan | null>(null)
   const partial = useRef('')
+  // This session's audio goes to Google: the cloud mark, until the session ends.
+  const [cloud, setCloud] = useState(false)
   const finishing = useRef(false)
   const controls = useRef<LiveDictationControls>({ freeze: () => {}, cancel: () => {}, send: () => {} })
   const publish = useCallback(() => {
@@ -152,7 +158,9 @@ function VoiceInputControl({
       partial.current = ''
       publish()
     },
+    onBackend: (backend) => setCloud(backend === 'gemini-live'),
     onSessionEnd: (completed) => {
+      setCloud(false)
       const t = target.current
       span.current = null
       partial.current = ''
@@ -286,13 +294,16 @@ function VoiceInputControl({
 
   const recording = state === 'recording'
   const transcribing = state === 'transcribing'
-  const title = recording
+  const cloudNoteId = useId()
+  const stateTitle = recording
     ? 'Stop recording'
     : transcribing
       ? (dictation ? 'Finishing…' : 'Transcribing…')
       : blocked
         ? SPEECH_BLOCKED_HINT
         : 'Audio input · right-click to choose the microphone'
+  const showCloud = cloud && state !== 'idle'
+  const title = showCloud ? `${stateTitle} · ${CLOUD_TRANSCRIPTION_NOTE}` : stateTitle
 
   return (
     <>
@@ -304,6 +315,7 @@ function VoiceInputControl({
         // Read by minimal view's wipe gesture, which does not count while recording.
         data-voice-recording={recording || undefined}
         title={title}
+        aria-describedby={showCloud ? cloudNoteId : undefined}
         disabled={transcribing}
         onClick={() => {
           mediaToggle.current?.promote()
@@ -316,6 +328,16 @@ function VoiceInputControl({
         className={recording ? RECORDING : transcribing ? TRANSCRIBING : blocked ? BLOCKED : IDLE}
       >
         {transcribing ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} className={recording ? 'motion-safe:animate-pulse' : undefined} />}
+        {/* Inside the button's padding, in its very corner: the box keeps its size
+            (ux_rules §1) and the mark clears the spinner's arc. The text colour,
+            not the accent: it must read apart from the red recording mic. */}
+        {showCloud && (
+          <>
+            <Cloud size={9} strokeWidth={2.5} aria-hidden="true" data-testid="voice-cloud-mark"
+              className="pointer-events-none absolute right-0 bottom-0 text-[var(--color-text)]" />
+            <span id={cloudNoteId} className="sr-only">{CLOUD_TRANSCRIPTION_NOTE}</span>
+          </>
+        )}
       </button>
       {menu && (
         <ContextMenu

@@ -4,7 +4,7 @@ import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SpeechStatus } from '../../../../../shared/speech'
 
-type RecorderOptions = { onText: (text: string) => void; onError: (message: string | null) => void }
+type RecorderOptions = { onText: (text: string) => void; onError: (message: string | null) => void; dictation?: import('./useVoiceRecorder').DictationCallbacks }
 const recorder = vi.hoisted(() => ({
   state: 'idle' as 'idle' | 'recording' | 'transcribing',
   /** The recorder's live state when it runs ahead of the rendered one. */
@@ -51,7 +51,12 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
   return createElement(QueryClientProvider, { client }, children)
 }
 
-const supported: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted' }
+const NO_CLOUD: SpeechStatus['cloud'] = { mode: 'off', usable: false, providers: [] }
+const supported: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', available: true, cloud: NO_CLOUD }
+const GEMINI_ONLY: SpeechStatus = {
+  supported: false, engine: null, authorization: 'unknown', reason: 'Speech recognition needs macOS.', available: true,
+  cloud: { mode: 'fallback', usable: true, providers: [{ id: 'g1', name: 'Gemini' }] }
+}
 
 beforeEach(() => {
   recorder.state = 'idle'
@@ -67,7 +72,7 @@ beforeEach(() => {
 
 describe('VoiceInputButton', () => {
   it('renders nothing when speech is unsupported, or the API answers nonsense', async () => {
-    status.mockResolvedValue({ supported: false, engine: null, authorization: 'unknown' })
+    status.mockResolvedValue({ supported: false, engine: null, authorization: 'unknown', available: false, cloud: NO_CLOUD })
     const { container, unmount } = render(createElement(VoiceInputButton, { onText: vi.fn(), onError: vi.fn(), onSend: vi.fn() }), { wrapper })
     await waitFor(() => expect(status).toHaveBeenCalled())
     expect(container.innerHTML).toBe('')
@@ -76,6 +81,57 @@ describe('VoiceInputButton', () => {
     const second = render(createElement(VoiceInputButton, { onText: vi.fn(), onError: vi.fn(), onSend: vi.fn() }), { wrapper })
     await waitFor(() => expect(status).toHaveBeenCalledTimes(2))
     expect(second.container.innerHTML).toBe('')
+  })
+
+  it('shows where only Gemini can transcribe (no on-device engine), and stays hidden when that is not usable', async () => {
+    status.mockResolvedValue(GEMINI_ONLY)
+    const { unmount } = render(createElement(VoiceInputButton, { onText: vi.fn(), onError: vi.fn(), onSend: vi.fn() }), { wrapper })
+    const button = await screen.findByRole('button', { name: 'Audio input' })
+    fireEvent.click(button)
+    expect(recorder.toggle).toHaveBeenCalledTimes(1)
+    unmount()
+    status.mockResolvedValue({ ...GEMINI_ONLY, available: false, cloud: { mode: 'fallback', usable: false, providers: [] } })
+    const second = render(createElement(VoiceInputButton, { onText: vi.fn(), onError: vi.fn(), onSend: vi.fn() }), { wrapper })
+    await waitFor(() => expect(status).toHaveBeenCalledTimes(2))
+    expect(second.container.innerHTML).toBe('')
+  })
+
+  it('is not blocked by a denied on-device permission while cloud transcription is on Always', async () => {
+    status.mockResolvedValue({ ...supported, authorization: 'denied', cloud: { mode: 'always', usable: true, providers: [{ id: 'g1', name: 'Gemini' }] } })
+    const onError = vi.fn()
+    render(createElement(VoiceInputButton, { onText: vi.fn(), onError, onSend: vi.fn() }), { wrapper })
+    fireEvent.click(await screen.findByRole('button', { name: 'Audio input' }))
+    expect(recorder.toggle).toHaveBeenCalledTimes(1)
+    expect(onError).not.toHaveBeenCalledWith(expect.stringContaining('Speech Recognition'))
+  })
+
+  it('marks the button with a cloud only while the session runs on gemini-live, without resizing it', async () => {
+    status.mockResolvedValue(GEMINI_ONLY)
+    const props = { onText: vi.fn(), onError: vi.fn(), onSend: vi.fn(), dictation: { draftKey: 'chat-1', setDraft: vi.fn() } }
+    const view = render(createElement(VoiceInputButton, props), { wrapper })
+    await screen.findByRole('button', { name: 'Audio input' })
+    recorder.state = 'recording'
+    act(() => { recorder.options?.dictation?.onSessionStart() })
+    act(() => { recorder.options?.dictation?.onBackend?.('sfspeech') })
+    view.rerender(createElement(VoiceInputButton, props))
+    let button = screen.getByRole('button', { name: 'Stop recording' })
+    expect(screen.queryByTestId('voice-cloud-mark')).toBeNull()
+    expect(button.getAttribute('title')).toBe('Stop recording')
+    const classes = button.className
+
+    act(() => { recorder.options?.dictation?.onBackend?.('gemini-live') })
+    button = screen.getByRole('button', { name: 'Stop recording' })
+    expect(screen.getByTestId('voice-cloud-mark')).toBeTruthy()
+    expect(button.getAttribute('title')).toBe('Stop recording · Transcribing with Gemini — audio is sent to Google')
+    expect(document.getElementById(button.getAttribute('aria-describedby') ?? '')?.textContent).toBe('Transcribing with Gemini — audio is sent to Google')
+    // Same box: the mark is absolutely placed inside the padding.
+    expect(button.className).toBe(classes)
+
+    recorder.state = 'idle'
+    act(() => { recorder.options?.dictation?.onSessionEnd(true) })
+    view.rerender(createElement(VoiceInputButton, props))
+    expect(screen.queryByTestId('voice-cloud-mark')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Audio input' }).getAttribute('aria-describedby')).toBeNull()
   })
 
   it('toggles recording on click', async () => {

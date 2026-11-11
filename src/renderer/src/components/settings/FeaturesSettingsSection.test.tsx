@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AiFunctionsBackendStatus } from '../../../../shared/aiFunctions'
+import type { SpeechStatus } from '../../../../shared/speech'
 
 const HEALTHY = {
   autoChatTitles: true,
@@ -20,6 +21,7 @@ beforeEach(() => {
   providers = []
   models = []
   settings = HEALTHY
+  speech = NO_SPEECH
   isError = false
   saveError = null
   setSetting.mockReset()
@@ -28,7 +30,9 @@ vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: provid
 vi.mock('../../hooks/useModels', () => ({ useModels: () => ({ data: models }) }))
 // Its own section with its own test (FinderQuickActionSection.test.tsx).
 vi.mock('./FinderQuickActionSection', () => ({ FinderQuickActionSection: () => null }))
-vi.mock('../chat/voice/useSpeechStatus', () => ({ useSpeechStatus: () => ({ supported: false, engine: null, authorization: 'unknown' }) }))
+const NO_SPEECH: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', available: false, cloud: { mode: 'off', usable: false, providers: [] } }
+let speech: SpeechStatus = NO_SPEECH
+vi.mock('../chat/voice/useSpeechStatus', () => ({ useSpeechStatus: () => speech }))
 vi.mock('../../hooks/useAppSettings', () => ({
   useAiFunctionsBackend: () => ({ data: functionsBackend }),
   useAppSettings: () => ({ data: settings, isLoading: false, isError }),
@@ -386,5 +390,105 @@ describe('AI Functions "Runs on" line', () => {
     render(<FeaturesSettingsSection />)
     const line = screen.getByText('Runs on: —')
     expect(line.getAttribute('aria-busy')).toBe('true')
+  })
+})
+
+describe('voice input rows', () => {
+  const G1 = { id: 'g1', name: 'Personal Gemini' }
+  const G2 = { id: 'g2', name: 'Work Gemini' }
+  const ON_DEVICE: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', available: true, cloud: { mode: 'off', usable: false, providers: [] } }
+  const cloudSelect = (): HTMLSelectElement => screen.getByRole('combobox', { name: 'Cloud transcription' }) as HTMLSelectElement
+  function voiceDescription(): string {
+    fireEvent.click(screen.getByRole('button', { name: 'About Show audio input' }))
+    return screen.getByText(/Shows the microphone button/).textContent ?? ''
+  }
+
+  it('without an on-device engine or a Gemini credential (Linux): locked on Off, a neutral requirement with a way to AI Credentials', () => {
+    useUIStore.setState({ activeView: 'settings', settingsTab: 'features' } as never)
+    render(<FeaturesSettingsSection />)
+    expect(screen.queryByRole('switch', { name: 'Show audio input' })).toBeNull()
+    expect(cloudSelect().value).toBe('off')
+    expect(cloudSelect().disabled).toBe(true)
+    expect(screen.getByText('No Gemini credential')).toBeTruthy()
+    expect(document.querySelector('[class*="--color-warning"]')).toBeNull()
+    expect(screen.queryByRole('combobox', { name: 'Gemini provider' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open AI Credentials' }))
+    expect(useUIStore.getState()).toMatchObject({ activeView: 'settings', settingsTab: 'llm' })
+  })
+
+  it('on a Mac with on-device speech, Off and no Gemini credential: the requirement is behind the (?), not on the surface', () => {
+    speech = ON_DEVICE
+    render(<FeaturesSettingsSection />)
+    expect(screen.queryByText('No Gemini credential')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'About Cloud transcription' }))
+    expect(screen.getByText(/Needs a Gemini credential with an API key, added under AI Credentials/)).toBeTruthy()
+  })
+
+  it('puts Cloud transcription above Show audio input, which a choice there can make appear', () => {
+    speech = ON_DEVICE
+    render(<FeaturesSettingsSection />)
+    const show = screen.getByRole('switch', { name: 'Show audio input' })
+    expect(cloudSelect().compareDocumentPosition(show) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('a mode already on stays changeable after its provider is gone, so it can be turned off', () => {
+    settings = { ...HEALTHY, voiceCloudTranscription: 'always' }
+    speech = { ...ON_DEVICE, cloud: { mode: 'always', usable: false, providers: [] } }
+    render(<FeaturesSettingsSection />)
+    expect(cloudSelect().disabled).toBe(false)
+    // A mode that is on but cannot run is broken: the warning tone.
+    expect(screen.getByText('No Gemini credential')).toBeTruthy()
+    expect(document.querySelector('[class*="--color-warning"]')).toBeTruthy()
+    fireEvent.change(cloudSelect(), { target: { value: 'off' } })
+    expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudTranscription', value: 'off' })
+  })
+
+  it('with no on-device engine but a Gemini key (Linux, Windows): Show audio input appears and promises Google, not this Mac', () => {
+    settings = { ...HEALTHY, voiceCloudTranscription: 'fallback' }
+    speech = { supported: false, engine: null, authorization: 'unknown', available: true, cloud: { mode: 'fallback', usable: true, providers: [G1] } }
+    render(<FeaturesSettingsSection />)
+    expect(screen.getByRole('switch', { name: 'Show audio input' })).toBeTruthy()
+    expect(cloudSelect().disabled).toBe(false)
+    expect(cloudSelect().value).toBe('fallback')
+    expect(screen.queryByText('No Gemini credential')).toBeNull()
+    // One provider: nothing to pick.
+    expect(screen.queryByRole('combobox', { name: 'Gemini provider' })).toBeNull()
+    const description = voiceDescription()
+    expect(description).toMatch(/sent to Google under your own Gemini provider key and billed to it/)
+    expect(description).not.toMatch(/on this Mac/)
+    fireEvent.change(cloudSelect(), { target: { value: 'always' } })
+    expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudTranscription', value: 'always' })
+  })
+
+  it('on-device with cloud off promises this Mac only; on fallback it adds where the audio would go', () => {
+    speech = ON_DEVICE
+    const { unmount } = render(<FeaturesSettingsSection />)
+    const off = voiceDescription()
+    expect(off).toMatch(/on this Mac: Cinna sends the recording nowhere/)
+    expect(off).not.toMatch(/Gemini/)
+    unmount()
+    settings = { ...HEALTHY, voiceCloudTranscription: 'fallback' }
+    speech = { ...ON_DEVICE, cloud: { mode: 'fallback', usable: true, providers: [G1] } }
+    render(<FeaturesSettingsSection />)
+    const fallback = voiceDescription()
+    expect(fallback).toMatch(/on this Mac/)
+    expect(fallback).toMatch(/goes to Google Gemini instead, under your own Gemini provider key and billed to it/)
+  })
+
+  it('offers a provider picker only with more than one usable Gemini provider, showing the one main bills', () => {
+    settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudProviderId: 'gone' }
+    speech = { ...ON_DEVICE, cloud: { mode: 'always', usable: true, providers: [G1, G2] } }
+    const { rerender } = render(<FeaturesSettingsSection />)
+    const picker = screen.getByRole('combobox', { name: 'Gemini provider' }) as HTMLSelectElement
+    // A chosen id that is not usable falls to the first, as in main.
+    expect(picker.value).toBe('g1')
+    // A long name is truncated in the box; the title shows it whole.
+    expect(picker.title).toBe('Personal Gemini')
+    fireEvent.change(picker, { target: { value: 'g2' } })
+    expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudProviderId', value: 'g2' })
+    settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudProviderId: 'g2' }
+    rerender(<FeaturesSettingsSection />)
+    expect((screen.getByRole('combobox', { name: 'Gemini provider' }) as HTMLSelectElement).value).toBe('g2')
+    expect(voiceDescription()).toMatch(/Google Gemini/)
   })
 })

@@ -12,9 +12,15 @@ export interface SpeechStreamSession {
   cancel(): void
 }
 
+/** What a stream is opened with: the renderer's options, plus why main chose this engine (logged). */
+export interface EngineStreamOptions extends SpeechStreamOptions {
+  /** `always`, `fallback: <on-device reason>`, or absent for the on-device default. */
+  chosenBecause?: string
+}
+
 /**
- * One speech-to-text backend. Today only macOS's own recognizer; an OpenAI or
- * remote engine implements the same calls. None ever throws for an expected
+ * One speech-to-text backend: macOS's own recognizer, or Gemini Live on the
+ * user's key; another (OpenAI, a cinna-core relay) implements the same calls. None ever throws for an expected
  * failure: `probe` answers `supported: false` with a reason, `transcribe`
  * answers `success: false` with a code, and a stream ends with an `error`
  * event.
@@ -30,5 +36,5 @@ export interface SpeechEngine {
    * `stop` (with every final joined) or a non-recoverable `error`. Nothing
    * follows the terminal event, and nothing at all follows `cancel`.
    */
-  openStream(options: SpeechStreamOptions, sink: (event: SpeechStreamEvent) => void): SpeechStreamSession
+  openStream(options: EngineStreamOptions, sink: (event: SpeechStreamEvent) => void): SpeechStreamSession
 }

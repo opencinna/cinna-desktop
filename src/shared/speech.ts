@@ -4,14 +4,30 @@
  * a throw: an error code thrown across IPC does not reach the renderer.
  */
 
-/** The engines main can run. Only the macOS one exists today. */
-export type SpeechEngineId = 'macos'
+/** The engines main can run: macOS's own recognizer, and Gemini Live on the user's own key. */
+export type SpeechEngineId = 'macos' | 'gemini'
 
 /**
- * Which recognizer the macOS engine runs: SpeechAnalyzer on macOS 26+ once the
- * language's model is installed, SFSpeechRecognizer otherwise. Diagnostics only.
+ * Which recognizer runs: on macOS, SpeechAnalyzer on macOS 26+ once the
+ * language's model is installed, SFSpeechRecognizer otherwise; `gemini-live`
+ * is Google's cloud transcription. The renderer shows a cloud mark while a
+ * session's backend is `gemini-live`; otherwise diagnostics only.
  */
-export type SpeechBackend = 'analyzer' | 'sfspeech'
+export type SpeechBackend = 'analyzer' | 'sfspeech' | 'gemini-live'
+
+/**
+ * Settings › Features › Cloud transcription (`voiceCloudTranscription`): never
+ * (`off`, the default), only when the on-device engine is unsupported
+ * (`fallback`; a denied permission is the user's answer, not an outage), or
+ * always. Chosen once per dictation, never switched mid-session.
+ */
+export type VoiceCloudTranscription = 'off' | 'fallback' | 'always'
+
+export const VOICE_CLOUD_TRANSCRIPTION_MODES: readonly VoiceCloudTranscription[] = ['off', 'fallback', 'always']
+
+export function isVoiceCloudTranscription(value: unknown): value is VoiceCloudTranscription {
+  return typeof value === 'string' && (VOICE_CLOUD_TRANSCRIPTION_MODES as readonly string[]).includes(value)
+}
 
 export type SpeechAuthorization = 'granted' | 'not-determined' | 'denied' | 'restricted' | 'unknown'
 
@@ -25,12 +41,35 @@ export interface SpeechProbe {
   backend?: SpeechBackend
 }
 
+/** A Gemini provider that can transcribe: enabled, with a key. Never the key itself. */
+export interface SpeechCloudProvider {
+  id: string
+  name: string
+}
+
+/** The cloud half of the status, read fresh on every `speech:status` (no key is decrypted). */
+export interface SpeechCloudStatus {
+  mode: VoiceCloudTranscription
+  /** At least one usable Gemini provider exists. */
+  usable: boolean
+  /** The usable Gemini providers, for the settings picker. */
+  providers: SpeechCloudProvider[]
+}
+
 export interface SpeechStatus {
+  /** The on-device engine (probed once at startup). */
   supported: boolean
   engine: SpeechEngineId | null
   reason?: string
   authorization: SpeechAuthorization
   backend?: SpeechBackend
+  /**
+   * Voice input can run at all: the on-device engine is supported, or cloud
+   * transcription is on with a usable key. Gates the mic button and the
+   * "Show audio input" row.
+   */
+  available: boolean
+  cloud: SpeechCloudStatus
 }
 
 export type TranscribeFailureCode = 'denied' | 'unavailable' | 'no-speech' | 'busy' | 'failed'
@@ -78,7 +117,7 @@ export interface SpeechStreamOptions {
 
 export const SPEECH_STREAM_SAMPLE_RATE = 16_000
 
-const BACKEND_IDS: readonly string[] = ['analyzer', 'sfspeech']
+const BACKEND_IDS: readonly string[] = ['analyzer', 'sfspeech', 'gemini-live']
 const FAILURE_IDS: readonly string[] = ['denied', 'unavailable', 'no-speech', 'busy', 'failed']
 
 /** Trust-boundary guard for frames arriving on a stream port. */

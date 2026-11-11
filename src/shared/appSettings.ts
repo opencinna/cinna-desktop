@@ -7,6 +7,7 @@
 import type { AiSpendingLevel } from './aiSpendingLevel'
 import type { ClaudeAuthMode } from './claudeAuthMode'
 import type { CapabilityState } from './capabilities'
+import type { VoiceCloudTranscription } from './speech'
 
 export interface AppSettingsSchema {
   /** Concurrent autonomous tasks and agent calls on this device. */
@@ -265,6 +266,19 @@ export interface AppSettingsSchema {
    * tri-state as {@link notesCapability}.
    */
   dashboardsCapability: CapabilityState
+  /**
+   * Voice input's cloud transcription (Settings › Features › Cloud
+   * transcription): `'off'` (the default; on-device only), `'fallback'` (Gemini
+   * Live when the on-device engine is unsupported) or `'always'`. Audio then
+   * goes to Google under the user's own Gemini provider key. Read by main's
+   * `speechService` when a dictation opens; a session never switches engine.
+   */
+  voiceCloudTranscription: VoiceCloudTranscription
+  /**
+   * The Gemini provider cloud transcription bills, or empty for the first
+   * usable one. A value naming no usable provider also falls to the first.
+   */
+  voiceCloudProviderId: string
 }
 
 export type AppSettingKey = keyof AppSettingsSchema

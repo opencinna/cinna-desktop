@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tansta
 import type { OllamaDetectionData } from '../../../preload'
 import { AGENT_CREDENTIAL_BINDINGS_KEY } from './useLocalAgents'
 import { AI_FUNCTIONS_BACKEND_KEY } from './useAppSettings'
+import { SPEECH_STATUS_QUERY_KEY } from '../components/chat/voice/useSpeechStatus'
 
 function getApi() {
   if (!window.api) {
@@ -29,6 +30,8 @@ export function useProviders() {
       // Same for the AI Functions credential: a retired or disabled managed
       // row moves titles onto the Default runtime.
       queryClient.invalidateQueries({ queryKey: AI_FUNCTIONS_BACKEND_KEY })
+      // A managed Gemini row can make cloud transcription usable, or not.
+      queryClient.invalidateQueries({ queryKey: SPEECH_STATUS_QUERY_KEY })
     })
   }, [queryClient])
 
@@ -81,6 +84,8 @@ export function useUpsertProvider() {
       // A key, the on/off switch, the default model or a deletion each change
       // where AI Functions run (Settings → Features "Runs on").
       queryClient.invalidateQueries({ queryKey: AI_FUNCTIONS_BACKEND_KEY })
+      // A Gemini key, its switch or its deletion decide whether cloud transcription is usable.
+      queryClient.invalidateQueries({ queryKey: SPEECH_STATUS_QUERY_KEY })
     }
   })
 }
@@ -100,6 +105,8 @@ export function useDeleteProvider() {
       // A key, the on/off switch, the default model or a deletion each change
       // where AI Functions run (Settings → Features "Runs on").
       queryClient.invalidateQueries({ queryKey: AI_FUNCTIONS_BACKEND_KEY })
+      // A Gemini key, its switch or its deletion decide whether cloud transcription is usable.
+      queryClient.invalidateQueries({ queryKey: SPEECH_STATUS_QUERY_KEY })
     }
   })
 }

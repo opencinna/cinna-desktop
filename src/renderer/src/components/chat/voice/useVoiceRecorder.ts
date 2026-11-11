@@ -142,6 +142,8 @@ export interface DictationCallbacks {
   onSessionStart: () => void
   onPartial: (text: string) => void
   onFinal: (text: string) => void
+  /** The engine said which recognizer runs (`start`, `engine-change`); `gemini-live` means audio goes to Google. */
+  onBackend?: (backend: SpeechBackend) => void
   /** The session is over: normally, or after a freeze, cancel or failure. `completed` only for the engine's own `stop`. */
   onSessionEnd: (completed: boolean) => void
 }
@@ -209,10 +211,12 @@ export function useVoiceRecorder({
       case 'start':
         live.backend = event.backend
         logger.info('dictation engine started', { backend: event.backend })
+        dictation?.onBackend?.(event.backend)
         return
       case 'engine-change':
         live.backend = event.backend
         logger.warn('dictation engine changed', { backend: event.backend, reason: event.reason })
+        dictation?.onBackend?.(event.backend)
         return
       case 'partial':
         dictation?.onPartial(event.text)

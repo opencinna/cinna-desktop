@@ -61,7 +61,11 @@ export const DEFAULTS: AppSettingsSchema = {
   serverBranding: true,
   // Undecided until `capabilityService` decides it once; read as off until then.
   notesCapability: 'unset',
-  dashboardsCapability: 'unset'
+  dashboardsCapability: 'unset',
+  // Voice input stays on the device unless the user opts in to Gemini.
+  voiceCloudTranscription: 'off',
+  // Empty = the first usable Gemini provider.
+  voiceCloudProviderId: ''
 }
 
 export const appSettingsRepo = {

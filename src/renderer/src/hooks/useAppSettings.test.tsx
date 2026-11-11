@@ -2,7 +2,9 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSetAppSetting } from './useAppSettings'
+import { useAppSettingsWatch, useSetAppSetting } from './useAppSettings'
+import { useDeleteProvider, useUpsertProvider } from './useProviders'
+import { SPEECH_STATUS_QUERY_KEY } from '../components/chat/voice/useSpeechStatus'
 
 type Auth = { state: string; authMethod: string | null }
 
@@ -85,5 +87,59 @@ describe('useSetAppSetting and the Claude login answer', () => {
       await result.current.set.mutateAsync({ key: 'claudeAuthMode', value: 'api_key' })
     })
     await waitFor(() => expect(result.current.running.data?.claude).toBeNull())
+  })
+})
+
+describe('the speech status follows the cloud transcription settings and the providers', () => {
+  function harness() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const speechStatus = vi.fn(async () => ({ supported: false }))
+    return { client, wrapper, speechStatus }
+  }
+
+  it('refetches after the window itself saves a voice cloud setting, and not for an unrelated one', async () => {
+    const { wrapper, speechStatus } = harness()
+    const { result } = renderHook(
+      () => ({ speech: useQuery({ queryKey: SPEECH_STATUS_QUERY_KEY, queryFn: speechStatus }), set: useSetAppSetting() }),
+      { wrapper }
+    )
+    await waitFor(() => expect(speechStatus).toHaveBeenCalledTimes(1))
+    await act(async () => { await result.current.set.mutateAsync({ key: 'showHints', value: false }) })
+    expect(speechStatus).toHaveBeenCalledTimes(1)
+    await act(async () => { await result.current.set.mutateAsync({ key: 'voiceCloudTranscription', value: 'always' }) })
+    await waitFor(() => expect(speechStatus).toHaveBeenCalledTimes(2))
+    await act(async () => { await result.current.set.mutateAsync({ key: 'voiceCloudProviderId', value: 'g2' }) })
+    await waitFor(() => expect(speechStatus).toHaveBeenCalledTimes(3))
+  })
+
+  it('refetches when main announces a voice cloud setting saved elsewhere', async () => {
+    let announce: ((payload: { key: string }) => void) | null = null
+    ;(window.api as unknown as { settings: Record<string, unknown> }).settings.onChanged = (handler: (payload: { key: string }) => void) => {
+      announce = handler
+      return () => { announce = null }
+    }
+    const { wrapper, speechStatus } = harness()
+    renderHook(() => { useAppSettingsWatch(); return useQuery({ queryKey: SPEECH_STATUS_QUERY_KEY, queryFn: speechStatus }) }, { wrapper })
+    await waitFor(() => expect(speechStatus).toHaveBeenCalledTimes(1))
+    act(() => announce?.({ key: 'voiceCloudTranscription' }))
+    await waitFor(() => expect(speechStatus).toHaveBeenCalledTimes(2))
+  })
+
+  it('refetches after a provider is saved or deleted', async () => {
+    const api = window.api as unknown as { providers: Record<string, unknown> }
+    api.providers = { upsert: vi.fn(async () => ({ success: true })), delete: vi.fn(async () => ({ success: true })) }
+    const { wrapper, speechStatus } = harness()
+    const { result } = renderHook(
+      () => ({ speech: useQuery({ queryKey: SPEECH_STATUS_QUERY_KEY, queryFn: speechStatus }), upsert: useUpsertProvider(), remove: useDeleteProvider() }),
+      { wrapper }
+    )
+    await waitFor(() => expect(speechStatus).toHaveBeenCalledTimes(1))
+    await act(async () => { await result.current.upsert.mutateAsync({ type: 'gemini', name: 'Gemini', apiKey: 'k' }) })
+    await waitFor(() => expect(speechStatus).toHaveBeenCalledTimes(2))
+    await act(async () => { await result.current.remove.mutateAsync('g1') })
+    await waitFor(() => expect(speechStatus).toHaveBeenCalledTimes(3))
   })
 })

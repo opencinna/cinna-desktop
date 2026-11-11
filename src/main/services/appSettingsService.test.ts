@@ -230,3 +230,15 @@ it('defaults Claude Agent to the subscription, persists API mode and a credentia
   appSettingsService.set('claudeAuthMode', 'subscription')
   appSettingsService.set('claudeApiCredentialId', '')
 })
+
+it('defaults voice cloud transcription to off and the first Gemini provider, and accepts only the three modes', () => {
+  expect(appSettingsService.getAll()).toMatchObject({ voiceCloudTranscription: 'off', voiceCloudProviderId: '' })
+  appSettingsService.set('voiceCloudTranscription', 'fallback')
+  appSettingsService.set('voiceCloudTranscription', 'always')
+  appSettingsService.set('voiceCloudProviderId', 'gemini-2')
+  expect(appSettingsService.getAll()).toMatchObject({ voiceCloudTranscription: 'always', voiceCloudProviderId: 'gemini-2' })
+  expect(() => appSettingsService.set('voiceCloudTranscription', 'on')).toThrow(/Off, When on-device is unavailable, or Always/)
+  expect(() => appSettingsService.set('voiceCloudTranscription', '')).toThrow(/Off, When on-device is unavailable, or Always/)
+  expect(() => appSettingsService.set('voiceCloudTranscription', true)).toThrow()
+  expect(appSettingsService.getAll().voiceCloudTranscription).toBe('always')
+})

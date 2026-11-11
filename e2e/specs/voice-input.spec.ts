@@ -1,5 +1,5 @@
 import { test, expect, type CinnaApp } from '../fixtures/app'
-import type { SpeechStatus, SpeechStreamEvent } from '../../src/shared/speech'
+import type { SpeechBackend, SpeechStatus, SpeechStreamEvent } from '../../src/shared/speech'
 
 /**
  * Voice input in the composer (`src/renderer/src/components/chat/voice/`).
@@ -18,11 +18,16 @@ import type { SpeechStatus, SpeechStreamEvent } from '../../src/shared/speech'
  * (`speechService.test.ts`, `macosSpeech*.test.ts`), the main-side stream
  * handler in `speech.ipc.ts` (`speech.ipc.test.ts`), the batch `speech:transcribe`
  * path (unreachable from the composer while preload offers `speech.stream`),
- * nor the headphone keys.
+ * nor the headphone keys. For cloud transcription: no Gemini provider is
+ * seeded and no call reaches Google, so main's engine choice (`speechService`),
+ * the key lookup (`geminiCredentials`) and the Gemini Live engine itself are
+ * covered only by their unit tests; here the fake engine's `start` frame names
+ * the backend, and the renderer's cloud mark follows it.
  */
 
-const SUPPORTED: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', backend: 'sfspeech' }
-const UNSUPPORTED: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec' }
+const NO_CLOUD: SpeechStatus['cloud'] = { mode: 'off', usable: false, providers: [] }
+const SUPPORTED: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', backend: 'sfspeech', available: true, cloud: NO_CLOUD }
+const UNSUPPORTED: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec', available: false, cloud: NO_CLOUD }
 
 /**
  * Replace main's speech status, then reload so the renderer's prefetch reads it.
@@ -132,6 +137,89 @@ test.describe('voice input, speech supported', () => {
 })
 
 /**
+ * Phase 2, cloud transcription (Gemini Live on the user's own key), with no
+ * on-device engine — the Linux and Windows case. The status stays pinned: no
+ * Gemini provider is seeded and no key exists, so nothing here can reach
+ * Google. Where a test changes the Cloud transcription mode, the pinned
+ * handler reads the stored setting back through the real `settings:get-all`
+ * and derives `cloud.mode` and `available` from it the way `speechService`
+ * does, so the renderer's refetch after the save sees the new mode.
+ */
+const GEMINI = { id: 'gemini-e2e', name: 'Gemini' }
+
+async function pinNoOnDeviceWithGemini(cinna: CinnaApp): Promise<void> {
+  await cinna.electronApp.evaluate(({ ipcMain }, provider) => {
+    ipcMain.removeHandler('speech:status')
+    ipcMain.handle('speech:status', async (event) => {
+      const settings = await event.sender.executeJavaScript('window.api.settings.getAll()') as { voiceCloudTranscription?: string }
+      const mode = settings.voiceCloudTranscription ?? 'off'
+      return {
+        supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec',
+        available: mode !== 'off',
+        cloud: { mode, usable: true, providers: [provider] }
+      }
+    })
+  }, GEMINI)
+  await cinna.page.reload()
+  await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
+}
+
+const cloudSelect = (cinna: CinnaApp) => cinna.page.getByRole('combobox', { name: 'Cloud transcription', exact: true })
+const showAudioInput = (cinna: CinnaApp) => cinna.page.getByRole('switch', { name: 'Show audio input' })
+
+test.describe('voice input, cloud transcription without an on-device engine', () => {
+  test('no Gemini credential: the mode is locked at Off, a status row links to AI Credentials, and there is no mic', async ({ cinna }) => {
+    await cinna.skipOnboarding()
+    await pinSpeechStatus(cinna, UNSUPPORTED, { shown: true })
+
+    // Show audio input was switched on in localStorage, yet without any engine there is no mic.
+    await expect(sendButton(cinna)).toBeVisible()
+    await expect(micButton(cinna)).toHaveCount(0)
+
+    await openFeatures(cinna)
+    await expect(cloudSelect(cinna)).toBeVisible()
+    await expect(cloudSelect(cinna)).toHaveValue('off')
+    await expect(cloudSelect(cinna)).toBeDisabled()
+    await expect(cloudSelect(cinna).locator('option')).toHaveText(['Off', 'As a fallback', 'Always'])
+    await expect(cinna.page.getByText('No Gemini credential', { exact: true })).toBeVisible()
+    await expect(showAudioInput(cinna)).toHaveCount(0)
+    await expect(cinna.page.getByText('Show audio input', { exact: true })).toHaveCount(0)
+
+    await cinna.page.getByRole('button', { name: 'Open AI Credentials', exact: true }).click()
+    await expect(cinna.page.getByRole('heading', { name: 'AI Credentials' })).toBeVisible()
+    await expect(cloudSelect(cinna)).toHaveCount(0)
+  })
+
+  test('a usable Gemini credential: choosing As a fallback brings Show audio input below, and the select stays put', async ({ cinna }) => {
+    await cinna.skipOnboarding()
+    await pinNoOnDeviceWithGemini(cinna)
+    await openFeatures(cinna)
+
+    await test.step('Off: the select is enabled, nothing is missing, no Show audio input', async () => {
+      await expect(cloudSelect(cinna)).toBeEnabled()
+      await expect(cloudSelect(cinna)).toHaveValue('off')
+      await expect(cinna.page.getByText('No Gemini credential', { exact: true })).toHaveCount(0)
+      // One usable provider: no provider picker.
+      await expect(cinna.page.getByRole('combobox', { name: 'Gemini provider' })).toHaveCount(0)
+      await expect(showAudioInput(cinna)).toHaveCount(0)
+    })
+
+    await test.step('As a fallback: Show audio input appears below the select, which has not moved', async () => {
+      const before = await cloudSelect(cinna).boundingBox()
+      await cloudSelect(cinna).selectOption({ label: 'As a fallback' })
+      await expect(showAudioInput(cinna)).toBeVisible()
+      await expect(cloudSelect(cinna)).toHaveValue('fallback')
+      expect(await cinna.page.evaluate(() => window.api.settings.getAll().then((s) => s.voiceCloudTranscription))).toBe('fallback')
+      const after = await cloudSelect(cinna).boundingBox()
+      expect(after).toEqual(before)
+      const row = await showAudioInput(cinna).boundingBox()
+      expect(row!.y).toBeGreaterThan(after!.y + after!.height)
+      await expect(cinna.page.getByText('No Gemini credential', { exact: true })).toHaveCount(0)
+    })
+  })
+})
+
+/**
  * Replace main's `speech:stream` listener with a scripted engine. Each session
  * keeps its port on `globalThis.__speech` and counts what arrives: audio bytes,
  * and every other command by type. It answers `start` at once and nothing
@@ -140,7 +228,7 @@ test.describe('voice input, speech supported', () => {
 async function fakeSpeechStream(cinna: CinnaApp): Promise<void> {
   await cinna.electronApp.evaluate(({ ipcMain }) => {
     type Fake = { sessions: number; audioBytes: number; commands: string[]; port: Electron.MessagePortMain | null }
-    const g = globalThis as { __speech?: Fake }
+    const g = globalThis as { __speech?: Fake; __speechBackend?: SpeechBackend }
     g.__speech = { sessions: 0, audioBytes: 0, commands: [], port: null }
     ipcMain.removeAllListeners('speech:stream')
     ipcMain.on('speech:stream', (event) => {
@@ -156,9 +244,16 @@ async function fakeSpeechStream(cinna: CinnaApp): Promise<void> {
         else fake.commands.push(String(data?.type))
       })
       port.start()
-      port.postMessage({ type: 'start', backend: 'sfspeech' })
+      port.postMessage({ type: 'start', backend: g.__speechBackend ?? 'sfspeech' })
     })
   })
+}
+
+/** Which backend the fake engine's `start` frame names for the sessions that follow. */
+async function speechBackend(cinna: CinnaApp, backend: SpeechBackend): Promise<void> {
+  await cinna.electronApp.evaluate((_electron, b) => {
+    (globalThis as { __speechBackend?: SpeechBackend }).__speechBackend = b
+  }, backend)
 }
 
 /** Post one engine event on the current session's port; a terminal one closes it, as main does. */
@@ -359,5 +454,80 @@ test.describe('voice input, live dictation from a fake microphone', () => {
       await expect(composer(cinna)).toHaveValue('Draft: kept words')
       expect(await sentMessages(cinna)).toEqual([])
     })
+  })
+})
+
+test.describe('voice input, the cloud mark on a Gemini dictation', () => {
+  test.use({ launchArgs: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] })
+
+  const NO_ON_DEVICE_GEMINI_FALLBACK: SpeechStatus = {
+    supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec', available: true,
+    cloud: { mode: 'fallback', usable: true, providers: [GEMINI] }
+  }
+  const cloudMark = (cinna: CinnaApp) => cinna.page.locator('[data-testid="voice-cloud-mark"]')
+  const CLOUD_NOTE = 'Transcribing with Gemini — audio is sent to Google'
+
+  test.beforeEach(async ({ cinna }) => {
+    await cinna.skipOnboarding()
+    await fakeSpeechStream(cinna)
+  })
+
+  test('a session that starts on gemini-live wears the cloud mark until it stops, and its words land', async ({ cinna }) => {
+    await speechBackend(cinna, 'gemini-live')
+    await pinSpeechStatus(cinna, NO_ON_DEVICE_GEMINI_FALLBACK, { shown: true })
+
+    await test.step('idle: the mic shows, without the mark', async () => {
+      await expect(micButton(cinna)).toBeVisible()
+      await expect(cloudMark(cinna)).toHaveCount(0)
+      await expect(micButton(cinna)).not.toHaveAttribute('aria-describedby', /.+/)
+    })
+
+    await test.step('recording on gemini-live: the mark sits in the button and describes it', async () => {
+      await composer(cinna).fill('Note:')
+      await startDictation(cinna, 1)
+      await expect(stopButton(cinna).locator('[data-testid="voice-cloud-mark"]')).toBeVisible()
+      await expect(stopButton(cinna)).toHaveAccessibleDescription(CLOUD_NOTE)
+      await expect(stopButton(cinna)).toHaveAttribute('title', `Stop recording · ${CLOUD_NOTE}`)
+      await say(cinna, { type: 'partial', text: 'buy milk' })
+      await expect(composer(cinna)).toHaveValue('Note: buy milk')
+      await expect(partialSpan(cinna)).toHaveText('buy milk')
+    })
+
+    await test.step('stopping: the mark stays while the last words are pending', async () => {
+      await expect.poll(async () => (await speechSeen(cinna)).audioBytes).toBeGreaterThan(2 * 8000)
+      await stopButton(cinna).click()
+      await expect.poll(async () => (await speechSeen(cinna)).commands).toEqual(['stop'])
+      await expect(micButton(cinna)).toBeDisabled()
+      await expect(micButton(cinna)).toHaveAttribute('title', `Finishing… · ${CLOUD_NOTE}`)
+      await expect(cloudMark(cinna)).toBeVisible()
+    })
+
+    await test.step('the session ends: the final lands and the mark is gone', async () => {
+      await say(cinna, { type: 'final', text: 'buy oat milk.' })
+      await say(cinna, { type: 'stop', fullText: 'buy oat milk.' })
+      await expect(composer(cinna)).toHaveValue('Note: buy oat milk.')
+      await expect(micButton(cinna)).toBeEnabled()
+      await expect(micButton(cinna)).toHaveAttribute('aria-pressed', 'false')
+      await expect(cloudMark(cinna)).toHaveCount(0)
+      await expect(micButton(cinna)).not.toHaveAttribute('aria-describedby', /.+/)
+      await expect(micButton(cinna)).toHaveAttribute('title', 'Audio input · right-click to choose the microphone')
+      // A click on the mic only stops: nothing was sent.
+      expect(await sentMessages(cinna)).toEqual([])
+    })
+  })
+
+  test('a session that starts on sfspeech shows no cloud mark', async ({ cinna }) => {
+    await speechBackend(cinna, 'sfspeech')
+    await pinSpeechStatus(cinna, SUPPORTED, { shown: true })
+    await startDictation(cinna, 1)
+    await say(cinna, { type: 'partial', text: 'on this Mac' })
+    await expect(composer(cinna)).toHaveValue('on this Mac')
+    await expect(stopButton(cinna)).toHaveAttribute('title', 'Stop recording')
+    await expect(cloudMark(cinna)).toHaveCount(0)
+    await expect(stopButton(cinna)).not.toHaveAttribute('aria-describedby', /.+/)
+    // Without aria-describedby the description falls back to the title.
+    await expect(stopButton(cinna)).toHaveAccessibleDescription('Stop recording')
+    await composer(cinna).press('Escape')
+    await expect(micButton(cinna)).toHaveAttribute('aria-pressed', 'false')
   })
 })

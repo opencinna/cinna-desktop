@@ -4,6 +4,7 @@ import type { AppSettingsSchema } from '../../../shared/appSettings'
 import { createLogger } from '../stores/logger.store'
 import { AGENT_CREDENTIAL_BINDINGS_KEY, LOCAL_AGENTS_KEY } from './useLocalAgents'
 import { DEFAULT_RUNTIME_KEY } from './useEngine'
+import { SPEECH_STATUS_QUERY_KEY } from '../components/chat/voice/useSpeechStatus'
 
 const logger = createLogger('app-settings')
 
@@ -39,6 +40,11 @@ export function useAppSettings() {
   })
 }
 
+/** The settings main's `speech:status` is derived from (the cloud half). */
+function isVoiceCloudSetting(key: unknown): boolean {
+  return key === 'voiceCloudTranscription' || key === 'voiceCloudProviderId'
+}
+
 /**
  * Re-reads the app settings when main says one was saved with a new value —
  * whoever saved it. The window's own writes already refresh through
@@ -48,8 +54,10 @@ export function useAppSettings() {
  */
 export function useAppSettingsWatch(): void {
   const queryClient = useQueryClient()
-  useEffect(() => window.api.settings.onChanged(() => {
+  useEffect(() => window.api.settings.onChanged(({ key }) => {
     void queryClient.invalidateQueries({ queryKey: APP_SETTINGS_KEY })
+    // Main's speech status carries the cloud transcription setting.
+    if (isVoiceCloudSetting(key)) void queryClient.invalidateQueries({ queryKey: SPEECH_STATUS_QUERY_KEY })
   }), [queryClient])
 }
 
@@ -160,6 +168,10 @@ export function useSetAppSetting() {
       // query's own poll carries it to null.
       if (input.key === 'claudeAuthMode') {
         queryClient.invalidateQueries({ queryKey: ['engine-login-running'] })
+      }
+      // Whether voice input is available, and on which engine, follows these.
+      if (isVoiceCloudSetting(input.key)) {
+        queryClient.invalidateQueries({ queryKey: SPEECH_STATUS_QUERY_KEY })
       }
     }
   })

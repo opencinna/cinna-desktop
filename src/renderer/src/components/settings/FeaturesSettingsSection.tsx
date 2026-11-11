@@ -9,6 +9,7 @@ import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
 import { useUIStore, type SidebarDocking, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useSpeechStatus } from '../chat/voice/useSpeechStatus'
+import { isVoiceCloudTranscription, type SpeechStatus, type VoiceCloudTranscription } from '../../../../shared/speech'
 import { FinderQuickActionSection } from './FinderQuickActionSection'
 import {
   SettingsButton,
@@ -16,6 +17,7 @@ import {
   SettingsRow,
   SettingsRows,
   SettingsSection,
+  SettingsStatusRow,
   SettingsToggleRow,
   settingsInputClass,
   settingsDropdownRowClass
@@ -35,6 +37,35 @@ function describeRunsOn(status: AiFunctionsBackendStatus | undefined, models: re
   if (status.runsOn === 'runtime') return FALLBACK_TEXT[status.reason]
   const modelName = models.find((model) => model.providerId === status.credentialId && model.id === status.modelId)?.name
   return `${status.credentialName} · ${modelName ?? status.modelId}`
+}
+
+/**
+ * Short enough for the dropdown's third of the row at the narrowest window
+ * (ux_rules rule 7); the (?) says what each means.
+ */
+const VOICE_CLOUD_LABEL: Record<VoiceCloudTranscription, string> = {
+  off: 'Off',
+  fallback: 'As a fallback',
+  always: 'Always'
+}
+
+const ON_DEVICE_VOICE = "Speech is turned into text by macOS's own speech recognition, on this Mac: Cinna sends the recording nowhere. The transcription service is provided by Apple, the maker of your device and its operating system, not by Cinna."
+
+/**
+ * "Show audio input"'s promise follows where the audio actually goes: on this
+ * Mac, or to Google under the user's own Gemini key.
+ */
+function voiceInputDescription(speech: SpeechStatus): string {
+  const lead = 'Shows the microphone button beside Send in the composer. Click it, or the headphone button, to dictate; double-click the headphone button to send.'
+  const mode = speech.cloud.mode
+  const viaGemini = mode === 'always' || (mode === 'fallback' && !speech.supported)
+  if (viaGemini) {
+    return `${lead} Speech is turned into text by Google Gemini: the recording is sent to Google under your own Gemini provider key and billed to it. A cloud mark on the button shows while it is.`
+  }
+  if (mode === 'fallback') {
+    return `${lead} ${ON_DEVICE_VOICE} If on-device recognition is unavailable when you start dictating, the recording goes to Google Gemini instead, under your own Gemini provider key and billed to it.`
+  }
+  return `${lead} ${ON_DEVICE_VOICE}`
 }
 
 /**
@@ -92,6 +123,17 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const prioritizeAccountDefaults = settings?.prioritizeAccountDefaults === true
   const guidedFirstBuild = settings?.guidedFirstBuild !== false
   const serverBranding = settings?.serverBranding !== false
+  const voiceCloudMode: VoiceCloudTranscription = isVoiceCloudTranscription(settings?.voiceCloudTranscription) ? settings.voiceCloudTranscription : 'off'
+  const voiceCloudProviders = speech.cloud.providers
+  // Main bills the chosen provider when it is usable, else the first one.
+  const voiceCloudProvider = voiceCloudProviders.find((provider) => provider.id === settings?.voiceCloudProviderId) ?? voiceCloudProviders[0]
+  // Without a usable key only Off can be chosen; a mode already on stays changeable so it can be turned off.
+  const voiceCloudLocked = !speech.cloud.usable && voiceCloudMode === 'off'
+  const voiceCloudMissing = !speech.cloud.usable && (voiceCloudMode !== 'off' || !speech.supported)
+  const openAiCredentials = (): void => {
+    useUIStore.getState().setSettingsMenu('llm')
+    useUIStore.getState().setActiveView('settings')
+  }
 
   // Hint retirement counters live in localStorage (renderer-local UI state),
   // not in `app_settings` — so resetting them is a store call, not a mutation.
@@ -319,11 +361,49 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             onToggle={() => setShowTasksButton(!showTasksButton)}
             title={showTasksButton ? 'The Tasks button is in the top bar' : 'The Tasks button is hidden'}
           />
-          {speech.supported && (
+          {/* Shown without an on-device engine too: on Linux and Windows it is the way in.
+              Above Show audio input, which a choice here can make appear: the
+              select stays where the pointer is (ux_rules rule 1). */}
+          <SettingsRow>
+            <div className={settingsDropdownRowClass}>
+              <SettingsLabel htmlFor="feature-voice-cloud" info="Dictation through Google Gemini Live, on your own Gemini provider key: the recording is sent to Google and billed to that key. As a fallback: only when on-device speech recognition is unavailable on this computer as a dictation starts (a permission you refused is not unavailable). Always: every dictation. Off: on the device only. A dictation never switches midway. Needs a Gemini credential with an API key, added under AI Credentials.">Cloud transcription</SettingsLabel>
+              <select id="feature-voice-cloud" className={settingsInputClass} disabled={disabled || voiceCloudLocked}
+                value={voiceCloudMode}
+                onChange={(event) => {
+                  const value = event.target.value
+                  if (isVoiceCloudTranscription(value)) setSetting.mutate({ key: 'voiceCloudTranscription', value })
+                }}>
+                {(['off', 'fallback', 'always'] as const).map((mode) => <option key={mode} value={mode}>{VOICE_CLOUD_LABEL[mode]}</option>)}
+              </select>
+            </div>
+            {voiceCloudProviders.length > 1 && (
+              <div className={`mt-3 ${settingsDropdownRowClass}`}>
+                <SettingsLabel htmlFor="feature-voice-cloud-provider" info="The Gemini provider whose API key cloud transcription uses and bills.">Gemini provider</SettingsLabel>
+                <select id="feature-voice-cloud-provider" className={settingsInputClass} disabled={disabled}
+                  title={voiceCloudProvider?.name}
+                  value={voiceCloudProvider?.id ?? ''}
+                  onChange={(event) => setSetting.mutate({ key: 'voiceCloudProviderId', value: event.target.value })}>
+                  {voiceCloudProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                </select>
+              </div>
+            )}
+            {/* Only where it matters: a mode is on (then it is broken), or there is
+                no on-device engine (it is the way in). With Off on a Mac it is in the (?). */}
+            {voiceCloudMissing && (
+              <div className="mt-3">
+                <SettingsStatusRow
+                  tone={voiceCloudMode === 'off' ? 'neutral' : 'warning'}
+                  label="No Gemini credential"
+                  action={<SettingsButton onClick={openAiCredentials}>Open AI Credentials</SettingsButton>}
+                />
+              </div>
+            )}
+          </SettingsRow>
+          {speech.available && (
             <SettingsToggleRow
               id="feature-show-voice-input"
               label="Show audio input"
-              description="Shows the microphone button beside Send in the composer. Click it, or the headphone button, to dictate; double-click the headphone button to send. Speech is turned into text by macOS's own speech recognition, on this Mac: Cinna sends the recording nowhere. The transcription service is provided by Apple, the maker of your device and its operating system, not by Cinna."
+              description={voiceInputDescription(speech)}
               checked={showVoiceInput}
               onToggle={() => setShowVoiceInput(!showVoiceInput)}
               title={showVoiceInput ? 'The audio input button is in the composer' : 'The audio input button is hidden'}
