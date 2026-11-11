@@ -368,8 +368,8 @@ describe('after a turn (D3)', () => {
     for (let i = 0; i < 5; i++) await tick()
     writeAgentFile('app-data/notes.md', '# After the turn')
     refresh.afterTurn('p1', 'folder:m1')
-    for (let i = 0; i < 10; i++) await tick()
-    expect(refresh.tileResult('p1', notes.tile.id)).toMatchObject({ ok: true, result: { data: { markdown: '# After the turn' } } })
+    // The file is read off disk asynchronously; under a loaded suite a fixed tick count is not always enough.
+    await vi.waitFor(() => expect(refresh.tileResult('p1', notes.tile.id)).toMatchObject({ ok: true, result: { data: { markdown: '# After the turn' } } }))
     expect(runCommand).toHaveBeenCalledTimes(1)
   })
 
@@ -741,7 +741,8 @@ describe('schedule-fed tiles (D4, reason schedule)', () => {
     await drain()
     expect(runner.calls.map((c) => c.call.script)).toEqual(['dashboards/ranked/api/data.py'])
     expect(runCommand).not.toHaveBeenCalled()
-    expect(refresh.tileResult('p1', inbox)).toMatchObject({ ok: true, result: { data: { markdown: '# Ranked by the schedule' } } })
+    // The file is read off disk asynchronously; under a loaded suite six ticks are not always enough.
+    await vi.waitFor(() => expect(refresh.tileResult('p1', inbox)).toMatchObject({ ok: true, result: { data: { markdown: '# Ranked by the schedule' } } }))
     // Another profile's dashboards are not this one's.
     expect(refresh.scheduleRan('p2', 'folder:m1', 'nightly')).toEqual([])
   })
