@@ -8,7 +8,6 @@ import { MenuSwitchItem } from '../ui/MenuSwitchItem'
 import { useStartNewChat } from '../../hooks/useStartNewChat'
 import { JobOriginBanner } from '../chat/JobOriginBanner'
 import { DashboardOriginPill } from '../chat/DashboardOriginPill'
-import { PinnedFilesChip } from '../chat/PinnedFilesCard'
 import { InboxButton } from '../inbox/InboxButton'
 import { TasksButton } from '../tasks/TasksButton'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
@@ -156,8 +155,6 @@ export function TopBar(): React.JSX.Element {
         {!sidebarVisible && <UpdateStatusButton readyOnly className={TOPBAR_BTN} />}
         <JobOriginBanner />
         <DashboardOriginPill />
-        {/* The chat's pins, where the chat area has no room for their card. */}
-        <PinnedFilesChip />
       </div>
       </div>
     </div>

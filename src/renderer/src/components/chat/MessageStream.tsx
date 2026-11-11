@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   AlertTriangle,
   ArrowDown,
@@ -55,7 +55,8 @@ import { useAgentRequests } from '../../hooks/useAgentRequests'
 import { useStickToBottom } from '../../hooks/useStickToBottom'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import { QueuedMessages, useQueuedMessages } from './QueuedMessages'
-import { holdCollapseAnchor } from './transcriptAnchor'
+import { holdCollapseAnchor, keepAnchor } from './transcriptAnchor'
+import { PINNED_FILES_GUTTER_PX, type PinnedFilesReserve } from './PinnedFilesCard'
 import { focusChatComposer, useChatSearchStore } from '../../stores/chatSearch.store'
 import { ChatSearchInChat } from './search/ChatSearchInChat'
 import { jumpToMessage } from './search/jumpToMessage'
@@ -280,6 +281,14 @@ interface MessageStreamProps {
    * composer's drawn content, its notice panel included. Else where the pills do.
    */
   searchBottom?: number
+  /**
+   * Room kept for the chat's Pinned files block where no gutter holds it
+   * (`PinnedFilesCard`): `right`, the scroller's right padding widened to the
+   * block's gutter, so the column's right edge stays 12 px clear of it; `top`,
+   * the block sits in the flow above this scroller, which then needs only its
+   * own small top gap, the top bar being above the block.
+   */
+  reserve?: PinnedFilesReserve
 }
 
 const PILL_CLASS = `pointer-events-auto inline-flex items-center gap-1.5
@@ -648,7 +657,7 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 const NO_FILE_REF_SCOPES: ReadonlyMap<string, FileRefScope> = new Map()
 const NO_ARTIFACT_CARDS: ArtifactCardDto[] = []
 
-export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = false, searchBottom }: MessageStreamProps): React.JSX.Element {
+export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = false, searchBottom, reserve = null }: MessageStreamProps): React.JSX.Element {
   const messageContextMenu = useMessageContextMenu(chatId)
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
@@ -705,6 +714,22 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
     if (!pinned && container && content) releaseAnchorRef.current = holdCollapseAnchor(container, content)
     expansionStore.collapseAll()
   }, [pinned, containerRef, contentRef, expansionStore])
+  // The Pinned files reserve, applied here rather than through the style
+  // prop: the reader's place is read before the column narrows or widens and
+  // put back after, in the same frame, so the rewrap moves nothing they are
+  // reading. Pinned to the bottom, the stick model keeps the view there.
+  const appliedReserveRef = useRef<PinnedFilesReserve>(null)
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    const content = contentRef.current
+    if (!container || !content || appliedReserveRef.current === reserve) return
+    appliedReserveRef.current = reserve
+    const restore = pinned ? null : keepAnchor(container, content)
+    container.style.paddingRight = reserve === 'right' ? `${PINNED_FILES_GUTTER_PX}px` : ''
+    if (reserve === 'top') container.style.setProperty('--transcript-pt', '12px')
+    else container.style.removeProperty('--transcript-pt')
+    restore?.()
+  }, [reserve, pinned, containerRef, contentRef])
   const agentNameById = useMemo(() => {
     const map = new Map<string, string>()
     for (const a of agents ?? []) map.set(a.id, a.name)
@@ -1002,7 +1027,8 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
       className="flex-1 overflow-y-auto px-4 pb-4 [--transcript-pt:calc(var(--topbar-h)+12px)] [--transcript-fade:10px] pt-[var(--transcript-pt)]"
       style={{
         paddingBottom: bottomPadding ? bottomPadding + 41 : undefined,
-        ['--sticky-table-top' as string]: sidebarDocked ? 'var(--transcript-fade)' : 'var(--topbar-h)',
+        // Under the Pinned files block (`reserve` top) the top bar is above the scroller, not over it.
+        ['--sticky-table-top' as string]: sidebarDocked || reserve === 'top' ? 'var(--transcript-fade)' : 'var(--topbar-h)',
         // Fade the transcript itself so no text survives at the clipped edge.
         // Sticky table headers stop just below this fade (main.css).
         WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, black var(--transcript-fade))',

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type MutationOptions, type QueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type MutationOptions, type QueryClient } from '@tanstack/react-query'
 import type {
   AgentFileActionResult,
   PinnedAgentFile,
@@ -15,15 +15,20 @@ export const pinnedFilesKey = (agentId: string | null): readonly unknown[] => ['
  * change, when a preview finds a pinned file gone and when a turn ends (the
  * app turns off refetch on window focus). A failure (the agent left its
  * folder) reads as no pins.
+ *
+ * `keepPrevious`: while a newly asked agent's list loads, `data` stays the
+ * previous agent's, with `isPlaceholderData` set (for the Pinned files block,
+ * which must not go and come back when the chat switches).
  */
-export function usePinnedFiles(agentId: string | null) {
+export function usePinnedFiles(agentId: string | null, { keepPrevious = false }: { keepPrevious?: boolean } = {}) {
   return useQuery({
     queryKey: pinnedFilesKey(agentId),
     queryFn: async (): Promise<PinnedAgentFile[]> => {
       const result = await window.api.agentFiles.listPins({ agentId: agentId! })
       return result.success ? result.pins : []
     },
-    enabled: agentId !== null
+    enabled: agentId !== null,
+    placeholderData: keepPrevious ? keepPreviousData : undefined
   })
 }
 

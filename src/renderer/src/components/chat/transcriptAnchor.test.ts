@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { collapseAnchor, holdAnchor, holdCollapseAnchor } from './transcriptAnchor'
+import { collapseAnchor, holdAnchor, holdCollapseAnchor, keepAnchor } from './transcriptAnchor'
 
 /** jsdom has no layout: give elements the geometry a test needs. */
 function place(el: Element, top: () => number, height = 100): void {
@@ -183,5 +183,68 @@ describe('holdAnchor', () => {
     runFrame()
     expect(container.scrollTop).toBe(1000)
     release()
+  })
+})
+
+describe('keepAnchor', () => {
+  it('puts the first node the reader can see back at its distance from the top after a reflow', () => {
+    const container = scroller()
+    const content = document.createElement('div')
+    container.appendChild(content)
+    // Under the viewport top: a node ending above it, then the one being read.
+    let firstTop = -300
+    let readTop = 40
+    const first = document.createElement('div')
+    const read = document.createElement('div')
+    content.append(first, read)
+    place(first, () => firstTop - (container.scrollTop - 1000), 200)
+    place(read, () => readTop - (container.scrollTop - 1000), 400)
+    const restore = keepAnchor(container, content)
+    // The column narrowed: everything above rewrapped taller, by 150 px.
+    firstTop = -300
+    readTop = 190
+    restore()
+    expect(container.scrollTop).toBe(1150)
+    expect(read.getBoundingClientRect().top).toBe(40)
+  })
+
+  it('keeps the line being read inside a long message whose text above the view rewraps 30% taller', () => {
+    const container = scroller()
+    const content = document.createElement('div')
+    container.appendChild(content)
+    const message = document.createElement('div')
+    content.appendChild(message)
+    // Twelve paragraphs, 100 px each; the view's top falls 30 px into the eleventh.
+    let line = 100
+    const messageTop = (): number => -1030 - (container.scrollTop - 1000)
+    place(message, messageTop, 0)
+    message.getBoundingClientRect = () => {
+      const top = messageTop()
+      return { top, bottom: top + 12 * line, left: 0, right: 0, width: 0, height: 12 * line, x: 0, y: top, toJSON: () => ({}) }
+    }
+    const paragraphs = Array.from({ length: 12 }, (_, index) => {
+      const p = document.createElement('p')
+      p.getBoundingClientRect = () => {
+        const top = messageTop() + index * line
+        return { top, bottom: top + line, left: 0, right: 0, width: 0, height: line, x: 0, y: top, toJSON: () => ({}) }
+      }
+      message.appendChild(p)
+      return p
+    })
+    // The reader's line: 30% into the eleventh paragraph, at the view's top.
+    const readerLine = (): number => paragraphs[10].getBoundingClientRect().top + 0.3 * line
+    expect(readerLine()).toBe(0)
+    const restore = keepAnchor(container, content)
+    line = 130
+    restore()
+    expect(Math.abs(readerLine())).toBeLessThan(2)
+  })
+
+  it('does nothing with nothing in view', () => {
+    const container = scroller()
+    const content = document.createElement('div')
+    container.appendChild(content)
+    keepAnchor(container, content)()
+    expect(container.scrollTop).toBe(1000)
   })
 })

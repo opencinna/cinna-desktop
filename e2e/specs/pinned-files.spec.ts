@@ -9,27 +9,31 @@ import { installFakeAcpEngine } from '../fixtures/fakeAcpEngine'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 
 /**
- * Pinned files per folder agent: the card beside the transcript, the top
- * bar's chip where the card has no room, reordering, and a pin whose file is gone.
+ * Pinned files per folder agent: the block beside the transcript, in the
+ * gutter or in a column the transcript keeps clear for it, reordering, and a
+ * pin whose file is gone.
  *
  * ## What is real and what is not
  *
  * The agent is the scriptable fake ACP agent (`fakeAcpEngine`), answering
  * every turn with markdown that names two files in its folder, as in
  * `file-ref-menu.spec.ts`. Everything after that is the product: reference
- * resolution, the transcript's menu, `agent-files:pins-*`, the card, the chip,
- * the preview. The window is resized for real from main (`setContentSize`),
- * never by viewport emulation, so the card-or-chip decision is measured on
- * the laid-out chat area.
+ * resolution, the transcript's menu, `agent-files:pins-*`, the block, the
+ * transcript's reserve, the preview. The window is resized for real from main
+ * (`setContentSize`), never by viewport emulation, so the gutter-or-reserve
+ * decision is measured on the laid-out chat area.
  *
  * ## What it proves
  *
  * - Pin file on a transcript reference shows the card (wide window) listing
  *   it; a new chat with the same agent shows it too; a row opens the preview;
  *   the row's menu has Unpin file first, and unpinning the last pin removes the card.
- * - At a narrow window the pins are the top bar chip `Pinned files, 1`, computed
- *   `-webkit-app-region: no-drag`; it opens the `Pinned files` popover, whose row
- *   opens the preview.
+ * - At 1100 px (no gutter) the block still shows and lists the file, computed
+ *   `-webkit-app-region: no-drag`; the transcript's column ends 12 px left of
+ *   it and no message bubble's box meets the block's; its row opens the preview.
+ * - At 800 px with the sidebar docked (a chat area under 640 px) the block
+ *   sits above the transcript in the flow, lists the file, and no message
+ *   bubble's box meets it.
  * - Dragging the second row above the first reorders the card, and the order
  *   survives a relaunch.
  * - A pinned file deleted on disk shows `File not found` after the chat is
@@ -38,9 +42,9 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  * ## What it does not
  *
  * - A real mouse drag through the OS (Playwright's `dragTo` dispatches
- *   Chromium's drag events), the collapse toggle, keyboard focus in the
- *   popover, a pin outside the agent folder, the move's error row —
- *   `PinnedFilesCard.test.tsx`, `pinnedFileService.test.ts` and
+ *   Chromium's drag events), the reader's place kept across the reflow, a pin outside the
+ *   agent folder, the move's error row — `PinnedFilesCard.test.tsx`,
+ *   `MessageStream.pinnedReserve.test.tsx`, `pinnedFileService.test.ts` and
  *   `MessageContextMenu.fileRefs.test.tsx` cover those.
  */
 
@@ -68,6 +72,8 @@ const ANSWERS_WITH_PATHS: FakeAcpScript = {
 
 const WIDE = 2000
 const NARROW = 1100
+/** With the sidebar docked, a chat area of about 530 px: the block goes above the transcript. */
+const ABOVE = 800
 
 function fakeOllama(): Server {
   return createServer((req, res) => {
@@ -191,10 +197,6 @@ function cardRows(page: Page): Locator {
   return card(page).getByRole('list', { name: 'Pinned files', exact: true }).getByRole('button')
 }
 
-function chip(page: Page, count: number): Locator {
-  return page.getByRole('button', { name: `Pinned files, ${count}`, exact: true })
-}
-
 function messageMenu(page: Page): Locator {
   return page.getByRole('menu', { name: 'Message actions', exact: true })
 }
@@ -225,7 +227,7 @@ test('pin a referenced file, see it in another chat with the agent, open it, unp
   await chatWithAgent(cinna, 'Write up the week.')
   await setWindow(cinna, WIDE)
 
-  await test.step('Pin file on a reference shows the card listing it', async () => {
+  await test.step('Pin file on a reference shows the block listing it', async () => {
     const page = cinna.page
     await expect(page.locator('.app-sidebar-wrap')).not.toHaveClass(/is-collapsed/)
     await expect(card(page)).toHaveCount(0)
@@ -233,7 +235,6 @@ test('pin a referenced file, see it in another chat with the agent, open it, unp
     await expect(card(page)).toBeVisible()
     await expect(cardRows(page)).toHaveText([SUMMARY_NAME])
     await expect(cardRows(page).first()).toHaveAttribute('title', SUMMARY)
-    await expect(chip(page, 1)).toHaveCount(0)
     await card(page).screenshot({ path: test.info().outputPath('pinned-files-card-wide.png'), animations: 'disabled' })
   })
 
@@ -264,7 +265,7 @@ test('pin a referenced file, see it in another chat with the agent, open it, unp
   })
 })
 
-test('at a narrow window the pins are a top bar chip whose popover opens the preview', async ({ cinna }) => {
+test('at a narrower window the block stays visible and the transcript makes room for it', async ({ cinna }) => {
   test.setTimeout(120_000)
   await arrangeAgent(cinna)
   await chatWithAgent(cinna, 'Write up the week.')
@@ -272,24 +273,66 @@ test('at a narrow window the pins are a top bar chip whose popover opens the pre
   const page = cinna.page
   await pinFromTranscript(page, SUMMARY)
 
-  const button = chip(page, 1)
-  await expect(button).toBeVisible()
-  await expect(card(page)).toHaveCount(0)
-  expect(await button.evaluate((el) => getComputedStyle(el).getPropertyValue('-webkit-app-region'))).toBe('no-drag')
-  await expect(button).toHaveAttribute('aria-expanded', 'false')
+  await expect(card(page)).toBeVisible()
+  await expect(cardRows(page)).toHaveText([SUMMARY_NAME])
+  await expect(page.locator('[data-pinned-files-chip]')).toHaveCount(0)
+  expect(await card(page).evaluate((el) => getComputedStyle(el).getPropertyValue('-webkit-app-region'))).toBe('no-drag')
 
-  await button.click()
-  const popover = page.getByRole('dialog', { name: 'Pinned files', exact: true })
-  await expect(popover).toBeVisible()
-  await expect(button).toHaveAttribute('aria-expanded', 'true')
-  const rows = popover.getByRole('button')
-  await expect(rows).toHaveText([SUMMARY_NAME])
-  await page.screenshot({ path: test.info().outputPath('pinned-files-chip-popover-narrow.png'), animations: 'disabled' })
+  // Beside the transcript, not over it: the column keeps 12 px clear of the
+  // block, and no message bubble's box meets the block's.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const block = document.querySelector('[data-pinned-files-card]')!.getBoundingClientRect()
+        const column = document.querySelector('[data-transcript-scroll] [data-sidebar-band-limit]')!.getBoundingClientRect()
+        // The user's bubble and the reply, as drawn (each persisted message carries its id).
+        const bubbles = Array.from(document.querySelectorAll('[data-transcript-scroll] [data-message-id]')).map((el) => el.getBoundingClientRect())
+        const meets = (r: DOMRect): boolean =>
+          r.left < block.right && r.right > block.left && r.top < block.bottom && r.bottom > block.top
+        // A classic scrollbar, where the OS draws one, only widens the gap.
+        return { clear: Math.round(block.left - column.right) >= 12, bubbles: bubbles.length >= 2, overlaps: bubbles.filter(meets).length }
+      })
+    )
+    .toEqual({ clear: true, bubbles: true, overlaps: 0 })
+  await page.screenshot({ path: test.info().outputPath('pinned-files-reserve-narrow.png'), animations: 'disabled' })
 
-  await rows.first().click()
+  await cardRows(page).first().click()
   await expect(previewCard(page)).toBeVisible()
   await expect(previewCard(page).getByText(SUMMARY_NAME, { exact: true })).toBeVisible()
-  await expect(popover).toHaveCount(0)
+})
+
+test('in a chat area under 640 px the block sits above the transcript, covering no message', async ({ cinna }) => {
+  test.setTimeout(120_000)
+  await arrangeAgent(cinna, ['summary'])
+  await chatWithAgent(cinna, 'Write up the week.')
+  await setWindow(cinna, ABOVE)
+  const page = cinna.page
+  await expect(page.locator('.app-sidebar-wrap')).not.toHaveClass(/is-collapsed|is-floating/)
+
+  await expect(card(page)).toBeVisible()
+  await expect(card(page)).toHaveAttribute('data-pinned-files-placement', 'top')
+  await expect(cardRows(page)).toHaveText([SUMMARY_NAME])
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const el = document.querySelector('[data-pinned-files-card]')!
+        const block = el.getBoundingClientRect()
+        const area = el.parentElement!.getBoundingClientRect()
+        const scroller = document.querySelector('[data-transcript-scroll]')!.getBoundingClientRect()
+        const bubbles = Array.from(document.querySelectorAll('[data-transcript-scroll] [data-message-id]')).map((node) => node.getBoundingClientRect())
+        const meets = (r: DOMRect): boolean =>
+          r.left < block.right && r.right > block.left && r.top < block.bottom && r.bottom > block.top
+        return {
+          narrowArea: area.width < 640,
+          // In the flow: the transcript's scroller starts below the block.
+          below: scroller.top >= block.bottom - 0.5,
+          bubbles: bubbles.length >= 2,
+          overlaps: bubbles.filter(meets).length
+        }
+      })
+    )
+    .toEqual({ narrowArea: true, below: true, bubbles: true, overlaps: 0 })
+  await page.screenshot({ path: test.info().outputPath('pinned-files-above.png'), animations: 'disabled' })
 })
 
 test('dragging the second pin above the first reorders the card, and the order survives a relaunch', async ({

@@ -81,7 +81,6 @@ const VOICE_INPUT_DEVICE_KEY = 'cinna-voice-input-device'
 const VOICE_INPUT_SHOWN_KEY = 'cinna-show-voice-input'
 // Whether a long markdown preview opens with its Contents panel showing.
 const PREVIEW_CONTENTS_KEY = 'cinna-preview-contents-open'
-const PINNED_FILES_COLLAPSED_KEY = 'cinna-pinned-files-collapsed'
 // How the Chats list is grouped, and which of its groups are collapsed.
 const CHAT_GROUP_BY_AGENT_KEY = 'cinna-chat-group-by-agent'
 const CHAT_GROUP_BY_DATE_KEY = 'cinna-chat-group-by-date'
@@ -301,13 +300,6 @@ interface UIStore {
    * markdown files offer the panel, so it starts open.
    */
   previewContentsOpen: boolean
-  /**
-   * The chat's Pinned files card folded to its header, as the user last left
-   * it. One choice for every chat. Where the card has no room the pins are a
-   * chip in the top bar instead, which this does not touch (`PinnedFilesCard`).
-   */
-  pinnedFilesCollapsed: boolean
-  setPinnedFilesCollapsed: (collapsed: boolean) => void
   /** The file preview fills the window. One choice for every preview, until the app restarts. */
   previewFullWindow: boolean
   togglePreviewFullWindow: () => void
@@ -431,11 +423,6 @@ export const useUIStore = create<UIStore>((set, get) => ({
   sidebarPeek: false,
   minimalView: false,
   previewContentsOpen: localStorage.getItem(PREVIEW_CONTENTS_KEY) !== '0',
-  pinnedFilesCollapsed: localStorage.getItem(PINNED_FILES_COLLAPSED_KEY) === '1',
-  setPinnedFilesCollapsed: (collapsed) => {
-    localStorage.setItem(PINNED_FILES_COLLAPSED_KEY, collapsed ? '1' : '0')
-    set({ pinnedFilesCollapsed: collapsed })
-  },
   theme: resolveTheme(readThemePreference()),
   themePreference: readThemePreference(),
   extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0',

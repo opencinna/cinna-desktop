@@ -9,21 +9,20 @@ vi.mock('../../stores/logger.store', () => ({
 const capabilities = vi.hoisted(() => ({ notesEnabled: true, dashboardsEnabled: true, loaded: true }))
 vi.mock('../../hooks/useCapabilities', () => ({ useCapabilities: () => capabilities }))
 
-import { PINNED_FILES_GUTTER_PX, PinnedFilesCard, PinnedFilesChip, gutterFits, middleEllipsisParts, pinDropRank, usePinnedFilesChipStore } from './PinnedFilesCard'
+import { PINNED_FILES_GUTTER_PX, PinnedFilesCard, gutterFits, middleEllipsisParts, pinDropRank, pinnedFilesMode } from './PinnedFilesCard'
 import { useFilePreviewStore } from '../../stores/filePreview.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useAuthStore } from '../../stores/auth.store'
-import { useChatStore } from '../../stores/chat.store'
 
 /**
- * The chat's Pinned files: the card in the gutter right of the transcript's
- * column when it fits there, the top bar's chip and its popover when it does
- * not; when either shows, what a row does on a click, a right-click and a
- * drop, and how the card folds.
+ * The chat's Pinned files: one always-open block, never over a message. It
+ * floats in the gutter right of the transcript's column when it fits there;
+ * otherwise it asks the chat area for room, beside the transcript or above
+ * it. What a row does on a click, a right-click and a drop.
  */
 
-/** The chat area's and the transcript column's boxes, as the layout would give them. */
-const layout = vi.hoisted(() => ({ areaWidth: 1600, columnWidth: 768, resize: [] as Array<() => void> }))
+/** The chat area's box, as the layout would give it. */
+const layout = vi.hoisted(() => ({ areaWidth: 1600, resize: [] as Array<() => void> }))
 const box = (left: number, width: number, top = 0, height = 800): DOMRect =>
   ({ left, width, right: left + width, top, height, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect
 function setWidths(areaWidth: number): void {
@@ -39,6 +38,7 @@ const listPins = vi.fn()
 const setPin = vi.fn()
 const movePin = vi.fn()
 const openAgentFile = vi.fn()
+const onReserveChange = vi.fn()
 let client: QueryClient
 const originalOpen = useFilePreviewStore.getState().openAgentFile
 
@@ -47,10 +47,6 @@ beforeEach(() => {
   layout.resize = []
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this.dataset.testid === 'area') return box(0, layout.areaWidth)
-    if (this.hasAttribute('data-sidebar-band-limit')) {
-      const width = Math.min(layout.columnWidth, layout.areaWidth - 32)
-      return box((layout.areaWidth - width) / 2, width)
-    }
     return box(0, 0, 0, 0)
   })
   window.ResizeObserver = class {
@@ -60,14 +56,14 @@ beforeEach(() => {
     observe(): void {}
     disconnect(): void {}
   } as never
-  usePinnedFilesChipStore.setState({ target: null })
+  onReserveChange.mockReset()
   listPins.mockReset().mockResolvedValue({ success: true, pins: [pin('plan.md', 1), pin('main.py', 2), pin('gone.csv', 3, { exists: false })] })
   setPin.mockReset().mockResolvedValue({ success: true, pinned: false })
   movePin.mockReset().mockResolvedValue({ success: true })
   openAgentFile.mockReset().mockResolvedValue(undefined)
   window.api = { agentFiles: { listPins, setPin, movePin } } as never
   useFilePreviewStore.setState({ openAgentFile })
-  useUIStore.setState({ minimalView: false, pinnedFilesCollapsed: false })
+  useUIStore.setState({ minimalView: false })
   useAuthStore.setState({ currentUser: { id: 'alice' } as never })
   localStorage.clear()
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -82,27 +78,33 @@ afterEach(() => {
 function mount(props: { chatId?: string | null; agentId?: string | null } = {}) {
   return render(
     <QueryClientProvider client={client}>
-      <PinnedFilesChip />
       <div data-testid="area">
-        <div data-sidebar-band-limit />
-        <PinnedFilesCard chatId={props.chatId === undefined ? 'chat-1' : props.chatId} agentId={props.agentId === undefined ? 'folder:a' : props.agentId} />
+        <PinnedFilesCard
+          chatId={props.chatId === undefined ? 'chat-1' : props.chatId}
+          agentId={props.agentId === undefined ? 'folder:a' : props.agentId}
+          onReserveChange={onReserveChange}
+        />
       </div>
     </QueryClientProvider>
   )
 }
 
 const card = (): HTMLElement | null => document.querySelector<HTMLElement>('[data-pinned-files-card]')
-const chip = (): HTMLElement | null => document.querySelector<HTMLElement>('[data-pinned-files-chip]')
-const popover = (): HTMLElement | null => document.querySelector<HTMLElement>('[data-pinned-files-popover]')
-const header = (): HTMLElement => screen.getByRole('button', { name: /Pinned files/ })
+const header = (): HTMLElement => screen.getByRole('heading', { name: /Pinned files/ })
+/** The room last asked of the chat area. */
+const reserve = (): unknown => onReserveChange.mock.calls.at(-1)?.[0]
 const row = (name: string): HTMLElement => screen.getByTitle(name)
 
 describe('when it shows', () => {
-  it('lists the root agent’s pins under a header with their count', async () => {
+  it('lists the root agent’s pins under a header with their count, always open', async () => {
     mount()
     await waitFor(() => expect(card()).not.toBeNull())
     expect(header().textContent).toBe('Pinned files3')
-    expect(header().getAttribute('aria-expanded')).toBe('true')
+    expect(card()!.getAttribute('aria-labelledby')).toBe(header().id)
+    // No fold and no chip: the header is not a control, and every row is there.
+    expect(within(card()!).queryByRole('button', { name: /Pinned files/ })).toBeNull()
+    expect(card()!.querySelector('[aria-expanded]')).toBeNull()
+    expect(document.querySelector('[data-pinned-files-chip]')).toBeNull()
     const list = screen.getByRole('list', { name: 'Pinned files' })
     expect(within(list).getAllByRole('button').map((b) => b.title)).toEqual(['plan.md', 'main.py', 'gone.csv'])
     expect(listPins).toHaveBeenCalledWith({ agentId: 'folder:a' })
@@ -114,8 +116,11 @@ describe('when it shows', () => {
     await waitFor(() => expect(listPins).toHaveBeenCalled())
     await act(async () => {})
     expect(card()).toBeNull()
+    // No block, so no room asked for at any width.
     setWidths(900)
-    expect(chip()).toBeNull()
+    setWidths(500)
+    expect(card()).toBeNull()
+    expect(onReserveChange.mock.calls.every(([value]) => value === null)).toBe(true)
   })
 
   it('is not there for a chat whose root agent is not a folder agent, and asks nothing', () => {
@@ -130,7 +135,7 @@ describe('when it shows', () => {
     mount()
     await act(async () => {})
     expect(card()).toBeNull()
-    expect(chip()).toBeNull()
+    expect(reserve()).toBeNull()
     expect(listPins).not.toHaveBeenCalled()
   })
 
@@ -208,147 +213,96 @@ describe('a long name', () => {
   })
 })
 
-describe('folding', () => {
-  it('folds to its header and keeps the choice for every chat', async () => {
-    const { unmount } = mount()
-    await waitFor(() => expect(card()).not.toBeNull())
-    fireEvent.click(header())
-    expect(header().getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByRole('list')).toBeNull()
-    expect(useUIStore.getState().pinnedFilesCollapsed).toBe(true)
-    expect(localStorage.getItem('cinna-pinned-files-collapsed')).toBe('1')
-    unmount()
-    mount({ chatId: 'chat-2' })
-    await waitFor(() => expect(card()).not.toBeNull())
-    expect(header().getAttribute('aria-expanded')).toBe('false')
-  })
-
-})
-
 describe('where it goes', () => {
-  it('fits the gutter only with the card and its margins clear of the column', () => {
-    const column = (areaWidth: number) => box((areaWidth - 768) / 2, 768)
-    // 1600 wide: 416 px right of the column.
-    expect(gutterFits(box(0, 1600), column(1600))).toBe(true)
-    // The card's 224 px plus 20 px to the window side and 12 px from the column: 256 exactly, then one pixel less.
+  it('fits the gutter only with the block and its margins clear of the column', () => {
+    // 1600 wide: 416 px right of the 768 px column.
+    expect(gutterFits(1600)).toBe(true)
+    // The block's 224 px plus 20 px to the window side and 12 px from the column: 256 exactly, then one pixel less.
     expect(PINNED_FILES_GUTTER_PX).toBe(256)
-    expect(gutterFits(box(0, 768 + 2 * 256), column(768 + 2 * 256))).toBe(true)
-    expect(gutterFits(box(0, 768 + 2 * 255), column(768 + 2 * 255))).toBe(false)
-    // Room for the card alone, not its margins, is not enough.
-    expect(gutterFits(box(0, 768 + 2 * 230), column(768 + 2 * 230))).toBe(false)
-    expect(gutterFits(box(0, 900), column(900))).toBe(false)
-    // Not laid out: taken to fit. No column yet: measured against the one it will have.
-    expect(gutterFits(box(0, 0), null)).toBe(true)
-    expect(gutterFits(box(0, 1600), null)).toBe(true)
-    expect(gutterFits(box(0, 900), null)).toBe(false)
+    expect(gutterFits(768 + 2 * 256)).toBe(true)
+    expect(gutterFits(768 + 2 * 255)).toBe(false)
+    // Room for the block alone, not its margins, is not enough.
+    expect(gutterFits(768 + 2 * 230)).toBe(false)
+    // At the app's 17 px rem the column is 816 px wide.
+    expect(gutterFits(816 + 2 * 256, 17)).toBe(true)
+    expect(gutterFits(816 + 2 * 255, 17)).toBe(false)
+    expect(gutterFits(900)).toBe(false)
   })
 
-  it('floats in the gutter when it fits, and becomes the top bar chip when it does not, back and forth', async () => {
+  it('floats in the gutter, makes room beside the transcript down to 640 px, and goes above it below that', () => {
+    expect(pinnedFilesMode(1600)).toBe('gutter')
+    expect(pinnedFilesMode(1280)).toBe('gutter')
+    expect(pinnedFilesMode(1279)).toBe('reserve')
+    expect(pinnedFilesMode(640)).toBe('reserve')
+    expect(pinnedFilesMode(639)).toBe('top')
+    // Not laid out: taken to fit.
+    expect(pinnedFilesMode(0)).toBe('gutter')
+  })
+
+  it('asks for no room in the gutter, for a right-hand column when narrower, and for the top below 640 px, back and forth', async () => {
     mount()
     await waitFor(() => expect(card()).not.toBeNull())
-    expect(chip()).toBeNull()
-    setWidths(900)
-    expect(card()).toBeNull()
-    expect(await screen.findByRole('button', { name: 'Pinned files, 3' })).toBe(chip())
-    expect(chip()!.title).toBe('Pinned files')
+    expect(reserve()).toBeNull()
+    expect(card()!.className).toContain('absolute')
+    expect(card()!.dataset.pinnedFilesPlacement).toBe('side')
+    // In px, as the transcript's reserve is: Tailwind's rem sizes would be 17/16 of these.
+    expect(card()!.style.width).toBe('224px')
+    expect(card()!.style.right).toBe('20px')
+
+    setWidths(1100)
+    expect(reserve()).toBe('right')
+    // Still at the chat area's right, at the same top: the transcript keeps clear of it.
+    expect(card()!.className).toContain('absolute')
+    expect(card()!.style.top).toBe('calc(var(--topbar-h) + 12px)')
+    expect(within(card()!).getAllByRole('button').map((b) => b.title)).toEqual(['plan.md', 'main.py', 'gone.csv'])
+
+    setWidths(600)
+    expect(reserve()).toBe('top')
+    // In the flow, first, full width: its own band above the transcript, under the top bar's strip.
+    expect(card()!.dataset.pinnedFilesPlacement).toBe('top')
+    expect(card()!.className).not.toContain('absolute')
+    expect(card()!.className).toContain('order-first')
+    expect(card()!.style.marginTop).toBe('calc(var(--topbar-h) + 12px)')
+    expect(card()!.className).toContain('[-webkit-app-region:no-drag]')
+    expect(within(card()!).getAllByRole('button').map((b) => b.title)).toEqual(['plan.md', 'main.py', 'gone.csv'])
+
     setWidths(1600)
-    expect(card()).not.toBeNull()
-    expect(chip()).toBeNull()
+    expect(reserve()).toBeNull()
+    expect(card()!.dataset.pinnedFilesPlacement).toBe('side')
   })
-})
 
-describe('the chip', () => {
-  async function openChip(): Promise<HTMLElement> {
-    layout.areaWidth = 900
+  it('keeps the room only while the block shows: the first pin takes it, the last unpin gives it back', async () => {
+    listPins.mockResolvedValue({ success: true, pins: [] })
+    layout.areaWidth = 1100
     mount()
-    const button = await screen.findByRole('button', { name: 'Pinned files, 3' })
-    fireEvent.click(button)
-    await waitFor(() => expect(popover()).not.toBeNull())
-    expect(button.getAttribute('aria-expanded')).toBe('true')
-    return popover()!
-  }
+    await waitFor(() => expect(listPins).toHaveBeenCalled())
+    await act(async () => {})
+    expect(card()).toBeNull()
+    expect(reserve()).toBeNull()
 
-  it('opens the same rows as a popover', async () => {
-    const list = await openChip()
-    expect(within(list).getAllByRole('button').map((b) => b.title)).toEqual(['plan.md', 'main.py', 'gone.csv'])
-    expect(list.className).toContain('app-popover-surface')
-    expect(within(list).getByRole('img', { name: 'File not found' })).toBeTruthy()
-  })
-
-  it('opens the preview from a row and closes', async () => {
-    const list = await openChip()
-    fireEvent.click(within(list).getByTitle('main.py'), { detail: 1, clientX: 30, clientY: 40 })
-    expect(openAgentFile).toHaveBeenCalledWith('folder:a', expect.objectContaining({ path: '/agent/main.py', kind: 'file' }), { x: 30, y: 40 })
-    expect(popover()).toBeNull()
-  })
-
-  it('closes on Escape and on a press outside', async () => {
-    await openChip()
-    fireEvent.keyDown(document, { key: 'Escape' })
-    expect(popover()).toBeNull()
-    fireEvent.click(chip()!)
-    await waitFor(() => expect(popover()).not.toBeNull())
-    fireEvent.mouseDown(document.body)
-    expect(popover()).toBeNull()
-  })
-
-  it('offers the shared menu on a right-click, Unpin file first, and the menu keeps its error when the popover closes', async () => {
-    setPin.mockResolvedValue({ success: false, code: 'agent_not_found', error: 'That agent is no longer in your agents folder.' })
-    const list = await openChip()
-    fireEvent.contextMenu(within(list).getByTitle('plan.md'), { clientX: 20, clientY: 20 })
-    expect(screen.getAllByRole('menuitem')[0]).toBe(await screen.findByRole('menuitem', { name: 'Unpin file' }))
-    // Escape is the menu's first, wherever focus is: the popover stays for the next one.
-    fireEvent.keyDown(document.body, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Message actions' })).toBeNull())
-    expect(popover()).not.toBeNull()
-    fireEvent.contextMenu(within(list).getByTitle('plan.md'), { clientX: 20, clientY: 20 })
-    const unpin = await screen.findByRole('menuitem', { name: 'Unpin file' })
-    // A press on the menu is outside the popover, which closes; the menu stays to finish.
-    fireEvent.mouseDown(unpin)
-    fireEvent.click(unpin)
-    expect(popover()).toBeNull()
-    expect((await screen.findByRole('alert')).textContent).toBe('That agent is no longer in your agents folder.')
-    expect(screen.getByRole('menu', { name: 'Message actions' })).toBeTruthy()
-  })
-
-  it('says a refusal of the last pin’s unpin, although the chip goes with the pin', async () => {
     listPins.mockResolvedValue({ success: true, pins: [pin('plan.md', 1)] })
-    let refuse!: (answer: unknown) => void
-    setPin.mockReturnValue(new Promise((resolve) => { refuse = resolve }))
-    layout.areaWidth = 900
-    mount()
-    fireEvent.click(await screen.findByRole('button', { name: 'Pinned files, 1' }))
-    await waitFor(() => expect(popover()).not.toBeNull())
-    fireEvent.contextMenu(within(popover()!).getByTitle('plan.md'), { clientX: 20, clientY: 20 })
-    const unpin = await screen.findByRole('menuitem', { name: 'Unpin file' })
-    fireEvent.mouseDown(unpin)
-    fireEvent.click(unpin)
-    // Unpinned at once: the chip goes, and the chat no longer hands it a target.
-    await waitFor(() => expect(chip()).toBeNull())
-    expect(usePinnedFilesChipStore.getState().target).toBeNull()
-    await act(async () => refuse({ success: false, code: 'agent_not_found', error: 'That agent is no longer in your agents folder.' }))
-    expect((await screen.findByRole('alert')).textContent).toBe('That agent is no longer in your agents folder.')
-    expect(screen.getByRole('menu', { name: 'Message actions' })).toBeTruthy()
+    await act(async () => client.invalidateQueries({ queryKey: ['agent-pinned-files', 'folder:a'] }))
+    await waitFor(() => expect(card()).not.toBeNull())
+    expect(reserve()).toBe('right')
+
+    listPins.mockResolvedValue({ success: true, pins: [] })
+    fireEvent.contextMenu(row('plan.md'), { clientX: 20, clientY: 20 })
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Unpin file' }))
+    await waitFor(() => expect(card()).toBeNull())
+    expect(reserve()).toBeNull()
   })
 
-  it('closes the menu when the active chat changes, to a chat with no chip too', async () => {
-    act(() => useChatStore.getState().setActiveChatId('chat-1'))
-    const list = await openChip()
-    fireEvent.contextMenu(within(list).getByTitle('plan.md'), { clientX: 20, clientY: 20 })
-    await screen.findByRole('menu', { name: 'Message actions' })
-    // The chip goes (the other chat shows no pins), and so does the menu.
-    act(() => usePinnedFilesChipStore.setState({ target: null }))
-    expect(screen.getByRole('menu', { name: 'Message actions' })).toBeTruthy()
-    act(() => useChatStore.getState().setActiveChatId('chat-2'))
-    expect(screen.queryByRole('menu', { name: 'Message actions' })).toBeNull()
-  })
-
-  it('focuses its first row when the popover opens, and Escape gives focus back to the chip', async () => {
-    const list = await openChip()
-    await waitFor(() => expect(document.activeElement).toBe(within(list).getByTitle('plan.md')))
-    fireEvent.keyDown(document, { key: 'Escape' })
-    expect(popover()).toBeNull()
-    expect(document.activeElement).toBe(chip())
+  it('gives the room back when it stops showing for the chat (Minimal view) and when it unmounts', async () => {
+    layout.areaWidth = 1100
+    const { unmount } = mount()
+    await waitFor(() => expect(reserve()).toBe('right'))
+    act(() => useUIStore.setState({ minimalView: true }))
+    expect(card()).toBeNull()
+    expect(reserve()).toBeNull()
+    act(() => useUIStore.setState({ minimalView: false }))
+    await waitFor(() => expect(reserve()).toBe('right'))
+    unmount()
+    expect(reserve()).toBeNull()
   })
 })
 
