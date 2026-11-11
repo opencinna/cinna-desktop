@@ -67,6 +67,8 @@ A folder agent works inside its folder and names files all the time: `data/refor
    - **Copy contents** and **Save to Notes**;
    - **Copy full path**, **Show in the folder** and **Reference in a new chat**.
 
+   For a file of a folder agent, a group of its own comes first: **Pin file**, or **Unpin file** when it is pinned. A folder never gets it. See [Pinned Files](../pinned_files/pinned_files.md).
+
    A third group, **Publish…**, follows when the active profile is a signed-in Cinna account whose instance keeps [artifacts](../artifacts/artifacts.md) and the reference is a file or folder inside the agent's folder that is not a credential file. It is offered for folders and binary types too, since main publishes bytes, not text. It opens the Publish dialog, closes the menu, and the resulting card lands right after the message the reference was rendered in.
 
    Near the bottom of the window the menu opens upwards from the pointer instead.
