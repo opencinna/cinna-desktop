@@ -8,7 +8,7 @@ A folder agent can publish a file or folder from its own folder as an [artifact]
 
 - **`artifacts_publish`** — the one tool, on the same `cinna` MCP server as the eight `tasks_*` tools. Arguments: `path` (relative to the agent's folder), `title`, optional `description`, `entry` (the HTML page to open first) and `artifact_id` (republish into an artifact this machine published before). Nothing else is accepted: an agent that sends a visibility or a share argument is refused with "An agent publishes privately; the user shares." The contract is cinna-core's `artifacts.schema.json`, held equal to the registered tool by a parity test ([Kit Contract](../../agents/local_agents/kit_contract_tech.md)).
 - **Publish approval** — the card in the transcript where the call waits, in the few cases the policy asks: the agent's name, the title, kind, the files (with what is left out struck through), the size, who would see it, and **Deny**, **Edit…**, **Publish**. The same request is a row in the [Inbox](../../jobs/tasks/inbox.md) whose address begins `art_` (then the tool call's id), so it can be answered when the chat is not on screen. A chat that had no task gains one for the row, as it does for an engine's permission ask.
-- **Edit…** — opens the Publish dialog on the agent's request. The person can change title, description, start page, Update versus Publish as new, and the audience, then publish. Through the card this is the way a request reaches an audience other than the one it would keep.
+- **Edit…** — opens the Publish dialog on the agent's request. The person can change title, description, start page, Update rev N versus New artifact, and the audience, then publish. Through the card this is the way a request reaches an audience other than the one it would keep.
 - **The policy** (`agentArtifactPolicy`) — decides publish or ask. See [The gate](#the-gate).
 - **The `cinna-artifacts` skill** — the platform skill that teaches an agent when to publish and how to build a site that works in the sandbox. See [Skill delivery](#skill-delivery).
 
@@ -19,7 +19,7 @@ A folder agent can publish a file or folder from its own folder as an [artifact]
 3. The agent names an `artifact_id` that another agent published, or core cannot be read for the artifact, or the person is no longer its owner. The chat shows the approval card with `Deny`, `Edit…`, `Publish`; the Inbox shows a row "Publish artifact" with **Publish** and **Deny**. The agent's call is blocked.
 4. The person presses **Publish** on either surface. Main publishes with the agent's arguments, the card becomes the [artifact card](artifacts.md) of the result, the row settles, and the agent gets `{artifact_id, revision, url, kind, file_count, size_bytes, excluded}`.
 5. The person presses **Deny**: the agent gets "The user declined to publish `reports/q3`; do not retry unless they ask." The transcript says "Not published — you declined".
-6. The person presses **Edit…**, changes the title and picks *Everyone on the instance*, then publishes: the artifact is published as edited and the agent's result describes what really happened.
+6. The person presses **Edit…**, changes the title and picks **Everyone**, then publishes: the artifact is published as edited and the agent's result describes what really happened.
 7. A failure on **Publish** (the instance unreachable, the folder over the limits) is said in the card, which stays; the request is still pending, so the person can retry, edit or deny.
 
 ## Business Rules
