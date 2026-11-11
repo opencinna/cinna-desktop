@@ -37,6 +37,7 @@ import { useWipeGesture } from '../../hooks/useWipeGesture'
 import { OPEN_FLOATING_LAYER_SELECTOR } from '../../hooks/useSidebarHoverDock'
 import { useOverscrollExit } from '../../hooks/useOverscrollExit'
 import { MinimalRestoreButton } from './MinimalRestoreButton'
+import { PinnedFilesCard } from '../chat/PinnedFilesCard'
 
 /** Why the new-chat composer holds sends while a picked agent is being drafted. */
 const DRAFTING_SEND_HOLD = "Drafting this agent's prompts — send when it finishes."
@@ -489,6 +490,15 @@ export function ChatWorkspace({
   // Active chat: resolve current mode from chatData.modeId
   const { data: activeChatData } = useChatDetail(activeChatId)
 
+  // The Pinned files card: the main chat view only, for a chat whose root
+  // agent is a folder agent (a coordinator's other agents' pins are not shown).
+  const rootAgentId = activeChatData?.agentId ?? null
+  const pinnedFilesAgentId =
+    !embedded && !hosted && rootAgentId !== null &&
+    agentList?.find((agent) => agent.id === rootAgentId)?.capabilities?.cwd === true
+      ? rootAgentId
+      : null
+
   const activeChatMode = activeChatData?.modeId
     ? (chatModes ?? []).find((m) => m.id === activeChatData.modeId) ?? null
     : null
@@ -729,6 +739,7 @@ export function ChatWorkspace({
         // was, or above the cloud while it shows (the wrapper's measured height).
         pillBottom={minimal.phase === 'cloud' ? (cloudShown ? Math.max(12, inputHeight - 8) : 12) : undefined}
       />
+      <PinnedFilesCard chatId={activeChatId} agentId={pinnedFilesAgentId} />
       <div
         ref={inputWrapperRef}
         data-minimal-phase={minimal.phase}
