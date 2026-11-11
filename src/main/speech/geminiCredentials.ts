@@ -1,6 +1,6 @@
 import { appSettingsRepo } from '../db/appSettings'
 import { llmProviderRepo, type LlmProviderRow } from '../db/llmProviders'
-import { getManagedResourceScopes } from '../auth/scope'
+import { DEFAULT_SCOPE_USER_ID } from '../auth/scope'
 import { decryptApiKey } from '../security/keystore'
 import { createLogger } from '../logger/logger'
 import type { SpeechCloudProvider, VoiceCloudService, VoiceCloudTranscription } from '../../shared/speech'
@@ -10,9 +10,9 @@ const logger = createLogger('speech')
 /** What cloud transcription is set to and can use, without decrypting anything. */
 export interface CloudTranscriptionConfig {
   mode: VoiceCloudTranscription
-  /** The Service setting (`''` = the Cinna server when its relay is available, else Gemini). Optional for older callers: absent is `''`. */
+  /** The Service setting (`''` = none chosen: no cloud session runs). Optional for older callers: absent is `''`. */
   service?: VoiceCloudService
-  /** Usable Gemini providers, in repo order. */
+  /** Usable Gemini providers from the user's own AI Credentials (Default scope), in repo order. */
   providers: SpeechCloudProvider[]
   /** The one a session would bill: the chosen id when usable, else the first. */
   chosen: SpeechCloudProvider | null
@@ -36,10 +36,19 @@ function pick(rows: LlmProviderRow[], chosenId: string): LlmProviderRow | null {
   return usable.find((row) => row.id === chosenId) ?? usable[0] ?? null
 }
 
+/**
+ * The Gemini providers transcription may use: only the user's own, under AI
+ * Credentials (Default scope). An account-provisioned row is never offered or
+ * billed: the setting is app-wide, and that row disappears on a profile switch.
+ */
+function listOwnProviders(): LlmProviderRow[] {
+  return llmProviderRepo.listByUserIds([DEFAULT_SCOPE_USER_ID])
+}
+
 /** Settings and provider rows, read fresh: what `speech:status` reports and a session decides on. */
 export function readCloudConfig(): CloudTranscriptionConfig {
   const mode = appSettingsRepo.get('voiceCloudTranscription')
-  const rows = llmProviderRepo.listByUserIds(getManagedResourceScopes())
+  const rows = listOwnProviders()
   const providers = rows.filter(isUsableGemini).map((row) => ({ id: row.id, name: row.name }))
   const chosenRow = pick(rows, appSettingsRepo.get('voiceCloudProviderId'))
   return { mode, service: appSettingsRepo.get('voiceCloudService'), providers, chosen: chosenRow ? { id: chosenRow.id, name: chosenRow.name } : null }
@@ -53,7 +62,7 @@ export function readCloudConfig(): CloudTranscriptionConfig {
 export async function resolveGeminiKey(): Promise<GeminiKey> {
   let row: LlmProviderRow | null
   try {
-    row = pick(llmProviderRepo.listByUserIds(getManagedResourceScopes()), appSettingsRepo.get('voiceCloudProviderId'))
+    row = pick(listOwnProviders(), appSettingsRepo.get('voiceCloudProviderId'))
   } catch (error) {
     logger.warn('could not read the Gemini providers for transcription', { error: error instanceof Error ? error.message : String(error) })
     return { ok: false, message: NO_GEMINI_PROVIDER_MESSAGE }

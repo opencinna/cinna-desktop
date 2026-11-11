@@ -17,7 +17,7 @@ vi.mock('../logger/logger', () => ({
 const { createSpeechService } = await import('./speechService')
 
 /** The cloud half every status carries when no cloud engine is wired. */
-const NO_CLOUD = { available: false, cloud: { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } } }
+const NO_CLOUD = { available: false, cloud: { mode: 'off', setting: '', service: 'core', usable: false, providers: [], relay: { available: false } } }
 
 function fakeEngine(
   probe: SpeechProbe | (() => Promise<SpeechProbe>),
@@ -395,13 +395,13 @@ describe('speechService', () => {
       ['off', '', 'supported', true, true, 'macos'],
       ['off', 'core', 'supported', true, true, 'macos'],
       ['off', 'gemini', 'unsupported', true, true, 'unavailable: Audio input is not available on this '],
-      // No service saved with a mode on: the relay while it is available, never the billed key.
-      ['always', '', 'supported', true, true, 'core'],
+      // No service saved with a mode on: nothing runs, whatever the server offers or the key.
+      ['always', '', 'supported', true, true, NO_SERVICE],
       ['always', '', 'supported', true, false, NO_SERVICE],
       ['always', '', 'supported', false, false, NO_SERVICE],
       ['fallback', '', 'supported', true, true, 'macos'],
       ['fallback', '', 'denied', true, true, 'macos'],
-      ['fallback', '', 'unsupported', true, true, 'core'],
+      ['fallback', '', 'unsupported', true, true, NO_SERVICE],
       ['fallback', '', 'unsupported', true, false, NO_SERVICE],
       // A chosen service is never swapped for the other.
       ['always', 'core', 'supported', true, true, 'core'],
@@ -418,13 +418,16 @@ describe('speechService', () => {
     })
 
     it.each([
-      ['always', '', false, true, 'core', true, true],
-      // Shown as the key, but not run on it: nothing is chosen.
-      ['always', '', true, false, 'gemini', false, false],
-      ['always', '', false, false, 'gemini', false, false],
-      ['always', 'core', true, false, 'core', false, false],
+      // Unset: shown as the Cinna server, never usable, whatever the relay or the key.
+      ['always', '', false, true, 'core', false, false],
+      ['always', '', true, false, 'core', false, false],
+      ['always', '', false, false, 'core', false, false],
+      // The Cinna server is usable whether or not this server offers the relay: the dictation says so.
+      ['always', 'core', true, false, 'core', true, true],
+      ['always', 'core', false, true, 'core', true, true],
       ['always', 'gemini', false, true, 'gemini', false, false],
-      ['off', '', false, true, 'core', true, false],
+      ['always', 'gemini', true, false, 'gemini', true, true],
+      ['off', 'core', false, false, 'core', true, false],
       ['fallback', 'core', true, true, 'core', true, true]
     ] as [VoiceCloudTranscription, VoiceCloudService, boolean, boolean, string, boolean, boolean][])(
       'status: %s, service %j, key %s, relay %s → effective %s, usable %s, available (no on-device) %s',

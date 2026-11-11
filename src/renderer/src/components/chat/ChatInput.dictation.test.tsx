@@ -10,7 +10,9 @@ vi.mock('./voice/VoiceInputButton', () => ({
   VoiceInputButton: (props: { dictation?: Target }) => {
     voice.target = props.dictation ?? null
     return null
-  }
+  },
+  // Dictation needs the mic, so it is shown.
+  useVoiceInputShown: () => true
 }))
 
 function namespace() {
@@ -99,6 +101,8 @@ it('Esc cancels and Enter sends through the dictation, not the composer', () => 
 
 it('Send counts the shown words, and a click on it sends through the dictation', () => {
   render(<ChatInput chatId="chat-1" draftKey={KEY} />, { wrapper })
+  // Nothing to send yet: the mic is the row's control.
+  expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
   dictate(0, 'only spoken so far', 0)
   const send = screen.getByRole('button', { name: 'Send' })
   expect(send).toHaveProperty('disabled', false)

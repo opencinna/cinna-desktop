@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { isVoiceCloudService, isVoiceCloudTranscription, type SpeechCloudProvider, type SpeechCloudStatus, type SpeechRelayStatus, type SpeechRelayUsageResult, type SpeechStatus } from '../../../../../shared/speech'
+import { isVoiceCloudService, isVoiceCloudTranscription, type SpeechCloudProvider, type SpeechCloudStatus, type SpeechRelayStatus, type SpeechStatus } from '../../../../../shared/speech'
 
-const NO_CLOUD: SpeechCloudStatus = { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } }
+const NO_CLOUD: SpeechCloudStatus = { mode: 'off', setting: '', service: 'core', usable: false, providers: [], relay: { available: false } }
 
 function asRelay(value: unknown): SpeechRelayStatus {
   if (!value || typeof value !== 'object') return { available: false }
@@ -18,9 +18,10 @@ function asCloud(value: unknown): SpeechCloudStatus {
     ? cloud.providers.filter((p): p is SpeechCloudProvider => !!p && typeof p.id === 'string' && typeof p.name === 'string')
     : []
   const relay = asRelay(cloud.relay)
-  // An older main has no service: Gemini, usable with a provider.
+  // An older main has no service: Gemini, usable with a provider. The Cinna
+  // server is usable whatever the active server offers (a dictation says so).
   const service = cloud.service === 'core' ? 'core' : 'gemini'
-  const usable = cloud.usable === true && (service === 'core' ? relay.available : providers.length > 0)
+  const usable = cloud.usable === true && (service === 'core' || providers.length > 0)
   return {
     mode: isVoiceCloudTranscription(cloud.mode) ? cloud.mode : 'off',
     setting: isVoiceCloudService(cloud.setting) ? cloud.setting : '',
@@ -84,28 +85,3 @@ export function speechBlocked(status: SpeechStatus): boolean {
 }
 
 export const SPEECH_BLOCKED_HINT = 'Allow Cinna in System Settings › Privacy & Security › Speech Recognition'
-
-/** This month's dictation on the Cinna server, for Settings; failures are data. Fetched while the row shows. */
-export const SPEECH_RELAY_USAGE_QUERY_KEY = ['speech', 'relay-usage'] as const
-
-/** This month's dictation on the Cinna server, read only while `enabled` (the row shows); undefined until it answers. */
-export function useSpeechRelayUsage(enabled: boolean): SpeechRelayUsageResult | undefined {
-  const { data } = useQuery({
-    queryKey: SPEECH_RELAY_USAGE_QUERY_KEY,
-    queryFn: fetchSpeechRelayUsage,
-    enabled,
-    staleTime: 60_000,
-    retry: false
-  })
-  return data
-}
-
-export async function fetchSpeechRelayUsage(): Promise<SpeechRelayUsageResult> {
-  const speech = (window.api as { speech?: { relayUsage?: () => Promise<SpeechRelayUsageResult> } } | undefined)?.speech
-  if (typeof speech?.relayUsage !== 'function') return { ok: false, message: 'Restart Cinna to see the dictation minutes.' }
-  try {
-    return await speech.relayUsage()
-  } catch {
-    return { ok: false, message: 'Could not read the dictation minutes.' }
-  }
-}

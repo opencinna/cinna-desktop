@@ -25,13 +25,13 @@ import type { SpeechBackend, SpeechStatus, SpeechStreamEvent } from '../../src/s
  * the backend, and the renderer's cloud mark follows it.
  */
 
-const NO_CLOUD: SpeechStatus['cloud'] = { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } }
+const NO_CLOUD: SpeechStatus['cloud'] = { mode: 'off', setting: '', service: 'core', usable: false, providers: [], relay: { available: false } }
 const SUPPORTED: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', backend: 'sfspeech', available: true, cloud: NO_CLOUD }
 const UNSUPPORTED: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec', available: false, cloud: NO_CLOUD }
 
 /**
  * Replace main's speech status, then reload so the renderer's prefetch reads it.
- * `shown` turns Show audio input on first (it is off by default).
+ * `shown` turns Audio input on first (it is off by default).
  */
 async function pinSpeechStatus(cinna: CinnaApp, status: SpeechStatus, { shown = false } = {}): Promise<void> {
   await cinna.electronApp.evaluate(({ ipcMain }, pinned) => {
@@ -56,7 +56,7 @@ const sendButton = (cinna: CinnaApp) => cinna.page.getByRole('button', { name: '
 const composer = (cinna: CinnaApp) => cinna.page.getByRole('combobox', { name: 'Type a message...', exact: true })
 
 test.describe('voice input, speech unsupported', () => {
-  test('no mic button beside Send and no Show audio input row', async ({ cinna }) => {
+  test('no mic button beside Send, and the Audio input row is there but disabled and off', async ({ cinna }) => {
     await cinna.skipOnboarding()
     await pinSpeechStatus(cinna, UNSUPPORTED)
 
@@ -65,10 +65,13 @@ test.describe('voice input, speech unsupported', () => {
     await expect(micButton(cinna)).toHaveCount(0)
 
     await openFeatures(cinna)
-    // The neighbouring Interface row renders, so the absence below is real.
     await expect(cinna.page.getByRole('switch', { name: 'Tasks button' })).toBeVisible()
-    await expect(cinna.page.getByRole('switch', { name: 'Show audio input' })).toHaveCount(0)
-    await expect(cinna.page.getByText('Show audio input', { exact: true })).toHaveCount(0)
+    // Always rendered, so a cloud mode chosen below never inserts a row above the pills.
+    const toggle = cinna.page.getByRole('switch', { name: 'Audio input', exact: true })
+    await expect(toggle).toBeVisible()
+    await expect(toggle).toBeDisabled()
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await expect(toggle).toHaveAttribute('title', 'No speech recognition on this computer: turn on Cloud transcription below')
   })
 })
 
@@ -81,17 +84,23 @@ test.describe('voice input, speech supported', () => {
     await expect(micButton(cinna)).toHaveCount(0)
 
     await openFeatures(cinna)
-    await expect(cinna.page.getByRole('switch', { name: 'Show audio input' })).toHaveAttribute('aria-checked', 'false')
+    await expect(cinna.page.getByRole('switch', { name: 'Audio input', exact: true })).toHaveAttribute('aria-checked', 'false')
+    await expect(cinna.page.getByRole('switch', { name: 'Audio input', exact: true })).toBeEnabled()
   })
 
   test('menu, hide from the menu, and turn back on in Settings → Features', async ({ cinna }) => {
     await cinna.skipOnboarding()
     await pinSpeechStatus(cinna, SUPPORTED, { shown: true })
 
-    await test.step('the mic button sits immediately before Send', async () => {
+    await test.step('an empty draft has the mic alone; the first character puts Send right after it', async () => {
       await expect(micButton(cinna)).toBeVisible()
       await expect(micButton(cinna)).toHaveAttribute('title', 'Audio input · right-click to choose the microphone')
+      await expect(sendButton(cinna)).toHaveCount(0)
+      await composer(cinna).fill('h')
       await expect(micButton(cinna).locator('xpath=following-sibling::button[1]')).toHaveAccessibleName('Send')
+      await expect(sendButton(cinna)).toBeEnabled()
+      await composer(cinna).fill('')
+      await expect(sendButton(cinna)).toHaveCount(0)
     })
 
     await test.step('right-click opens the microphone menu', async () => {
@@ -102,28 +111,28 @@ test.describe('voice input, speech supported', () => {
       await expect(menu.getByText('Microphone', { exact: true })).toHaveCSS('text-transform', 'uppercase')
       const systemDefault = menu.getByRole('menuitemradio', { name: 'System default', exact: true })
       await expect(systemDefault).toHaveAttribute('aria-checked', 'true')
-      const show = menu.getByRole('menuitemcheckbox', { name: 'Show audio input', exact: true })
+      const show = menu.getByRole('menuitemcheckbox', { name: 'Audio input', exact: true })
       await expect(show).toHaveAttribute('aria-checked', 'true')
       // Heading first, the switch last.
       await expect(menu.locator('[role="menuitemcheckbox"]')).toHaveCount(1)
-      await expect(menu.locator('[role^="menuitem"]').last()).toHaveAccessibleName('Show audio input')
+      await expect(menu.locator('[role^="menuitem"]').last()).toHaveAccessibleName('Audio input')
     })
 
     await test.step('turning it off hides the button and says where it comes back', async () => {
-      await cinna.page.getByRole('menuitemcheckbox', { name: 'Show audio input', exact: true }).click()
+      await cinna.page.getByRole('menuitemcheckbox', { name: 'Audio input', exact: true }).click()
       await expect(cinna.page.getByRole('menu', { name: 'Audio input' })).toHaveCount(0)
       await expect(micButton(cinna)).toHaveCount(0)
-      await expect(sendButton(cinna)).toBeVisible()
+      await expect(sendButton(cinna)).toBeDisabled()
       const toast = cinna.page.getByRole('status').filter({ hasText: 'Audio input is hidden.' })
       await expect(toast.locator('p')).toHaveText(
-        'Audio input is hidden. Turn it back on in Settings → Features → Interface → Show audio input.'
+        'Audio input is hidden. Turn it back on in Settings → Features → Interface → Audio input.'
       )
       await expect(toast.getByLabel('Info', { exact: true })).toBeVisible()
       await toast.getByRole('button', { name: 'Open Settings → Features', exact: true }).click()
     })
 
     await test.step('the toast link lands on Features, where the switch brings it back', async () => {
-      const toggle = cinna.page.getByRole('switch', { name: 'Show audio input' })
+      const toggle = cinna.page.getByRole('switch', { name: 'Audio input', exact: true })
       await expect(toggle).toBeVisible()
       await expect(toggle).toHaveAttribute('aria-checked', 'false')
       await expect(cinna.page.getByRole('switch', { name: 'Tasks button' })).toBeVisible()
@@ -131,7 +140,7 @@ test.describe('voice input, speech supported', () => {
       await expect(toggle).toHaveAttribute('aria-checked', 'true')
       await cinna.page.getByRole('button', { name: 'Back', exact: true }).click()
       await expect(micButton(cinna)).toBeVisible()
-      await expect(sendButton(cinna)).toBeVisible()
+      await expect(sendButton(cinna)).toHaveCount(0)
     })
   })
 })
@@ -141,9 +150,11 @@ test.describe('voice input, speech supported', () => {
  * on-device engine — the Linux and Windows case. The status stays pinned: no
  * Gemini provider is seeded and no key exists, so nothing here can reach
  * Google. Where a test changes the Cloud transcription mode, the pinned
- * handler reads the stored setting back through the real `settings:get-all`
- * and derives `cloud.mode` and `available` from it the way `speechService`
- * does, so the renderer's refetch after the save sees the new mode.
+ * handler reads the stored mode and service back through the real
+ * `settings:get-all` and derives `cloud.service`, `usable` and `available`
+ * from them the way `speechService` does (the Cinna server is usable whatever
+ * the server offers; an unset service never is), so the renderer's refetch
+ * after the save sees them.
  */
 const GEMINI = { id: 'gemini-e2e', name: 'Gemini' }
 
@@ -151,12 +162,15 @@ async function pinNoOnDeviceWithGemini(cinna: CinnaApp): Promise<void> {
   await cinna.electronApp.evaluate(({ ipcMain }, provider) => {
     ipcMain.removeHandler('speech:status')
     ipcMain.handle('speech:status', async (event) => {
-      const settings = await event.sender.executeJavaScript('window.api.settings.getAll()') as { voiceCloudTranscription?: string }
+      const settings = await event.sender.executeJavaScript('window.api.settings.getAll()') as { voiceCloudTranscription?: string; voiceCloudService?: string }
       const mode = settings.voiceCloudTranscription ?? 'off'
+      const setting = settings.voiceCloudService ?? ''
+      // Usable: the Cinna server always, the Gemini key with this provider, nothing unset.
+      const usable = setting !== ''
       return {
         supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec',
-        available: mode !== 'off',
-        cloud: { mode, setting: '', service: 'gemini', usable: true, providers: [provider], relay: { available: false } }
+        available: mode !== 'off' && usable,
+        cloud: { mode, setting, service: setting === 'gemini' ? 'gemini' : 'core', usable, providers: [provider], relay: { available: false } }
       }
     })
   }, GEMINI)
@@ -164,56 +178,86 @@ async function pinNoOnDeviceWithGemini(cinna: CinnaApp): Promise<void> {
   await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
 }
 
-const cloudSelect = (cinna: CinnaApp) => cinna.page.getByRole('combobox', { name: 'Cloud transcription', exact: true })
-const showAudioInput = (cinna: CinnaApp) => cinna.page.getByRole('switch', { name: 'Show audio input' })
+const cloudPills = (cinna: CinnaApp) => cinna.page.getByRole('group', { name: 'Cloud transcription', exact: true })
+const cloudPill = (cinna: CinnaApp, label: 'Off' | 'As a fallback' | 'Always') => cloudPills(cinna).getByRole('button', { name: label, exact: true })
+const audioInput = (cinna: CinnaApp) => cinna.page.getByRole('switch', { name: 'Audio input', exact: true })
 
 test.describe('voice input, cloud transcription without an on-device engine', () => {
-  test('no Gemini credential: the mode is locked at Off, a status row links to AI Credentials, and there is no mic', async ({ cinna }) => {
+  test('no Gemini credential: the modes stay open, My Gemini key then shows a status row linking to AI Credentials, and there is no mic', async ({ cinna }) => {
     await cinna.skipOnboarding()
     await pinSpeechStatus(cinna, UNSUPPORTED, { shown: true })
 
-    // Show audio input was switched on in localStorage, yet without any engine there is no mic.
+    // Audio input was switched on in localStorage, yet without any engine there is no mic.
     await expect(sendButton(cinna)).toBeVisible()
     await expect(micButton(cinna)).toHaveCount(0)
 
     await openFeatures(cinna)
-    await expect(cloudSelect(cinna)).toBeVisible()
-    await expect(cloudSelect(cinna)).toHaveValue('off')
-    await expect(cloudSelect(cinna)).toBeDisabled()
-    await expect(cloudSelect(cinna).locator('option')).toHaveText(['Off', 'As a fallback', 'Always'])
+    await expect(cloudPills(cinna)).toBeVisible()
+    await expect(cloudPills(cinna).getByRole('button')).toHaveText(['Off', 'As a fallback', 'Always'])
+    await expect(cloudPill(cinna, 'Off')).toHaveAttribute('aria-pressed', 'true')
+    // Never locked by what this computer or the signed-in server offers (ux_rules rule 21).
+    for (const label of ['Off', 'As a fallback', 'Always'] as const) await expect(cloudPill(cinna, label)).toBeEnabled()
+    // Nothing saved: turning a mode on saves the Cinna server, so no Gemini requirement yet.
+    await expect(cinna.page.getByText('No Gemini credential', { exact: true })).toHaveCount(0)
+    await expect(cinna.page.getByRole('combobox', { name: 'Service', exact: true })).toHaveCount(0)
+    // The localStorage choice is on, but nothing can transcribe: shown off and disabled.
+    await expect(audioInput(cinna)).toBeDisabled()
+    await expect(audioInput(cinna)).toHaveAttribute('aria-checked', 'false')
+
+    await cloudPill(cinna, 'As a fallback').click()
+    const service = cinna.page.getByRole('combobox', { name: 'Service', exact: true })
+    await expect(service).toHaveValue('core')
+    expect(await cinna.page.evaluate(() => window.api.settings.getAll().then((s) => [s.voiceCloudTranscription, s.voiceCloudService])))
+      .toEqual(['fallback', 'core'])
+    await service.selectOption('gemini')
     await expect(cinna.page.getByText('No Gemini credential', { exact: true })).toBeVisible()
-    await expect(showAudioInput(cinna)).toHaveCount(0)
-    await expect(cinna.page.getByText('Show audio input', { exact: true })).toHaveCount(0)
 
     await cinna.page.getByRole('button', { name: 'Open AI Credentials', exact: true }).click()
     await expect(cinna.page.getByRole('heading', { name: 'AI Credentials' })).toBeVisible()
-    await expect(cloudSelect(cinna)).toHaveCount(0)
+    await expect(cloudPills(cinna)).toHaveCount(0)
   })
 
-  test('a usable Gemini credential: choosing As a fallback brings Show audio input below, and the select stays put', async ({ cinna }) => {
+  test('a usable Gemini credential: choosing As a fallback enables Audio input above, the pills stay put, and My Gemini key can be picked', async ({ cinna }) => {
     await cinna.skipOnboarding()
     await pinNoOnDeviceWithGemini(cinna)
     await openFeatures(cinna)
 
-    await test.step('Off: the select is enabled, nothing is missing, no Show audio input', async () => {
-      await expect(cloudSelect(cinna)).toBeEnabled()
-      await expect(cloudSelect(cinna)).toHaveValue('off')
+    await test.step('Off: the pills are enabled, nothing is missing, Audio input is disabled above them', async () => {
+      await expect(cloudPill(cinna, 'Off')).toBeEnabled()
+      await expect(cloudPill(cinna, 'Off')).toHaveAttribute('aria-pressed', 'true')
       await expect(cinna.page.getByText('No Gemini credential', { exact: true })).toHaveCount(0)
       // One usable provider: no provider picker.
       await expect(cinna.page.getByRole('combobox', { name: 'Gemini provider' })).toHaveCount(0)
-      await expect(showAudioInput(cinna)).toHaveCount(0)
+      await expect(audioInput(cinna)).toBeDisabled()
+      await expect(audioInput(cinna)).toHaveAttribute('aria-checked', 'false')
     })
 
-    await test.step('As a fallback: Show audio input appears below the select, which has not moved', async () => {
-      const before = await cloudSelect(cinna).boundingBox()
-      await cloudSelect(cinna).selectOption({ label: 'As a fallback' })
-      await expect(showAudioInput(cinna)).toBeVisible()
-      await expect(cloudSelect(cinna)).toHaveValue('fallback')
-      expect(await cinna.page.evaluate(() => window.api.settings.getAll().then((s) => s.voiceCloudTranscription))).toBe('fallback')
-      const after = await cloudSelect(cinna).boundingBox()
-      expect(after).toEqual(before)
-      const row = await showAudioInput(cinna).boundingBox()
-      expect(row!.y).toBeGreaterThan(after!.y + after!.height)
+    await test.step('As a fallback: Audio input above turns enabled, and the pills have not moved', async () => {
+      // Into view first: the click would scroll it there, and the box is viewport-relative.
+      await cloudPills(cinna).scrollIntoViewIfNeeded()
+      const before = await cloudPills(cinna).boundingBox()
+      const pillBefore = await cloudPill(cinna, 'As a fallback').boundingBox()
+      await cloudPill(cinna, 'As a fallback').click()
+      await expect(cloudPill(cinna, 'As a fallback')).toHaveAttribute('aria-pressed', 'true')
+      await expect(cloudPill(cinna, 'Off')).toHaveAttribute('aria-pressed', 'false')
+      await expect(audioInput(cinna)).toBeEnabled()
+      // No service was saved: the Cinna server is saved with the mode, never the billed key.
+      expect(await cinna.page.evaluate(() => window.api.settings.getAll().then((s) => [s.voiceCloudTranscription, s.voiceCloudService])))
+        .toEqual(['fallback', 'core'])
+      expect(await cloudPills(cinna).boundingBox()).toEqual(before)
+      expect(await cloudPill(cinna, 'As a fallback').boundingBox()).toEqual(pillBefore)
+      const row = await audioInput(cinna).boundingBox()
+      expect(row!.y + row!.height).toBeLessThan(before!.y)
+      await expect(cinna.page.getByText('No Gemini credential', { exact: true })).toHaveCount(0)
+    })
+
+    await test.step('My Gemini key: the usable provider is enough, nothing is missing', async () => {
+      const service = cinna.page.getByRole('combobox', { name: 'Service', exact: true })
+      await expect(service).toHaveValue('core')
+      await service.selectOption('gemini')
+      await expect(service).toHaveValue('gemini')
+      expect(await cinna.page.evaluate(() => window.api.settings.getAll().then((s) => s.voiceCloudService))).toBe('gemini')
+      await expect(audioInput(cinna)).toBeEnabled()
       await expect(cinna.page.getByText('No Gemini credential', { exact: true })).toHaveCount(0)
     })
   })
@@ -462,7 +506,7 @@ test.describe('voice input, the cloud mark on a Gemini dictation', () => {
 
   const NO_ON_DEVICE_GEMINI_FALLBACK: SpeechStatus = {
     supported: false, engine: null, authorization: 'unknown', reason: 'pinned by the spec', available: true,
-    cloud: { mode: 'fallback', setting: '', service: 'gemini', usable: true, providers: [GEMINI], relay: { available: false } }
+    cloud: { mode: 'fallback', setting: 'gemini', service: 'gemini', usable: true, providers: [GEMINI], relay: { available: false } }
   }
   const cloudMark = (cinna: CinnaApp) => cinna.page.locator('[data-testid="voice-cloud-mark"]')
   const CLOUD_NOTE = 'Transcribing with Gemini — audio is sent to Google'

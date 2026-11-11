@@ -405,7 +405,7 @@ describe('VoiceInputButton', () => {
   describe('hiding from the menu', () => {
     function hideFromMenu(name: string): void {
       fireEvent.contextMenu(screen.getByRole('button', { name }))
-      fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Show audio input/ }))
+      fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Audio input' }))
     }
 
     it('says the recording was discarded, and hands focus to the composer', async () => {
@@ -419,7 +419,7 @@ describe('VoiceInputButton', () => {
       expect(useUIStore.getState().showVoiceInput).toBe(false)
       expect(screen.queryByRole('button', { name: 'Stop recording' })).toBeNull()
       expect(useToastStore.getState().toast?.message).toBe(
-        'Audio input is hidden, and the recording was discarded. Turn it back on in Settings → Features → Interface → Show audio input.'
+        'Audio input is hidden, and the recording was discarded. Turn it back on in Settings → Features → Interface → Audio input.'
       )
       expect(document.activeElement).toBe(composer)
       composer.remove()
@@ -431,7 +431,7 @@ describe('VoiceInputButton', () => {
       await screen.findByRole('button', { name: 'Audio input' })
       hideFromMenu('Audio input')
       expect(useToastStore.getState().toast?.message).toBe(
-        'Audio input is hidden. Turn it back on in Settings → Features → Interface → Show audio input.'
+        'Audio input is hidden. Turn it back on in Settings → Features → Interface → Audio input.'
       )
       expect(useToastStore.getState().toast?.link).toEqual({ label: 'Open Settings → Features', settingsMenu: 'features' })
     })

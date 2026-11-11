@@ -18,25 +18,23 @@ export const NO_CLOUD_SERVICE_MESSAGE =
 const NO_RELAY: SpeechRelayStatus = { available: false }
 
 /**
- * The service the Service select shows: the one set, or for `''` the relay
- * while it is available, else the Gemini key. Display only: a session never
- * runs on Gemini for `''` (see {@link sessionCloudService}).
+ * The service the Service select shows: the one set, else the Cinna server.
+ * Display only, and never read from the active account: a session never runs
+ * for `''` (see {@link sessionCloudService}).
  */
-export function effectiveCloudService(setting: VoiceCloudService, relay: SpeechRelayStatus): 'core' | 'gemini' {
-  if (setting === 'core' || setting === 'gemini') return setting
-  return relay.available ? 'core' : 'gemini'
+export function effectiveCloudService(setting: VoiceCloudService): 'core' | 'gemini' {
+  return setting === 'gemini' ? 'gemini' : 'core'
 }
 
 /**
  * The service a cloud session runs on, or null when none is chosen. No cloud
- * is ever chosen implicitly for a billed key: `''` (a mode turned on before
- * the Service setting existed is migrated to `gemini`; Settings saves the
- * service with the mode) runs on the relay while it is available, never on
- * Gemini.
+ * is ever chosen implicitly: `''` never runs, whatever the active account's
+ * server offers (a mode turned on before the Service setting existed is
+ * migrated to `gemini`; Settings saves the service with the mode). Whether the
+ * server offers the relay is found out when a session on `core` opens.
  */
-function sessionCloudService(setting: VoiceCloudService, relay: SpeechRelayStatus): 'core' | 'gemini' | null {
-  if (setting === 'core' || setting === 'gemini') return setting
-  return relay.available ? 'core' : null
+function sessionCloudService(setting: VoiceCloudService): 'core' | 'gemini' | null {
+  return setting === 'core' || setting === 'gemini' ? setting : null
 }
 
 /** The system's locale, for a relay session nothing else names one for. */
@@ -175,11 +173,17 @@ export function createSpeechService(engines: SpeechEngine[], cloud?: CloudSpeech
     }
   }
 
+  /**
+   * Usable is a property of the settings alone, not of the active account: a
+   * `core` service is usable (whether this server offers the relay is said
+   * when a dictation starts), `gemini` needs one of the user's own Gemini keys,
+   * and an unset service is not. `relay` is reported for point-of-use UI only.
+   */
   function cloudStatusOf(config: CloudTranscriptionConfig, relayNow: SpeechRelayStatus): SpeechCloudStatus {
     const setting = config.service ?? ''
-    const service = effectiveCloudService(setting, relayNow)
-    const runsOn = sessionCloudService(setting, relayNow)
-    const usable = runsOn === 'core' ? relayNow.available : runsOn === 'gemini' ? config.providers.length > 0 : false
+    const service = effectiveCloudService(setting)
+    const runsOn = sessionCloudService(setting)
+    const usable = runsOn === 'core' ? true : runsOn === 'gemini' ? config.providers.length > 0 : false
     return { mode: config.mode, setting, service, usable, providers: config.providers, relay: relayNow }
   }
 
@@ -207,11 +211,10 @@ export function createSpeechService(engines: SpeechEngine[], cloud?: CloudSpeech
     const viaCloud = config.mode === 'always' || (config.mode === 'fallback' && !engine)
     if (!viaCloud) return engine ? { engine } : { engine: null, message: NOT_AVAILABLE }
     const chosenBecause = config.mode === 'always' ? 'always' : `fallback: ${status.reason ?? 'no on-device engine'}`
-    const relayNow = relayStatus()
-    const runsOn = sessionCloudService(config.service ?? '', relayNow)
+    const runsOn = sessionCloudService(config.service ?? '')
     if (runsOn === null) return { engine: null, message: NO_CLOUD_SERVICE_MESSAGE }
     if (runsOn === 'core') {
-      if (!relay || !relayNow.available) return { engine: null, message: RELAY_NOT_OFFERED_MESSAGE }
+      if (!relay || !relayStatus().available) return { engine: null, message: RELAY_NOT_OFFERED_MESSAGE }
       return { engine: relay.engine, chosenBecause, locale: await relayLocale(options) }
     }
     if (!cloud || !config.chosen) return { engine: null, message: NO_GEMINI_PROVIDER_MESSAGE }

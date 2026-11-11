@@ -79,7 +79,7 @@ import { useComposerAttachTargetStore } from '../../stores/composerAttachTarget.
 import { useComposerDraftStore } from '../../stores/composerDraft.store'
 import { createLogger } from '../../stores/logger.store'
 import { useRunQueue } from '../../hooks/useRunQueue'
-import { VoiceInputButton } from './voice/VoiceInputButton'
+import { VoiceInputButton, useVoiceInputShown } from './voice/VoiceInputButton'
 import { DictationMirror } from './voice/DictationMirror'
 import { dictatedText, dictationGoal, displayTyped, editOntoGoal } from './voice/dictationSpan'
 import { useTypedText } from './voice/useTypedText'
@@ -219,6 +219,9 @@ const DOUBLE_ESC_WINDOW_MS = 400
 // Stop takes the place of the Send that was just clicked; a click this soon
 // after is the second half of a double-click, not a request to stop.
 const STOP_CLICK_GRACE_MS = 500
+// How long a disabled Send keeps the slot right of the mic after Send or Stop
+// left it, so the mic does not move under a click meant for them.
+const TRAILING_HOLD_MS = 800
 
 /**
  * Shown when main sent a queued message being edited before the edit was saved.
@@ -2195,12 +2198,41 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     ? 'var(--color-accent)'
     : modeColor ? modeColor.border : 'var(--color-border)'
 
+  // Something a send would carry: text (live dictated words included), a path
+  // chip, a paste chip, or files where they can go.
+  const hasSendContent = !!textValue.trim() || pathRefs.length > 0 || pastes.length > 0 || (chatId !== null && hasSendableFiles)
   const sendDisabled =
     sending ||
     (editingId
       ? !input.trim() && pastes.length === 0
-      : blocksSend ||
-        (!textValue.trim() && pathRefs.length === 0 && pastes.length === 0 && !(chatId !== null && hasSendableFiles)))
+      : blocksSend || !hasSendContent)
+  // The row always holds a control. With the mic there, an empty draft's Send
+  // is left out rather than shown disabled: the mic is what the user can do.
+  // Shown, if disabled, whenever there is content (a refusal's reason is its
+  // tooltip), while a first send is in flight (it does not vanish under the
+  // click), while a queued message is edited (Save), and when there is no mic.
+  const voiceShown = useVoiceInputShown()
+  const showSend = !showStop && (!voiceShown || hasSendContent || sending || !!editingId)
+  // When the slot right of the mic empties (a send cleared the draft before
+  // Stop arrives, a turn ended under a click on Stop, the draft was cleared),
+  // a disabled Send holds it a moment: the mic would otherwise slide under the
+  // pointer and a double click's second half would start a recording. Not
+  // across a chat switch, where nothing was clicked.
+  const trailingWanted = showSend || showStop
+  const [trailingHeld, setTrailingHeld] = useState(false)
+  const trailingPrev = useRef({ wanted: trailingWanted, draftKey })
+  useLayoutEffect(() => {
+    const prev = trailingPrev.current
+    trailingPrev.current = { wanted: trailingWanted, draftKey }
+    if (trailingWanted || !prev.wanted || prev.draftKey !== draftKey) {
+      setTrailingHeld(false)
+      return
+    }
+    setTrailingHeld(true)
+    const timer = setTimeout(() => setTrailingHeld(false), TRAILING_HOLD_MS)
+    return () => clearTimeout(timer)
+  }, [trailingWanted, draftKey])
+  const sendShown = showSend || (trailingHeld && !showStop)
   // The headphone double click: exactly what a click on Send would do, and
   // nothing where Send is disabled or Stop stands in its place.
   const sendFromHeadphones = (): void => {
@@ -2678,7 +2710,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               swapping it moves nothing (ux_rules §1). Idle: green Send. While a
               turn runs: Stop on an empty input, a blue Send (into the turn or
               its queue) while there is text. Esc Esc stops the turn in either,
-              except while a queued message is edited, where Esc leaves the edit. */}
+              except while a queued message is edited, where Esc leaves the edit.
+              With the mic shown, an empty idle draft has no Send (`showSend`):
+              the mic is then the rightmost, and Send appears beside it with
+              the first character. */}
           {/* Voice input, left of Send: the transcript is appended to the
               draft, never sent by itself; a headphone double click sends it.
               Its errors are toasts: often heard, not watched, from the headphones.
@@ -2698,7 +2733,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             >
               <Square size={16} />
             </button>
-          ) : (
+          ) : sendShown && (
             <button
               key="send"
               onClick={() => {

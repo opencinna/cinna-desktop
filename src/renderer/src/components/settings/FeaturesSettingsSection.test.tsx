@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AiFunctionsBackendStatus } from '../../../../shared/aiFunctions'
-import type { SpeechRelayUsageResult, SpeechStatus } from '../../../../shared/speech'
+import type { SpeechStatus } from '../../../../shared/speech'
 
 const HEALTHY = {
   autoChatTitles: true,
@@ -23,8 +23,6 @@ beforeEach(() => {
   models = []
   settings = HEALTHY
   speech = NO_SPEECH
-  relayUsage = undefined
-  useSpeechRelayUsage.mockClear()
   isError = false
   saveError = null
   setSetting.mockReset()
@@ -34,11 +32,9 @@ vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: provid
 vi.mock('../../hooks/useModels', () => ({ useModels: () => ({ data: models }) }))
 // Its own section with its own test (FinderQuickActionSection.test.tsx).
 vi.mock('./FinderQuickActionSection', () => ({ FinderQuickActionSection: () => null }))
-const NO_SPEECH: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', available: false, cloud: { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } } }
+const NO_SPEECH: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', available: false, cloud: { mode: 'off', setting: '', service: 'core', usable: false, providers: [], relay: { available: false } } }
 let speech: SpeechStatus = NO_SPEECH
-let relayUsage: SpeechRelayUsageResult | undefined
-const useSpeechRelayUsage = vi.fn((_enabled: boolean) => relayUsage)
-vi.mock('../chat/voice/useSpeechStatus', () => ({ useSpeechStatus: () => speech, useSpeechRelayUsage: (enabled: boolean) => useSpeechRelayUsage(enabled) }))
+vi.mock('../chat/voice/useSpeechStatus', () => ({ useSpeechStatus: () => speech }))
 vi.mock('../../hooks/useAppSettings', () => ({
   useAiFunctionsBackend: () => ({ data: functionsBackend }),
   useAppSettings: () => ({ data: settings, isLoading: false, isError }),
@@ -54,7 +50,7 @@ vi.mock('../../hooks/useAppSettings', () => ({
   })
 }))
 
-const { FeaturesSettingsSection } = await import('./FeaturesSettingsSection')
+const { FeaturesSettingsSection, VOICE_INPUT_UNAVAILABLE, VOICE_INPUT_NO_CLOUD_SERVICE } = await import('./FeaturesSettingsSection')
 const { useUIStore } = await import('../../stores/ui.store')
 
 /**
@@ -67,7 +63,8 @@ describe('FeaturesSettingsSection', () => {
     render(<FeaturesSettingsSection />)
 
     expect(screen.getAllByRole('heading').map((h) => h.textContent)).toEqual(['Capabilities', 'AI Functions', 'Interface'])
-    expect(screen.getAllByRole('switch')).toHaveLength(13)
+    // Audio input counts even with no speech engine: it is always rendered, disabled.
+    expect(screen.getAllByRole('switch')).toHaveLength(14)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -411,24 +408,61 @@ describe('AI Functions "Runs on" line', () => {
 describe('voice input rows', () => {
   const G1 = { id: 'g1', name: 'Personal Gemini' }
   const G2 = { id: 'g2', name: 'Work Gemini' }
-  const ON_DEVICE: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', available: true, cloud: { mode: 'off', setting: '', service: 'gemini', usable: false, providers: [], relay: { available: false } } }
-  const cloudSelect = (): HTMLSelectElement => screen.getByRole('combobox', { name: 'Cloud transcription' }) as HTMLSelectElement
+  const ON_DEVICE: SpeechStatus = { supported: true, engine: 'macos', authorization: 'granted', available: true, cloud: { mode: 'off', setting: '', service: 'core', usable: false, providers: [], relay: { available: false } } }
+  const CLOUD_MODES = { off: 'Off', fallback: 'As a fallback', always: 'Always' } as const
+  type CloudMode = keyof typeof CLOUD_MODES
+  const cloudGroup = (): HTMLElement => screen.getByRole('group', { name: 'Cloud transcription' })
+  const cloudPill = (mode: CloudMode): HTMLButtonElement => within(cloudGroup()).getByRole('button', { name: CLOUD_MODES[mode] }) as HTMLButtonElement
+  /** The one pressed pill's mode; fails unless exactly one is pressed. */
+  function cloudMode(): CloudMode {
+    const pressed = (Object.keys(CLOUD_MODES) as CloudMode[]).filter((mode) => cloudPill(mode).getAttribute('aria-pressed') === 'true')
+    expect(pressed).toHaveLength(1)
+    return pressed[0]
+  }
+  /** Whether the pills are disabled; fails unless all three agree. */
+  function cloudDisabled(): boolean {
+    const states = new Set((Object.keys(CLOUD_MODES) as CloudMode[]).map((mode) => cloudPill(mode).disabled))
+    expect(states.size).toBe(1)
+    return [...states][0]
+  }
+  const chooseCloud = (mode: CloudMode): void => { fireEvent.click(cloudPill(mode)) }
+  const audioInput = (): HTMLElement => screen.getByRole('switch', { name: 'Audio input' })
   function voiceDescription(): string {
-    fireEvent.click(screen.getByRole('button', { name: 'About Show audio input' }))
+    fireEvent.click(screen.getByRole('button', { name: 'About Audio input' }))
     return screen.getByText(/Shows the microphone button/).textContent ?? ''
   }
 
-  it('without an on-device engine or a Gemini credential (Linux): locked on Off, a neutral requirement with a way to AI Credentials', () => {
+  it('without an on-device engine or a Gemini credential (Linux): the modes stay open; with My Gemini key saved, a neutral requirement with a way to AI Credentials', () => {
     useUIStore.setState({ activeView: 'settings', settingsTab: 'features' } as never)
-    render(<FeaturesSettingsSection />)
-    expect(screen.queryByRole('switch', { name: 'Show audio input' })).toBeNull()
-    expect(cloudSelect().value).toBe('off')
-    expect(cloudSelect().disabled).toBe(true)
+    const { rerender } = render(<FeaturesSettingsSection />)
+    // Always rendered, so a cloud mode chosen below never inserts a row above the pills.
+    expect(audioInput().getAttribute('aria-checked')).toBe('false')
+    expect((audioInput() as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTitle('No speech recognition on this computer: turn on Cloud transcription below')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'About Audio input' }))
+    expect(screen.getByText(VOICE_INPUT_UNAVAILABLE)).toBeTruthy()
+    expect(cloudMode()).toBe('off')
+    // Never locked by what this computer or the signed-in server offers (rule 21).
+    expect(cloudDisabled()).toBe(false)
+    // Nothing saved: turning a mode on saves the Cinna server, so no Gemini requirement.
+    expect(screen.queryByText('No Gemini credential')).toBeNull()
+    settings = { ...HEALTHY, voiceCloudService: 'gemini' }
+    rerender(<FeaturesSettingsSection />)
     expect(screen.getByText('No Gemini credential')).toBeTruthy()
     expect(document.querySelector('[class*="--color-warning"]')).toBeNull()
     expect(screen.queryByRole('combobox', { name: 'Gemini provider' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Open AI Credentials' }))
     expect(useUIStore.getState()).toMatchObject({ activeView: 'settings', settingsTab: 'llm' })
+  })
+
+  it('with a mode already on but no usable service, the disabled Audio input does not ask to turn Cloud transcription on', () => {
+    settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'gemini' }
+    render(<FeaturesSettingsSection />)
+    expect((audioInput() as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTitle('Cloud transcription below has no usable service yet')).toBeTruthy()
+    expect(screen.queryByTitle(/turn on Cloud transcription/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'About Audio input' }))
+    expect(screen.getByText(VOICE_INPUT_NO_CLOUD_SERVICE)).toBeTruthy()
   })
 
   it('on a Mac with on-device speech, Off and no Gemini credential: the requirement is behind the (?), not on the surface', () => {
@@ -439,39 +473,64 @@ describe('voice input rows', () => {
     expect(screen.getByText(/Needs a Gemini credential with an API key, added under AI Credentials/)).toBeTruthy()
   })
 
-  it('puts Cloud transcription above Show audio input, which a choice there can make appear', () => {
+  it('puts Audio input above Cloud transcription, in both states, so a choice in the pills moves nothing above them', () => {
     speech = ON_DEVICE
+    const { rerender } = render(<FeaturesSettingsSection />)
+    expect(audioInput().compareDocumentPosition(cloudGroup()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    speech = NO_SPEECH
+    rerender(<FeaturesSettingsSection />)
+    expect(audioInput().compareDocumentPosition(cloudGroup()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows Cloud transcription as Off / As a fallback / Always pills, one pressed, and a click on the pressed one saves nothing', () => {
+    settings = { ...HEALTHY, voiceCloudTranscription: 'fallback', voiceCloudService: 'gemini' }
+    speech = { ...ON_DEVICE, cloud: { mode: 'fallback', setting: 'gemini', service: 'gemini', usable: true, providers: [G1], relay: { available: false } } }
     render(<FeaturesSettingsSection />)
-    const show = screen.getByRole('switch', { name: 'Show audio input' })
-    expect(cloudSelect().compareDocumentPosition(show) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(cloudGroup()).getAllByRole('button').map((b) => b.textContent)).toEqual(['Off', 'As a fallback', 'Always'])
+    expect(cloudMode()).toBe('fallback')
+    chooseCloud('fallback')
+    expect(setSetting).not.toHaveBeenCalled()
+    chooseCloud('always')
+    expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudTranscription', value: 'always' })
+  })
+
+  it('on a Mac with on-device speech, Audio input is an enabled switch that follows the setting', () => {
+    speech = ON_DEVICE
+    useUIStore.setState({ showVoiceInput: false } as never)
+    render(<FeaturesSettingsSection />)
+    expect((audioInput() as HTMLButtonElement).disabled).toBe(false)
+    expect(audioInput().getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(audioInput())
+    expect(useUIStore.getState().showVoiceInput).toBe(true)
+    expect(audioInput().getAttribute('aria-checked')).toBe('true')
   })
 
   it('a mode already on stays changeable after its provider is gone, so it can be turned off', () => {
     settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'gemini' }
     speech = { ...ON_DEVICE, cloud: { mode: 'always', setting: 'gemini', service: 'gemini', usable: false, providers: [], relay: { available: false } } }
     render(<FeaturesSettingsSection />)
-    expect(cloudSelect().disabled).toBe(false)
+    expect(cloudDisabled()).toBe(false)
     // A mode that is on but cannot run is broken: the warning tone.
     expect(screen.getByText('No Gemini credential')).toBeTruthy()
     expect(document.querySelector('[class*="--color-warning"]')).toBeTruthy()
-    fireEvent.change(cloudSelect(), { target: { value: 'off' } })
+    chooseCloud('off')
     expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudTranscription', value: 'off' })
   })
 
-  it('with no on-device engine but a Gemini key (Linux, Windows): Show audio input appears and promises Google, not this Mac', () => {
+  it('with no on-device engine but a Gemini key (Linux, Windows): Audio input is enabled and promises Google, not this Mac', () => {
     settings = { ...HEALTHY, voiceCloudTranscription: 'fallback', voiceCloudService: 'gemini' }
     speech = { supported: false, engine: null, authorization: 'unknown', available: true, cloud: { mode: 'fallback', setting: 'gemini', service: 'gemini', usable: true, providers: [G1], relay: { available: false } } }
     render(<FeaturesSettingsSection />)
-    expect(screen.getByRole('switch', { name: 'Show audio input' })).toBeTruthy()
-    expect(cloudSelect().disabled).toBe(false)
-    expect(cloudSelect().value).toBe('fallback')
+    expect((audioInput() as HTMLButtonElement).disabled).toBe(false)
+    expect(cloudDisabled()).toBe(false)
+    expect(cloudMode()).toBe('fallback')
     expect(screen.queryByText('No Gemini credential')).toBeNull()
     // One provider: nothing to pick.
     expect(screen.queryByRole('combobox', { name: 'Gemini provider' })).toBeNull()
     const description = voiceDescription()
     expect(description).toMatch(/sent to Google under your own Gemini provider key and billed to it/)
     expect(description).not.toMatch(/on this Mac/)
-    fireEvent.change(cloudSelect(), { target: { value: 'always' } })
+    chooseCloud('always')
     expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudTranscription', value: 'always' })
   })
 
@@ -507,57 +566,75 @@ describe('voice input rows', () => {
     expect(voiceDescription()).toMatch(/Google Gemini/)
   })
 
-  describe('the Cinna server relay', () => {
+  describe('the Service setting, the same on every profile (ux_rules rule 21)', () => {
     const RELAY = { available: true, serverName: 'Acme' }
+    const NO_RELAY = { available: false }
     const serviceSelect = (): HTMLSelectElement | null => screen.queryByRole('combobox', { name: 'Service' }) as HTMLSelectElement | null
     function cloud(over: Partial<SpeechStatus['cloud']>): SpeechStatus {
       return { ...ON_DEVICE, cloud: { mode: 'always', setting: '', service: 'core', usable: true, providers: [], relay: RELAY, ...over } }
     }
+    function serviceInfo(): string {
+      fireEvent.click(screen.getByRole('button', { name: 'About Service' }))
+      return screen.getByText(/Where cloud transcription sends the recording/).textContent ?? ''
+    }
 
-    it('offers the Service select when both the server and a Gemini key can run, below the mode', () => {
-      speech = cloud({ mode: 'off', providers: [G1] })
+    it.each([
+      ['a server with the relay and a Gemini key', RELAY, [G1]],
+      ['a server with the relay, no Gemini key', RELAY, []],
+      ['a server without the relay, with a Gemini key', NO_RELAY, [G1]],
+      ['no relay and no Gemini key', NO_RELAY, []]
+    ] as const)('offers the Service select whenever a mode is on, below the mode, on %s', (_label, relay, providers) => {
+      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'core' }
+      speech = cloud({ setting: 'core', providers: [...providers], relay })
       const { rerender } = render(<FeaturesSettingsSection />)
       const select = serviceSelect()!
       expect(select.value).toBe('core')
       expect([...select.options].map((o) => o.text)).toEqual(['Cinna server', 'My Gemini key'])
-      expect(cloudSelect().compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(cloudGroup().compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(cloudDisabled()).toBe(false)
       fireEvent.change(select, { target: { value: 'gemini' } })
       expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudService', value: 'gemini' })
-      // Off, nothing saved, only the relay: nothing to choose.
-      speech = cloud({ mode: 'off', providers: [] })
-      rerender(<FeaturesSettingsSection />)
-      expect(serviceSelect()).toBeNull()
-      // Off, nothing saved, only a Gemini key: nothing to choose either.
-      speech = cloud({ mode: 'off', service: 'gemini', providers: [G1], relay: { available: false } })
+      // Off: nothing to choose, whatever is saved or offered.
+      settings = { ...HEALTHY, voiceCloudService: 'core' }
+      speech = cloud({ mode: 'off', setting: 'core', providers: [...providers], relay })
       rerender(<FeaturesSettingsSection />)
       expect(serviceSelect()).toBeNull()
     })
 
-    it('keeps the Service select under the pointer once a service is saved and a mode is on, even with one service usable', () => {
-      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'gemini' }
-      speech = cloud({ setting: 'gemini', service: 'gemini', providers: [G1], relay: { available: false } })
-      const { rerender } = render(<FeaturesSettingsSection />)
-      expect(serviceSelect()!.value).toBe('gemini')
-      // Picked while both ran, then the relay went: still there, still the user's pick.
-      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'core' }
-      speech = cloud({ setting: 'core', providers: [] })
-      rerender(<FeaturesSettingsSection />)
-      expect(serviceSelect()!.value).toBe('core')
-      // The window's own pick shows at once, before main's status catches up.
-      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'gemini' }
-      rerender(<FeaturesSettingsSection />)
-      expect(serviceSelect()!.value).toBe('gemini')
+    it('reads nothing of the signed-in server: no name, no availability row, no minutes, the same text on every profile', () => {
+      const states = [
+        { relay: RELAY, providers: [G1] },
+        { relay: NO_RELAY, providers: [G1] },
+        { relay: { available: true, serverName: 'Other Corp' }, providers: [G1] }
+      ]
+      const seen = (['off', 'fallback', 'always'] as const).flatMap((mode) => {
+        settings = { ...HEALTHY, voiceCloudTranscription: mode, voiceCloudService: 'core' }
+        return [states.map(({ relay, providers }) => {
+          speech = cloud({ mode, setting: 'core', providers, relay })
+          const { container, unmount } = render(<FeaturesSettingsSection />)
+          const text = `${container.textContent} | ${voiceDescription()}${mode === 'off' ? '' : ` | ${serviceInfo()}`}`
+          expect(screen.queryByTestId('feature-voice-relay-usage')).toBeNull()
+          expect(cloudDisabled()).toBe(false)
+          unmount()
+          return text
+        })]
+      })
+      for (const texts of seen) {
+        expect(new Set(texts).size).toBe(1)
+        expect(texts[0]).not.toMatch(/Acme|Other Corp|not available|min left|monthly limit/)
+      }
     })
 
     it.each([
-      [true, 'core'],
-      [false, 'gemini']
-    ] as const)('turning a mode on from Off with no service saved saves the shown one first (relay %s → %s)', async (relayOn, saved) => {
-      speech = relayOn ? cloud({ mode: 'off', providers: [G1] }) : cloud({ mode: 'off', service: 'gemini', usable: false, providers: [G1], relay: { available: false } })
+      ['relay offered, a Gemini key', RELAY, [G1]],
+      ['no relay, a Gemini key', NO_RELAY, [G1]],
+      ['no relay, no key', NO_RELAY, []]
+    ] as const)('turning a mode on from Off with no service saved saves the Cinna server first (%s)', async (_label, relay, providers) => {
+      speech = cloud({ mode: 'off', usable: false, providers: [...providers], relay })
       render(<FeaturesSettingsSection />)
-      fireEvent.change(cloudSelect(), { target: { value: 'always' } })
+      chooseCloud('always')
       await waitFor(() => expect(setSetting.mock.calls.map((call) => call[0])).toEqual([
-        { key: 'voiceCloudService', value: saved },
+        { key: 'voiceCloudService', value: 'core' },
         { key: 'voiceCloudTranscription', value: 'always' }
       ]))
     })
@@ -566,7 +643,7 @@ describe('voice input rows', () => {
       serviceSaveFails = true
       speech = cloud({ mode: 'off', providers: [G1] })
       render(<FeaturesSettingsSection />)
-      fireEvent.change(cloudSelect(), { target: { value: 'always' } })
+      chooseCloud('always')
       await new Promise((resolve) => setTimeout(resolve, 0))
       expect(setSetting.mock.calls.map((call) => call[0])).toEqual([{ key: 'voiceCloudService', value: 'core' }])
     })
@@ -575,120 +652,67 @@ describe('voice input rows', () => {
       settings = { ...HEALTHY, voiceCloudService: 'gemini' }
       speech = cloud({ mode: 'off', setting: 'gemini', service: 'gemini', providers: [G1] })
       const { rerender } = render(<FeaturesSettingsSection />)
-      fireEvent.change(cloudSelect(), { target: { value: 'fallback' } })
+      chooseCloud('fallback')
       expect(setSetting.mock.calls.map((call) => call[0])).toEqual([{ key: 'voiceCloudTranscription', value: 'fallback' }])
       setSetting.mockReset()
       settings = { ...HEALTHY, voiceCloudTranscription: 'always' }
       speech = cloud({ providers: [G1] })
       rerender(<FeaturesSettingsSection />)
-      fireEvent.change(cloudSelect(), { target: { value: 'off' } })
+      chooseCloud('off')
       expect(setSetting.mock.calls.map((call) => call[0])).toEqual([{ key: 'voiceCloudTranscription', value: 'off' }])
     })
 
-    it('a mode on with no service saved and no relay asks for one instead of naming Gemini', () => {
+    it.each([
+      ['the relay offered', RELAY],
+      ['no relay', NO_RELAY]
+    ] as const)('a mode on with no service saved asks for one, with %s', (_label, relay) => {
       settings = { ...HEALTHY, voiceCloudTranscription: 'always' }
-      speech = cloud({ service: 'gemini', usable: false, providers: [G1], relay: { available: false } })
+      speech = cloud({ usable: false, providers: [G1], relay })
       render(<FeaturesSettingsSection />)
       expect(serviceSelect()!.value).toBe('')
+      expect(serviceSelect()!.options[0].text).toBe('Choose…')
       expect(voiceDescription()).toMatch(/No cloud service is chosen yet/)
       fireEvent.change(serviceSelect()!, { target: { value: 'gemini' } })
       expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudService', value: 'gemini' })
     })
 
-    it('shows the Service select when the saved service cannot run and the other can, so it is no dead end', () => {
-      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'core' }
-      speech = cloud({ setting: 'core', usable: false, providers: [G1], relay: { available: false } })
+    it('keeps the user\'s pick, and shows the window\'s own pick at once, before main\'s status catches up', () => {
+      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'gemini' }
+      speech = cloud({ setting: 'gemini', service: 'gemini', providers: [G1], relay: NO_RELAY })
       const { rerender } = render(<FeaturesSettingsSection />)
-      expect(serviceSelect()!.value).toBe('core')
-      expect(screen.getByText('Cinna server transcription is not available')).toBeTruthy()
-      expect(screen.getByText('Sign in to a Cinna server that offers it, or use your own Gemini key.')).toBeTruthy()
-      fireEvent.click(screen.getByRole('button', { name: 'Use My Gemini key' }))
-      expect(setSetting).toHaveBeenLastCalledWith({ key: 'voiceCloudService', value: 'gemini' })
-      // Without a Gemini key: the next step only, no button.
-      speech = cloud({ setting: 'core', usable: false, providers: [], relay: { available: false } })
+      expect(serviceSelect()!.value).toBe('gemini')
+      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'core' }
       rerender(<FeaturesSettingsSection />)
-      expect(screen.getByText('Sign in to a Cinna server that offers it.')).toBeTruthy()
-      expect(screen.queryByRole('button', { name: 'Use My Gemini key' })).toBeNull()
+      expect(serviceSelect()!.value).toBe('core')
     })
 
-    it('with the relay as the service: no Gemini credential row, no provider picker, and the month on one line', () => {
-      settings = { ...HEALTHY, voiceCloudTranscription: 'always' }
-      relayUsage = { ok: true, enabled: true, usedSeconds: 600, capSeconds: 3600, periodEnd: '' }
-      speech = cloud({ providers: [] })
+    it('with the Cinna server as the service: no Gemini credential row and no provider picker', () => {
+      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'core' }
+      speech = cloud({ setting: 'core', providers: [] })
       const { rerender } = render(<FeaturesSettingsSection />)
-      const warned = (): boolean => !!screen.getByTestId('feature-voice-relay-usage').querySelector('[class*="--color-warning"]')
       expect(screen.queryByText('No Gemini credential')).toBeNull()
-      const line = screen.getByText('50 of 60 min left this month on Acme')
-      // One line: a long name is cut, the title holds it whole.
-      expect(line.className).toContain('truncate')
-      expect(line.getAttribute('title')).toBe('50 of 60 min left this month on Acme')
-      expect(warned()).toBe(false)
-      expect(useSpeechRelayUsage).toHaveBeenLastCalledWith(true)
-      relayUsage = { ok: true, enabled: true, usedSeconds: 600, capSeconds: null, periodEnd: '' }
-      rerender(<FeaturesSettingsSection />)
-      expect(screen.getByText('No monthly limit on Acme')).toBeTruthy()
-      expect(warned()).toBe(false)
-      // Nothing left, or turned off on the server: needs attention.
-      relayUsage = { ok: true, enabled: true, usedSeconds: 3600, capSeconds: 3600, periodEnd: '' }
-      rerender(<FeaturesSettingsSection />)
-      expect(screen.getByText('0 of 60 min left this month on Acme')).toBeTruthy()
-      expect(warned()).toBe(true)
-      relayUsage = { ok: true, enabled: false, usedSeconds: 0, capSeconds: 3600, periodEnd: '' }
-      rerender(<FeaturesSettingsSection />)
-      expect(screen.getByText('Acme has transcription turned off')).toBeTruthy()
-      expect(warned()).toBe(true)
-      relayUsage = { ok: false, message: "Could not read this month's dictation from Acme." }
-      rerender(<FeaturesSettingsSection />)
-      expect(screen.getByText("Could not read this month's dictation from Acme.")).toBeTruthy()
-      expect(warned()).toBe(true)
-      // Two Gemini providers exist, but the relay runs: no Gemini provider picker.
-      speech = cloud({ providers: [G1, G2] })
+      speech = cloud({ setting: 'core', providers: [G1, G2] })
       rerender(<FeaturesSettingsSection />)
       expect(screen.queryByRole('combobox', { name: 'Gemini provider' })).toBeNull()
     })
 
-    it('reads no usage with cloud off, or when Gemini is the service', () => {
-      speech = cloud({ mode: 'off', providers: [] })
-      const { rerender } = render(<FeaturesSettingsSection />)
-      expect(screen.queryByTestId('feature-voice-relay-usage')).toBeNull()
-      expect(useSpeechRelayUsage).toHaveBeenLastCalledWith(false)
-      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'gemini' }
-      speech = cloud({ setting: 'gemini', service: 'gemini', providers: [G1, G2] })
-      rerender(<FeaturesSettingsSection />)
-      expect(screen.queryByTestId('feature-voice-relay-usage')).toBeNull()
-      expect(screen.getByRole('combobox', { name: 'Gemini provider' })).toBeTruthy()
-    })
-
-    it('without an on-device engine, the relay alone unlocks the mode and needs no Gemini credential', () => {
-      speech = { supported: false, engine: null, authorization: 'unknown', available: false, cloud: { mode: 'off', setting: '', service: 'core', usable: true, providers: [], relay: RELAY } }
-      render(<FeaturesSettingsSection />)
-      expect(cloudSelect().disabled).toBe(false)
-      expect(screen.queryByText('No Gemini credential')).toBeNull()
-    })
-
-    it('promises the server, not this Mac or Google, when the relay transcribes; on-device mentions the offer', () => {
-      settings = { ...HEALTHY, voiceCloudTranscription: 'always' }
-      speech = cloud({ providers: [G1] })
+    it('promises the signed-in account\'s server, never by name, and says a server without transcription is found out at dictation', () => {
+      settings = { ...HEALTHY, voiceCloudTranscription: 'always', voiceCloudService: 'core' }
+      speech = cloud({ setting: 'core', providers: [G1] })
       const { unmount } = render(<FeaturesSettingsSection />)
       const always = voiceDescription()
-      expect(always).toMatch(/turned into text by Acme: the recording is sent to Acme, which pays for the transcription/)
-      expect(always).not.toMatch(/on this Mac|Google/)
+      expect(always).toMatch(/turned into text by your Cinna server \(the server of the account you are signed in to when you dictate\)/)
+      expect(always).toMatch(/If that server does not offer transcription, the dictation says so/)
+      expect(always).not.toMatch(/on this Mac|Google|Acme/)
+      expect(serviceInfo()).toMatch(/Cinna server: to your Cinna server \(the server of the account you are signed in to when you dictate\)/)
       unmount()
       settings = HEALTHY
-      speech = cloud({ mode: 'off' })
+      speech = cloud({ mode: 'off', relay: NO_RELAY })
       render(<FeaturesSettingsSection />)
       const off = voiceDescription()
       expect(off).toMatch(/on this Mac/)
-      expect(off).toMatch(/offer to continue on Acme; nothing is sent unless you agree/)
+      expect(off).toMatch(/your Cinna server offers transcription, Cinna can offer to continue there; nothing is sent unless you agree/)
     })
   })
 })
 
-describe('relayUsageText', () => {
-  it('leads with the value, and names an unnamed server plainly', async () => {
-    const { relayUsageText } = await import('./FeaturesSettingsSection')
-    expect(relayUsageText({ ok: true, enabled: true, usedSeconds: 1200, capSeconds: 3600, periodEnd: '' }, undefined)).toBe('40 of 60 min left this month on your Cinna server')
-    expect(relayUsageText({ ok: true, enabled: true, usedSeconds: 0, capSeconds: null, periodEnd: '' }, '')).toBe('No monthly limit on your Cinna server')
-    expect(relayUsageText({ ok: true, enabled: false, usedSeconds: 0, capSeconds: null, periodEnd: '' }, undefined)).toBe('Your Cinna server has transcription turned off')
-  })
-})

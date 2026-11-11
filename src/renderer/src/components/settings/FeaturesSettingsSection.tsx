@@ -8,8 +8,8 @@ import { AI_SPENDING_LEVELS, AI_SPENDING_LEVEL_LABEL } from '../../../../shared/
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
 import { useUIStore, type SidebarDocking, type ThemePreference } from '../../stores/ui.store'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { useSpeechRelayUsage, useSpeechStatus } from '../chat/voice/useSpeechStatus'
-import { isVoiceCloudService, isVoiceCloudTranscription, type SpeechRelayUsageResult, type SpeechStatus, type VoiceCloudService, type VoiceCloudTranscription } from '../../../../shared/speech'
+import { useSpeechStatus } from '../chat/voice/useSpeechStatus'
+import { isVoiceCloudService, isVoiceCloudTranscription, type SpeechStatus, type VoiceCloudService, type VoiceCloudTranscription } from '../../../../shared/speech'
 import { FinderQuickActionSection } from './FinderQuickActionSection'
 import {
   SettingsButton,
@@ -54,13 +54,21 @@ const ON_DEVICE_VOICE = "Speech is turned into text by macOS's own speech recogn
 /** The service labels of the Service select, short for the dropdown's third of the row (rule 7). */
 const VOICE_SERVICE_LABEL = { core: 'Cinna server', gemini: 'My Gemini key' } as const
 
-/** The Cinna server's name for copy: the instance name main read, else a plain noun. */
-function relayName(speech: SpeechStatus): string {
-  return speech.cloud.relay.serverName || 'your Cinna server'
-}
+/**
+ * The Cinna server in Settings copy. Never a name: Features is app-wide and the
+ * server is the one of whichever account is signed in when a dictation starts
+ * (ux_rules rule 21).
+ */
+const VOICE_SERVER = 'your Cinna server (the server of the account you are signed in to when you dictate)'
+const VOICE_SERVER_CHECK = 'If that server does not offer transcription, the dictation says so.'
+
+/** The Audio input row's (?) while nothing on this computer can transcribe. */
+export const VOICE_INPUT_UNAVAILABLE = 'Shows the microphone button beside Send in the composer. There is no speech recognition on this computer: turn on Cloud transcription below to dictate.'
+/** The same, with a cloud mode already on whose service cannot run (unset, or My Gemini key without a key). */
+export const VOICE_INPUT_NO_CLOUD_SERVICE = 'Shows the microphone button beside Send in the composer. There is no speech recognition on this computer, and Cloud transcription below has no usable service yet: choose Cinna server, or add a Gemini key under AI Credentials.'
 
 /**
- * "Show audio input"'s promise follows where the audio actually goes: on this
+ * "Audio input"'s promise follows where the audio actually goes: on this
  * Mac, to the Cinna server (which pays for it), or to Google under the user's
  * own Gemini key. It never says "on this Mac" for a dictation that is not.
  */
@@ -68,55 +76,27 @@ export function voiceInputDescription(speech: SpeechStatus): string {
   const lead = 'Shows the microphone button beside Send in the composer. Click it, or the headphone button, to dictate; double-click the headphone button to send.'
   const mode = speech.cloud.mode
   const viaCloud = mode === 'always' || (mode === 'fallback' && !speech.supported)
-  // No service saved and no relay: main runs no cloud dictation (never the key implicitly).
-  const unset = mode !== 'off' && speech.cloud.setting === '' && !speech.cloud.relay.available
+  // A mode on with no service saved: main runs no cloud dictation (never one implicitly).
+  const unset = mode !== 'off' && speech.cloud.setting === ''
   if (unset) {
     const none = 'No cloud service is chosen yet: choose one under Cloud transcription › Service.'
     return viaCloud ? `${lead} ${none}` : `${lead} ${ON_DEVICE_VOICE} ${none}`
   }
-  const server = relayName(speech)
   const service = speech.cloud.service
-  const cloudSentence = service === 'core'
-    ? `the recording is sent to ${server}, which pays for the transcription`
-    : 'the recording is sent to Google under your own Gemini provider key and billed to it'
   if (viaCloud) {
-    const by = service === 'core' ? server : 'Google Gemini'
-    return `${lead} Speech is turned into text by ${by}: ${cloudSentence}. A cloud mark on the button shows while it is.`
+    return service === 'core'
+      ? `${lead} Speech is turned into text by ${VOICE_SERVER}: the recording is sent to it, and it pays for the transcription. ${VOICE_SERVER_CHECK} A cloud mark on the button shows while it is.`
+      : `${lead} Speech is turned into text by Google Gemini: the recording is sent to Google under your own Gemini provider key and billed to it. A cloud mark on the button shows while it is.`
   }
   // On the device; a failure mid-dictation may be offered to the server, never taken.
-  const offer = speech.cloud.relay.available
-    ? ` If it fails while you dictate, Cinna can offer to continue on ${server}; nothing is sent unless you agree.`
-    : ''
+  const offer = ' If it fails while you dictate and your Cinna server offers transcription, Cinna can offer to continue there; nothing is sent unless you agree.'
   if (mode === 'fallback') {
     const instead = service === 'core'
-      ? `goes to ${server} instead, which pays for the transcription`
-      : 'goes to Google Gemini instead, under your own Gemini provider key and billed to it'
-    return `${lead} ${ON_DEVICE_VOICE} If on-device recognition is unavailable when you start dictating, the recording ${instead}.${offer}`
+      ? `goes to ${VOICE_SERVER} instead, which pays for the transcription. ${VOICE_SERVER_CHECK}`
+      : 'goes to Google Gemini instead, under your own Gemini provider key and billed to it.'
+    return `${lead} ${ON_DEVICE_VOICE} If on-device recognition is unavailable when you start dictating, the recording ${instead}${offer}`
   }
   return `${lead} ${ON_DEVICE_VOICE}${offer}`
-}
-
-/**
- * One line, the value first: what is left of this month's dictation on the
- * Cinna server. `serverName` is the instance's name; without one the line says
- * "Your Cinna server" where it starts a sentence, "your Cinna server" inside one.
- */
-export function relayUsageText(usage: SpeechRelayUsageResult | undefined, serverName: string | undefined): string {
-  const server = serverName || 'your Cinna server'
-  if (!usage) return `Reading this month's minutes on ${server}…`
-  if (!usage.ok) return usage.message
-  if (!usage.enabled) return `${serverName || 'Your Cinna server'} has transcription turned off`
-  if (usage.capSeconds === null) return `No monthly limit on ${server}`
-  const left = Math.max(0, Math.floor((usage.capSeconds - usage.usedSeconds) / 60))
-  const cap = Math.floor(usage.capSeconds / 60)
-  return `${left} of ${cap} min left this month on ${server}`
-}
-
-/** Needs attention: the server turned it off, the month's minutes are used up, or the read failed. */
-export function relayUsageNeedsAttention(usage: SpeechRelayUsageResult | undefined): boolean {
-  if (!usage) return false
-  if (!usage.ok || !usage.enabled) return true
-  return usage.capSeconds !== null && usage.usedSeconds >= usage.capSeconds
 }
 
 /**
@@ -178,36 +158,28 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const voiceCloudProviders = speech.cloud.providers
   // Main bills the chosen provider when it is usable, else the first one.
   const voiceCloudProvider = voiceCloudProviders.find((provider) => provider.id === settings?.voiceCloudProviderId) ?? voiceCloudProviders[0]
-  const relayAvailable = speech.cloud.relay.available
   const geminiUsable = voiceCloudProviders.length > 0
   // The saved service: this window's write at once (the settings cache is optimistic), else main's.
   const savedVoiceService: VoiceCloudService = isVoiceCloudService(settings?.voiceCloudService) ? settings.voiceCloudService : speech.cloud.setting
-  // What the next cloud dictation uses: the saved service, or main's answer for none saved.
-  const voiceService = savedVoiceService !== '' ? savedVoiceService : speech.cloud.service
-  // A mode on with no service saved and no relay: main runs nothing in the cloud until one is picked.
-  const voiceServiceUnset = voiceCloudMode !== 'off' && savedVoiceService === '' && !relayAvailable
-  // Without any cloud only Off can be chosen; a mode already on stays changeable so it can be turned off.
-  const voiceCloudLocked = !relayAvailable && !geminiUsable && voiceCloudMode === 'off'
-  // Offered when both can run, and whenever a mode is on with a service saved: picking from it
-  // never makes it vanish under the pointer (ux_rules rule 1), and an unusable choice is no dead end.
-  const showVoiceService = (relayAvailable && geminiUsable) ||
-    (voiceCloudMode !== 'off' && savedVoiceService !== '') || voiceServiceUnset
+  // What the next cloud dictation uses; none saved shows as the Cinna server (main runs nothing for it).
+  const voiceService: 'core' | 'gemini' = savedVoiceService === 'gemini' ? 'gemini' : 'core'
+  // A mode on with no service saved: main runs nothing in the cloud until one is picked.
+  const voiceServiceUnset = voiceCloudMode !== 'off' && savedVoiceService === ''
+  // Settings never read the active account (ux_rules rule 21): the Service is
+  // offered whenever a mode is on, and whether the server offers transcription
+  // is said when a dictation starts.
+  const showVoiceService = voiceCloudMode !== 'off'
   const voiceCloudMissing = !voiceServiceUnset && voiceService === 'gemini' && !geminiUsable && (voiceCloudMode !== 'off' || !speech.supported)
-  const relayMissing = voiceService === 'core' && !relayAvailable && voiceCloudMode !== 'off'
-  const showRelayUsage = voiceService === 'core' && relayAvailable && voiceCloudMode !== 'off'
-  // Fetched while the row shows; a failure is data in the row.
-  const relayUsage = useSpeechRelayUsage(showRelayUsage)
-  const relayUsageLine = relayUsageText(relayUsage, speech.cloud.relay.serverName)
   /**
-   * Turning a mode on from Off with no service saved saves the one the Service
-   * select shows with it, first: a running mode always has an explicit service,
+   * Turning a mode on from Off with no service saved saves the Cinna server
+   * with it, first (never the billed key): a running mode always has an explicit service,
    * so none is ever chosen implicitly later. The mode is written only once the
    * service is: a failed service write stays the shown save error (the
    * mutation's state is its last call's) and leaves the mode Off.
    */
   const setVoiceCloudMode = (value: VoiceCloudTranscription): void => {
     if (voiceCloudMode === 'off' && value !== 'off' && savedVoiceService === '') {
-      setSetting.mutateAsync({ key: 'voiceCloudService', value: relayAvailable ? 'core' : 'gemini' })
+      setSetting.mutateAsync({ key: 'voiceCloudService', value: 'core' })
         .then(() => setSetting.mutate({ key: 'voiceCloudTranscription', value }))
         .catch(() => {})
       return
@@ -445,24 +417,40 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             onToggle={() => setShowTasksButton(!showTasksButton)}
             title={showTasksButton ? 'The Tasks button is in the top bar' : 'The Tasks button is hidden'}
           />
-          {/* Shown without an on-device engine too: on Linux and Windows it is the way in.
-              Above Show audio input, which a choice here can make appear: the
-              select stays where the pointer is (ux_rules rule 1). */}
+          {/* Always there, so a cloud mode chosen below never inserts a row
+              above the pills under the pointer (ux_rules rule 1). Disabled
+              while nothing can transcribe: no on-device engine and no cloud mode. */}
+          <SettingsToggleRow
+            id="feature-show-voice-input"
+            label="Audio input"
+            description={speech.available ? voiceInputDescription(speech) : voiceCloudMode === 'off' ? VOICE_INPUT_UNAVAILABLE : VOICE_INPUT_NO_CLOUD_SERVICE}
+            checked={speech.available && showVoiceInput}
+            disabled={!speech.available}
+            onToggle={() => setShowVoiceInput(!showVoiceInput)}
+            title={!speech.available
+              ? voiceCloudMode === 'off'
+                ? 'No speech recognition on this computer: turn on Cloud transcription below'
+                : 'Cloud transcription below has no usable service yet'
+              : showVoiceInput ? 'The audio input button is in the composer' : 'The audio input button is hidden'}
+          />
+          {/* Shown without an on-device engine too: on Linux and Windows it is the way in. */}
           <SettingsRow>
-            <div className={settingsDropdownRowClass}>
-              <SettingsLabel htmlFor="feature-voice-cloud" info="Dictation in the cloud. Cinna server, where your server offers transcription: the recording is sent to that server, which pays for it. My Gemini key: Google Gemini Live on your own Gemini provider key; the recording is sent to Google and billed to that key. Needs a Gemini credential with an API key, added under AI Credentials. As a fallback: only when on-device speech recognition is unavailable on this computer as a dictation starts (a permission you refused is not unavailable). Always: every dictation. Off: on the device only. A dictation never switches midway on its own: if on-device recognition fails while you dictate and your Cinna server offers transcription, Cinna asks before continuing there.">Cloud transcription</SettingsLabel>
-              <select id="feature-voice-cloud" className={settingsInputClass} disabled={disabled || voiceCloudLocked}
-                value={voiceCloudMode}
-                onChange={(event) => {
-                  const value = event.target.value
-                  if (isVoiceCloudTranscription(value)) setVoiceCloudMode(value)
-                }}>
-                {(['off', 'fallback', 'always'] as const).map((mode) => <option key={mode} value={mode}>{VOICE_CLOUD_LABEL[mode]}</option>)}
-              </select>
+            <div className="flex items-center justify-between gap-3">
+              <SettingsLabel info="Dictation in the cloud. Cinna server: the recording is sent to the Cinna server of the account you are signed in to when you dictate, which pays for it; if that server does not offer transcription, the dictation says so. My Gemini key: Google Gemini Live on your own Gemini provider key; the recording is sent to Google and billed to that key. Needs a Gemini credential with an API key, added under AI Credentials. As a fallback: only when on-device speech recognition is unavailable on this computer as a dictation starts (a permission you refused is not unavailable). Always: every dictation. Off: on the device only. A dictation never switches midway on its own: if on-device recognition fails while you dictate and your Cinna server offers transcription, Cinna asks before continuing there.">Cloud transcription</SettingsLabel>
+              <div role="group" aria-label="Cloud transcription" className="flex shrink-0 rounded-md border border-[var(--color-border)] p-0.5">
+                {(['off', 'fallback', 'always'] as const).map((mode) => (
+                  <button key={mode} type="button" aria-pressed={voiceCloudMode === mode}
+                    disabled={disabled}
+                    onClick={() => { if (voiceCloudMode !== mode) setVoiceCloudMode(mode) }}
+                    className={`rounded px-2.5 py-1 text-[13px] transition-colors disabled:opacity-50 ${voiceCloudMode === mode ? 'app-nav-active text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                    {VOICE_CLOUD_LABEL[mode]}
+                  </button>
+                ))}
+              </div>
             </div>
             {showVoiceService && (
               <div className={`mt-3 ${settingsDropdownRowClass}`}>
-                <SettingsLabel htmlFor="feature-voice-cloud-service" info={`Where cloud transcription sends the recording. Cinna server: to ${relayName(speech)}, which pays for it. My Gemini key: to Google, billed to your own Gemini provider key. The one you pick is never swapped for the other.`}>Service</SettingsLabel>
+                <SettingsLabel htmlFor="feature-voice-cloud-service" info={`Where cloud transcription sends the recording. Cinna server: to ${VOICE_SERVER}, which pays for it. ${VOICE_SERVER_CHECK} My Gemini key: to Google, billed to your own Gemini provider key. The one you pick is never swapped for the other.`}>Service</SettingsLabel>
                 <select id="feature-voice-cloud-service" className={settingsInputClass} disabled={disabled}
                   value={voiceServiceUnset ? '' : voiceService}
                   onChange={(event) => {
@@ -496,40 +484,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
                 />
               </div>
             )}
-            {relayMissing && (
-              <div className="mt-3">
-                <SettingsStatusRow
-                  tone="warning"
-                  label="Cinna server transcription is not available"
-                  detail={geminiUsable
-                    ? 'Sign in to a Cinna server that offers it, or use your own Gemini key.'
-                    : 'Sign in to a Cinna server that offers it.'}
-                  action={geminiUsable
-                    ? <SettingsButton disabled={disabled} onClick={() => setSetting.mutate({ key: 'voiceCloudService', value: 'gemini' })}>Use My Gemini key</SettingsButton>
-                    : undefined}
-                />
-              </div>
-            )}
-            {showRelayUsage && (
-              <div className="mt-3" data-testid="feature-voice-relay-usage">
-                {/* One line at 800px: the value leads, a long server name is cut, the title has it whole. */}
-                <SettingsStatusRow
-                  tone={relayUsageNeedsAttention(relayUsage) ? 'warning' : 'neutral'}
-                  label={<span className="block truncate" title={relayUsageLine}>{relayUsageLine}</span>}
-                />
-              </div>
-            )}
           </SettingsRow>
-          {speech.available && (
-            <SettingsToggleRow
-              id="feature-show-voice-input"
-              label="Show audio input"
-              description={voiceInputDescription(speech)}
-              checked={showVoiceInput}
-              onToggle={() => setShowVoiceInput(!showVoiceInput)}
-              title={showVoiceInput ? 'The audio input button is in the composer' : 'The audio input button is hidden'}
-            />
-          )}
           <SettingsToggleRow
             id="feature-enable-tray-icon"
             label="Enable Tray Icon"

@@ -116,8 +116,8 @@ export interface SpeechStatus {
   backend?: SpeechBackend
   /**
    * Voice input can run at all: the on-device engine is supported, or cloud
-   * transcription is on with a usable key. Gates the mic button and the
-   * "Show audio input" row.
+   * transcription is on with a usable service (Cinna server, or the user's own Gemini key). Gates the mic button and the
+   * "Audio input" switch (rendered always, disabled while this is false).
    */
   available: boolean
   cloud: SpeechCloudStatus

@@ -51,6 +51,17 @@ export interface DictationTarget {
 }
 
 /**
+ * Whether the composer shows the voice button: main reports voice input
+ * available and the user has not hidden it. The composer reads it to drop an
+ * empty draft's Send, leaving the mic as the row's one control.
+ */
+export function useVoiceInputShown(): boolean {
+  const status = useSpeechStatus()
+  const shown = useUIStore((s) => s.showVoiceInput)
+  return status.available && shown
+}
+
+/**
  * The composer's voice input: click to record, click again to stop. Where main
  * streams, the words appear at the caret while the user speaks (see
  * `liveDictation.store.ts`); otherwise the text lands in the composer after stop. Right-click picks the microphone. Rendered only
@@ -80,8 +91,8 @@ export function VoiceInputButton({
   composerRef?: RefObject<HTMLElement | null>
 }): React.JSX.Element | null {
   const status = useSpeechStatus()
-  const shown = useUIStore((s) => s.showVoiceInput)
-  if (!status.available || !shown) return null
+  const shown = useVoiceInputShown()
+  if (!shown) return null
   return <VoiceInputControl blocked={speechBlocked(status)} relayServerName={status.cloud.relay.serverName} onText={onText} onError={onError} onSend={onSend} composerRef={composerRef} dictation={dictation} />
 }
 
@@ -332,7 +343,7 @@ function VoiceInputControl({
     useUIStore.getState().setShowVoiceInput(false)
     composerRef?.current?.focus()
     const hidden = discarded ? 'Audio input is hidden, and the recording was discarded.' : 'Audio input is hidden.'
-    useToastStore.getState().show(`${hidden} Turn it back on in Settings → Features → Interface → Show audio input.`, {
+    useToastStore.getState().show(`${hidden} Turn it back on in Settings → Features → Interface → Audio input.`, {
       kind: 'info',
       link: { label: 'Open Settings → Features', settingsMenu: 'features' }
     })
@@ -412,7 +423,7 @@ function VoiceInputControl({
           ))}
           <div className="my-1 border-t border-[var(--color-border)]" />
           {/* Always on here: turning it off hides the button this menu belongs to. */}
-          <MenuSwitchItem label="Show audio input" checked onToggle={hide} />
+          <MenuSwitchItem label="Audio input" checked onToggle={hide} />
         </ContextMenu>
       )}
       {offer && (

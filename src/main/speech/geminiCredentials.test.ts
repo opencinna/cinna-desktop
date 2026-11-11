@@ -12,7 +12,7 @@ vi.mock('../db/client', () => ({
     return holder.current.db
   }
 }))
-vi.mock('../auth/scope', () => ({ getManagedResourceScopes: () => ['__default__', 'alice'] }))
+vi.mock('../auth/scope', () => ({ DEFAULT_SCOPE_USER_ID: '__default__', getManagedResourceScopes: () => ['__default__', 'alice'] }))
 vi.mock('../security/keystore', () => ({ decryptApiKey: (b: Buffer) => holder.decrypt(b) }))
 
 const { readCloudConfig, resolveGeminiKey } = await import('./geminiCredentials')
@@ -42,7 +42,7 @@ afterEach(() => {
 })
 
 describe('Gemini credentials for transcription', () => {
-  it('lists only enabled, keyed, supported Gemini rows from the managed scopes, never the key', () => {
+  it('lists only enabled, keyed, supported Gemini rows from the Default scope, never the key', () => {
     provider({ id: 'openai', type: 'openai' })
     provider({ id: 'off', enabled: false })
     provider({ id: 'nokey', key: null })
@@ -53,8 +53,18 @@ describe('Gemini credentials for transcription', () => {
     const config = readCloudConfig()
     expect(config.mode).toBe('off')
     expect(config.service).toBe('')
-    expect(config.providers.map((p) => p.id).sort()).toEqual(['managed', 'mine'])
+    expect(config.providers.map((p) => p.id).sort()).toEqual(['mine'])
     expect(JSON.stringify(config)).not.toContain('key-')
+  })
+
+  it('never offers or uses a Gemini key the active account provisioned, even when it is the chosen one', async () => {
+    provider({ id: 'managed', name: 'Team Gemini', userId: 'alice' })
+    appSettingsRepo.set('voiceCloudProviderId', 'managed')
+    expect(readCloudConfig()).toMatchObject({ providers: [], chosen: null })
+    expect(await resolveGeminiKey()).toEqual({ ok: false, message: expect.stringMatching(/Gemini provider/) })
+    provider({ id: 'mine', name: 'My Gemini' })
+    expect(readCloudConfig().chosen).toEqual({ id: 'mine', name: 'My Gemini' })
+    expect(await resolveGeminiKey()).toMatchObject({ ok: true, apiKey: 'key-mine' })
   })
 
   it('picks the chosen provider when usable, else the first usable one', async () => {

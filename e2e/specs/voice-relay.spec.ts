@@ -1,5 +1,5 @@
 import { test, expect, type CinnaApp } from '../fixtures/app'
-import type { SpeechRelayUsageResult, SpeechStatus, SpeechStreamEvent } from '../../src/shared/speech'
+import type { SpeechStatus, SpeechStreamEvent } from '../../src/shared/speech'
 
 /**
  * Dictation through the Cinna server relay
@@ -10,14 +10,17 @@ import type { SpeechRelayUsageResult, SpeechStatus, SpeechStreamEvent } from '..
  * renderer reloaded so its prefetch reads the pinned status, and Chromium's
  * fake capture device feeds the recorder. The stream fake also keeps the
  * options each session was opened with, and names `core-relay` in its `start`
- * frame for a session asked for `engine: 'core-relay'`. For Settings, the
- * `speech:relay-usage` handler is replaced with a canned answer.
+ * frame for a session asked for `engine: 'core-relay'`. Settings › Features
+ * is app-wide (ux_rules rule 21): it is checked to read nothing of the
+ * signed-in server, with the relay pinned on and then off. The last test runs
+ * main's real status and stream on a profile with no Cinna server, so the
+ * Cinna server service fails where it is used, as an error at dictation.
  *
  * What this does not prove: that main attaches the offer to an on-device
  * failure (`speechService.test.ts`), the relay engine and its WebSocket
- * protocol (`engines/coreRelay.test.ts`), the discovery read that makes the
- * relay available, or the usage request (`coreRelayAccess.test.ts`); no
- * Cinna server and no network are involved. That the replayed bytes are the
+ * protocol (`engines/coreRelay.test.ts`), or the discovery read that makes the
+ * relay available (`coreRelayAccess.test.ts`); no Cinna server and no network
+ * are involved. That the replayed bytes are the
  * unconfirmed audio is asserted only as "some audio arrived before the live
  * stream", not byte for byte.
  */
@@ -233,13 +236,16 @@ test.describe('voice input, the Cinna server relay offer', () => {
 })
 
 /**
- * Settings › Features with the relay available and a usable Gemini provider.
- * The pinned status reads the stored mode and service back through the real
- * `settings:get-all`, deriving `cloud.service` the way `speechService` does,
- * so the renderer's refetch after a save sees them.
+ * Settings › Features with a usable Gemini provider and the relay pinned on or
+ * off by `globalThis.__relayOn`. The pinned status reads the stored mode and
+ * service back through the real `settings:get-all` and derives `cloud.service`
+ * and `usable` the way `speechService` does (never from the relay), so the
+ * renderer's refetch after a save sees them.
  */
-async function pinRelayAndGemini(cinna: CinnaApp): Promise<void> {
-  await cinna.electronApp.evaluate(({ ipcMain }, { provider, server }) => {
+async function pinStatusFromSettings(cinna: CinnaApp, relayOn: boolean): Promise<void> {
+  await cinna.electronApp.evaluate(({ ipcMain }, { provider, server, on }) => {
+    const g = globalThis as { __relayOn?: boolean }
+    g.__relayOn = on
     ipcMain.removeHandler('speech:status')
     ipcMain.handle('speech:status', async (event) => {
       const settings = await event.sender.executeJavaScript('window.api.settings.getAll()') as { voiceCloudTranscription?: string; voiceCloudService?: string }
@@ -247,17 +253,15 @@ async function pinRelayAndGemini(cinna: CinnaApp): Promise<void> {
       const setting = settings.voiceCloudService ?? ''
       return {
         supported: true, engine: 'macos', authorization: 'granted', backend: 'sfspeech', available: true,
-        cloud: { mode, setting, service: setting || 'core', usable: true, providers: [provider], relay: { available: true, serverName: server } }
+        cloud: {
+          mode, setting, service: setting === 'gemini' ? 'gemini' : 'core', usable: setting !== '', providers: [provider],
+          relay: g.__relayOn ? { available: true, serverName: server } : { available: false }
+        }
       }
     })
-  }, { provider: GEMINI, server: SERVER })
-}
-
-async function pinRelayUsage(cinna: CinnaApp, usage: SpeechRelayUsageResult): Promise<void> {
-  await cinna.electronApp.evaluate(({ ipcMain }, answer) => {
-    ipcMain.removeHandler('speech:relay-usage')
-    ipcMain.handle('speech:relay-usage', () => answer)
-  }, usage)
+  }, { provider: GEMINI, server: SERVER, on: relayOn })
+  await cinna.page.reload()
+  await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
 }
 
 async function openFeatures(cinna: CinnaApp): Promise<void> {
@@ -268,45 +272,75 @@ async function openFeatures(cinna: CinnaApp): Promise<void> {
   await page.getByRole('button', { name: 'Features', exact: true }).click()
 }
 
-const cloudSelect = (cinna: CinnaApp) => cinna.page.getByRole('combobox', { name: 'Cloud transcription', exact: true })
+const cloudPill = (cinna: CinnaApp, label: 'Off' | 'As a fallback' | 'Always') =>
+  cinna.page.getByRole('group', { name: 'Cloud transcription', exact: true }).getByRole('button', { name: label, exact: true })
 const serviceSelect = (cinna: CinnaApp) => cinna.page.getByRole('combobox', { name: 'Service', exact: true })
-const usageRow = (cinna: CinnaApp) => cinna.page.getByTestId('feature-voice-relay-usage')
+
+/** Nothing of the signed-in server on the app-wide tab: no name, no availability row, no minutes. */
+async function expectNoServerReadout(cinna: CinnaApp): Promise<void> {
+  await expect(cinna.page.getByText(SERVER)).toHaveCount(0)
+  await expect(cinna.page.getByText(/transcription is not available/)).toHaveCount(0)
+  await expect(cinna.page.getByText(/min left this month|monthly limit/)).toHaveCount(0)
+  await expect(cinna.page.getByTestId('feature-voice-relay-usage')).toHaveCount(0)
+  await expect(cinna.page.getByRole('button', { name: 'Use My Gemini key', exact: true })).toHaveCount(0)
+}
 
 test.describe('voice input, Cinna server relay in Settings › Features', () => {
-  test('the Service select, and the usage row with its warning when the month is used up', async ({ cinna }) => {
+  test('the Service is offered plainly, and reads the same whether or not the signed-in server offers the relay', async ({ cinna }) => {
     await cinna.skipOnboarding()
-    await pinRelayAndGemini(cinna)
-    await pinRelayUsage(cinna, { ok: true, enabled: true, usedSeconds: 20 * 60, capSeconds: 60 * 60, periodEnd: '2026-12-01T00:00:00Z' })
-    await cinna.page.reload()
-    await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
+    await pinStatusFromSettings(cinna, true)
     await openFeatures(cinna)
 
-    await test.step('Off with both services usable: the Service select shows Cinna server, no usage row', async () => {
-      await expect(cloudSelect(cinna)).toHaveValue('off')
-      await expect(serviceSelect(cinna)).toBeVisible()
-      await expect(serviceSelect(cinna).locator('option')).toHaveText(['Cinna server', 'My Gemini key'])
-      await expect(serviceSelect(cinna)).toHaveValue('core')
-      await expect(usageRow(cinna)).toHaveCount(0)
+    await test.step('Off: the pills are open, no Service select, nothing of the server', async () => {
+      await expect(cloudPill(cinna, 'Off')).toHaveAttribute('aria-pressed', 'true')
+      for (const label of ['Off', 'As a fallback', 'Always'] as const) await expect(cloudPill(cinna, label)).toBeEnabled()
+      await expect(serviceSelect(cinna)).toHaveCount(0)
+      await expectNoServerReadout(cinna)
     })
 
-    await test.step('As a fallback on Cinna server: the usage row reads the server answer, neutral', async () => {
-      await cloudSelect(cinna).selectOption({ label: 'As a fallback' })
-      await expect(cloudSelect(cinna)).toHaveValue('fallback')
+    await test.step('As a fallback saves Cinna server with it; the Service select offers both, nothing of the server', async () => {
+      await cloudPill(cinna, 'As a fallback').click()
+      await expect(cloudPill(cinna, 'As a fallback')).toHaveAttribute('aria-pressed', 'true')
       await expect(serviceSelect(cinna)).toHaveValue('core')
-      await expect(usageRow(cinna)).toHaveText(`40 of 60 min left this month on ${SERVER}`)
-      await expect(usageRow(cinna).locator('svg[class*="color-warning"]')).toHaveCount(0)
+      await expect(serviceSelect(cinna).locator('option')).toHaveText(['Cinna server', 'My Gemini key'])
       expect(await cinna.page.evaluate(() => window.api.settings.getAll().then((s) => [s.voiceCloudTranscription, s.voiceCloudService])))
         .toEqual(['fallback', 'core'])
+      await expectNoServerReadout(cinna)
     })
 
-    await test.step('no minutes left: the same row in the warning tone', async () => {
-      await pinRelayUsage(cinna, { ok: true, enabled: true, usedSeconds: 60 * 60, capSeconds: 60 * 60, periodEnd: '2026-12-01T00:00:00Z' })
-      // The usage query is cached for a minute; a reload reads it fresh.
-      await cinna.page.reload()
-      await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
+    await test.step('the relay gone (another profile): the same tab, still Cinna server, no warning', async () => {
+      await pinStatusFromSettings(cinna, false)
       await openFeatures(cinna)
-      await expect(usageRow(cinna)).toHaveText(`0 of 60 min left this month on ${SERVER}`)
-      await expect(usageRow(cinna).locator('svg[class*="color-warning"]')).toHaveCount(1)
+      await expect(cloudPill(cinna, 'As a fallback')).toHaveAttribute('aria-pressed', 'true')
+      for (const label of ['Off', 'As a fallback', 'Always'] as const) await expect(cloudPill(cinna, label)).toBeEnabled()
+      await expect(serviceSelect(cinna)).toHaveValue('core')
+      await expect(serviceSelect(cinna).locator('option')).toHaveText(['Cinna server', 'My Gemini key'])
+      await expectNoServerReadout(cinna)
     })
+  })
+})
+
+test.describe('voice input, Cinna server without a relay, found out at dictation', () => {
+  test.use({ launchArgs: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] })
+
+  test('Always on Cinna server with no Cinna server signed in: the mic shows, and a dictation is the error', async ({ cinna }) => {
+    // Main's real speech status and stream: the profile has no Cinna server, so no relay.
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => localStorage.setItem('cinna-show-voice-input', '1'))
+    await openFeatures(cinna)
+    await cloudPill(cinna, 'Always').click()
+    await expect(serviceSelect(cinna)).toHaveValue('core')
+    expect(await cinna.page.evaluate(() => window.api.settings.getAll().then((s) => [s.voiceCloudTranscription, s.voiceCloudService])))
+      .toEqual(['always', 'core'])
+    await expectNoServerReadout(cinna)
+
+    await cinna.page.reload()
+    await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
+    await expect(micButton(cinna)).toBeVisible()
+    await micButton(cinna).click()
+    const toast = errorToast(cinna, 'Transcription through the Cinna server is not available right now.')
+    await expect(toast).toBeVisible()
+    await expect(offerDialog(cinna)).toHaveCount(0)
+    await expect(micButton(cinna)).toHaveAttribute('aria-pressed', 'false')
   })
 })
