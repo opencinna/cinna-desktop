@@ -144,7 +144,7 @@ A setting with two states is a single labelled switch named after the *non-defau
 
 - In a menu the item is `MenuSwitchItem` (`role="menuitemcheckbox"`, the settings toggle's visual at menu size); the menu stays open so the switch is seen to move. A check mark stays for a real choice among three or more, or for marking the current default of an action menu (rule 8).
 - One switch visual in the app: `SwitchTrack` / `switchTrackClass` (`ui/SwitchTrack.tsx`, sizes `md` for settings, `sm` for menus). A new hand-drawn toggle is a finding.
-- Exception: a switch that removes the very control its menu hangs from (the voice menu's "Show audio input") closes the menu.
+- Exception: a switch that removes the very control its menu hangs from (the voice menu's "Audio input") closes the menu.
 
 **Origin:** right-clicking the sidebar button offered "Fixed" and "On Hover" as two check-marked items; the user read them as two checkboxes disabling each other.
 
@@ -217,6 +217,17 @@ A row that holds a message and its actions on one line (a composer notice row, a
 
 **Origin:** the composer notice panel's skill-link offer at a narrow composer: *Details ▾*, *Add to Finance assistant*, *New agent with this skill* and × left the sentence — the skill's name, version and publisher — a few characters wide, and *Update to Version 3* beside *New agent with this skill* did the same to the already-added row.
 
+## 21. An app-wide setting never depends on the signed-in account
+
+Settings → Features (and any setting stored app-wide, in `app_settings` or localStorage) belongs to the installation, not to an account. The app holds several profiles, often on different Cinna servers, and the user switches between them. A control there that reads the active account — what its server offers, its usage, its name, its synced credentials — shows one answer on one profile and another on the next, for a value that is the same on both.
+
+- **The choice is offered plainly; the check runs where it is used.** A Service of *Cinna server* is always selectable. Whether the active account's server provides it is found out when a dictation starts, and said there as an error, not foretold in Settings as a disabled option, a warning row or a lock.
+- **No account data on an app-wide surface.** No server names, no "this month's minutes", no availability read per profile. A line that would change on a profile switch is a finding.
+- **A credential picked app-wide comes from the app's own credentials.** Where an app-wide feature needs a key, it offers only what the user added under AI Credentials (Default scope), never a credential the active account provisioned: that one disappears on a profile switch and leaves the setting pointing at nothing.
+- **Per-account behaviour is a separate setting, on the account's own surface**, added when it is wanted. It is not folded into the app-wide one as a check.
+
+**Origin:** Features → Cloud transcription disabled its Cinna server option, warned "Cinna server transcription is not available" and showed the month's minutes, all from the active profile's server, so one app-wide choice looked different on every profile. The Gemini provider list also included keys the active account had provisioned.
+
 ## Checklist for a review
 
 1. Type into every field on the changed surface: does anything above or beside the field move?
@@ -246,3 +257,4 @@ A row that holds a message and its actions on one line (a composer notice row, a
 24. Every block the change adds a kind of content or a state to (a notice panel row, a status line, a mixed list, a card that swaps states): put each kind and state it can hold side by side. Does each fill the same slots in the same places at the same height? A kind with its own arrangement (actions under the text instead of beside it, an extra line, a slot that grows) is a finding, unless the code argues rule 19's exception in a comment (rule 19).
 24b. Every menu the change touches: read its items top to bottom. A trailing ellipsis, an item repeating the name of what the menu belongs to, or an item without an icon beside ones with it: finding (rule 8).
 25. Every one-line row with actions (a notice row, a strip, a list row): screenshot it at the narrowest width the surface allows, with its longest real names. More than one labelled button on the line, a label longer than a verb and a short word, a text toggle where an icon would do, or a message left under half the row: finding (rule 20).
+26. Every app-wide setting on the changed surface (Settings → Features, anything in `app_settings` or localStorage): does any control, option, status row or label read the active account (its server's capabilities, usage, name, provisioned credentials)? Switch profiles and compare. Any difference: finding under rule 21.
