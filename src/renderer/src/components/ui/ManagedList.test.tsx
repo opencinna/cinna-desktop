@@ -365,4 +365,85 @@ describe('ManagedList', () => {
     expect(screen.getByText('BS').className).toContain('text-[11px]')
     expect(container.innerHTML).not.toMatch(/text-\[(9|10|10\.5|11\.5|12\.5|13\.5)px\]/)
   })
+  it('draws the field picker as a form field outside any row: named by its label, value and caret, its menu’s right edge at its own', () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const menu = this.getAttribute('role') === 'menu'
+      const width = menu ? 240 : 136
+      const left = menu ? 0 : 300
+      return { x: left, y: 100, left, top: 100, right: left + width, bottom: 134, width, height: menu ? 80 : 34, toJSON: () => ({}) } as DOMRect
+    })
+    const onChange = vi.fn()
+    render(<ManagedListPicker variant="field" label="Access" value="use" options={[...OPTIONS]} onChange={onChange} menuLabel="Access" />)
+    const trigger = screen.getByRole('button', { name: 'Access' })
+    // A box like the text field beside it, at the field's size, showing the value.
+    expect(trigger.className).toContain('border')
+    expect(trigger.className).toContain('py-1.5')
+    expect(trigger.className).toContain('text-[13px]')
+    expect(trigger.textContent).toBe('Can use')
+    expect(trigger.querySelector('svg.lucide-chevron-down')).not.toBeNull()
+    // The value it shows describes it, as there is no row title to.
+    expect(document.getElementById(trigger.getAttribute('aria-describedby')!)!.textContent).toBe('Can use')
+    fireEvent.click(trigger)
+    const menu = screen.getByRole('menu', { name: 'Access' })
+    // Right-aligned as in a row: a field at the end of a line (Access beside the search) keeps its menu inside the dialog.
+    expect(menu.style.left).toBe(`${300 + 136 - 240}px`)
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Can edit' }))
+    expect(onChange).toHaveBeenCalledWith('edit')
+  })
+
+  it('gives a picker in a row a name of its own when asked, still showing the value', () => {
+    render(
+      <ManagedList>
+        <ManagedListRow
+          title="erp.example.com"
+          titleMono
+          trailing={<ManagedListPicker label="What people need for erp.example.com" title="Can use" value="use" options={[...OPTIONS]} onChange={vi.fn()} menuLabel="m" />}
+        />
+      </ManagedList>
+    )
+    const picker = screen.getByRole('button', { name: 'What people need for erp.example.com' })
+    expect(picker.textContent).toBe('Can use')
+    expect(picker.title).toBe('Can use')
+    expect(screen.getByText('erp.example.com').className).toContain('font-mono')
+    expect(screen.getByText('erp.example.com').className).toContain('text-[12px]')
+  })
+
+  it('makes a radio group of rows: one checked and focusable, picked by a click, Space or the arrows, a disabled row passed over', () => {
+    function Choice(): React.JSX.Element {
+      const [value, setValue] = useState('a')
+      return (
+        <ManagedList role="radiogroup" aria-label="Publish as">
+          {[['a', 'First'], ['b', 'Second'], ['c', 'Third']].map(([key, label]) => (
+            <ManagedListRow
+              key={key}
+              title={label}
+              radio={{ checked: value === key, disabled: key === 'b', onSelect: () => setValue(key) }}
+            />
+          ))}
+        </ManagedList>
+      )
+    }
+    render(<Choice />)
+    const group = screen.getByRole('radiogroup', { name: 'Publish as' })
+    const radio = (name: string): HTMLElement => within(group).getByRole('radio', { name })
+    const checked = (): string[] => within(group).getAllByRole('radio').filter((r) => r.getAttribute('aria-checked') === 'true').map((r) => r.textContent!)
+    expect(checked()).toEqual(['First'])
+    expect(radio('First').tabIndex).toBe(0)
+    expect(radio('Third').tabIndex).toBe(-1)
+    fireEvent.click(radio('Second'))
+    expect(checked()).toEqual(['First'])
+    fireEvent.click(radio('Third'))
+    expect(checked()).toEqual(['Third'])
+    // From the last, down wraps to the first; the disabled one is skipped either way.
+    fireEvent.keyDown(radio('Third'), { key: 'ArrowDown' })
+    expect(checked()).toEqual(['First'])
+    expect(document.activeElement).toBe(radio('First'))
+    fireEvent.keyDown(radio('First'), { key: 'ArrowRight' })
+    expect(checked()).toEqual(['Third'])
+    fireEvent.keyDown(radio('Third'), { key: 'ArrowUp' })
+    expect(checked()).toEqual(['First'])
+    fireEvent.click(radio('Third'))
+    fireEvent.keyDown(radio('First'), { key: ' ' })
+    expect(checked()).toEqual(['First'])
+  })
 })

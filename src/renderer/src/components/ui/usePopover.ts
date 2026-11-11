@@ -23,6 +23,13 @@ export interface PopoverOptions {
    * open, so it never flips back and forth.
    */
   flipWhenNoRoom?: boolean
+  /**
+   * `above-*` only: the element whose top edge the popover's bottom sits
+   * above, instead of the trigger's. For a trigger under a box the popover
+   * must not cover (an artifact card's drawer, under the card). The
+   * horizontal anchor stays the trigger.
+   */
+  aboveAnchorRef?: React.RefObject<HTMLElement | null>
 }
 
 /**
@@ -73,6 +80,7 @@ export function usePopover<
 >(placement: PopoverPlacement, options: PopoverOptions = {}): PopoverApi<T, P> {
   const keepTop = options.keepTopWhileOpen === true
   const flipWhenNoRoom = options.flipWhenNoRoom === true
+  const aboveAnchorRef = options.aboveAnchorRef
   const [open, setOpen] = useState(false)
   /** A `below-*` popover that did not fit below, now laid out above instead. */
   const [flipped, setFlipped] = useState(false)
@@ -103,12 +111,13 @@ export function usePopover<
       const r = t.getBoundingClientRect()
       const vw = window.innerWidth
       const vh = window.innerHeight
+      const aboveTop = aboveAnchorRef?.current?.getBoundingClientRect().top ?? r.top
       switch (effective) {
         case 'above-left':
-          setPos({ left: r.left, bottom: vh - r.top + GAP })
+          setPos({ left: r.left, bottom: vh - aboveTop + GAP })
           break
         case 'above-right':
-          setPos({ right: vw - r.right, bottom: vh - r.top + GAP })
+          setPos({ right: vw - r.right, bottom: vh - aboveTop + GAP })
           break
         case 'below-left':
           setPos({ left: r.left, top: r.bottom + BELOW_GAP })
@@ -136,7 +145,7 @@ export function usePopover<
       document.removeEventListener('mousedown', handleClick)
       window.removeEventListener('resize', measure)
     }
-  }, [open, placement, flipped])
+  }, [open, placement, flipped, aboveAnchorRef])
 
   // In the frame it is first laid out, before it paints: a popover hanging
   // below a trigger near the bottom of the window would run past the edge.

@@ -1,5 +1,5 @@
 import { act, render } from '@testing-library/react'
-import { createElement } from 'react'
+import { createElement, useRef } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { pinTopEdge, usePopover, type PopoverOptions, type PopoverPlacement } from './usePopover'
 import { useHoverPopover } from './useHoverPopover'
@@ -142,6 +142,40 @@ describe('usePopover right placement', () => {
     render(createElement(Harness, { placement: 'below-right', rows: 1 }))
     act(() => setOpen(true))
     expect(latest).toEqual({ position: 'fixed', right: 60, top: 792 })
+  })
+})
+
+describe('usePopover aboveAnchorRef', () => {
+  // An artifact card: main box 600–650, its drawer's Share button 652–680.
+  function AnchorHarness({ placement }: { placement: PopoverPlacement }): React.JSX.Element {
+    const anchor = useRef<HTMLElement | null>(null)
+    const popover = usePopover<HTMLButtonElement, HTMLDivElement>(placement, { aboveAnchorRef: anchor })
+    latest = popover.style
+    setOpen = popover.setOpen
+    return createElement('div', null,
+      createElement('span', { ref: (el: HTMLElement | null) => { anchor.current = el }, 'data-rect': 'card' }),
+      createElement('button', { ref: popover.triggerRef, 'data-rect': 'trigger' }),
+      popover.open ? createElement('div', { ref: popover.popoverRef, 'data-rect': 'popover' }) : null)
+  }
+
+  function openAt(placement: PopoverPlacement): void {
+    stubRects()
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1000)
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800)
+    rects.set('card', { top: 600, height: 50, left: 100, width: 300 })
+    rects.set('trigger', { top: 652, height: 28, left: 160, width: 28 })
+    render(createElement(AnchorHarness, { placement }))
+    act(() => setOpen(true))
+  }
+
+  it('sits above the anchor, not the trigger, when it opens above; left still the trigger’s', () => {
+    openAt('above-left')
+    expect(latest).toEqual({ position: 'fixed', left: 160, bottom: 800 - 600 + 8 })
+  })
+
+  it('leaves a below placement on the trigger', () => {
+    openAt('below-left')
+    expect(latest).toEqual({ position: 'fixed', left: 160, top: 680 + 4 })
   })
 })
 

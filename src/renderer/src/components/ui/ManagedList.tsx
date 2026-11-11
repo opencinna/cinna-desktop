@@ -100,7 +100,9 @@ export function ManagedList({
   scale = 'settings',
   ordered = false,
   surfaceClassName = '',
-  'aria-label': ariaLabel
+  role,
+  'aria-label': ariaLabel,
+  'aria-busy': ariaBusy
 }: {
   /** The rows ({@link ManagedListRow}). */
   children?: ReactNode
@@ -117,16 +119,44 @@ export function ManagedList({
   ordered?: boolean
   /** Extra classes on the tinted surface: a fixed height that scrolls, so rows coming and going move nothing below. */
   surfaceClassName?: string
+  /**
+   * `radiogroup`: the rows are a choice of one ({@link ManagedListRow}'s
+   * `radio`), the selected one marked in the lead column. The arrow keys move
+   * the choice, as in a native radio group.
+   */
+  role?: 'radiogroup'
   'aria-label'?: string
+  /** The rows are still being read: on the named list itself, so a wait on the list by its name sees it. */
+  'aria-busy'?: boolean
 }): React.JSX.Element {
   const List = ordered ? 'ol' : 'ul'
+  const onRadioKey = (event: React.KeyboardEvent<HTMLElement>): void => {
+    const step = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 0
+    if (step === 0) return
+    const radios = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]:not([aria-disabled="true"])')
+    )
+    const from = (event.target as HTMLElement).closest<HTMLElement>('[role="radio"]')
+    const at = from ? radios.indexOf(from) : -1
+    if (at < 0) return
+    event.preventDefault()
+    const next = radios[(at + step + radios.length) % radios.length]
+    next.focus()
+    next.click()
+  }
   return (
     <ScaleContext.Provider value={scale}>
       <div>
         <div className={`managed-list ${surfaceClassName}`} data-scale={scale}>
           {/* A named list stays on the page when empty: it is still the place its rows go. */}
           {(Children.toArray(children).length > 0 || ariaLabel !== undefined) && (
-            <List aria-label={ariaLabel} className="m-0 list-none p-0">
+            <List
+              aria-label={ariaLabel}
+              aria-busy={ariaBusy || undefined}
+              role={role}
+              onKeyDown={role === 'radiogroup' ? onRadioKey : undefined}
+              className="m-0 list-none p-0"
+            >
               {children}
             </List>
           )}
@@ -178,11 +208,13 @@ export function ManagedListRow({
   title,
   titleClassName = 'font-medium',
   titleTooltip,
+  titleMono = false,
   meta,
   sub,
   subMono = false,
   trailing,
   confirm,
+  radio,
   children
 }: {
   /** The 24px leading column: {@link ManagedListAvatar}, {@link ManagedListDot} or an icon. */
@@ -192,6 +224,8 @@ export function ManagedListRow({
   titleClassName?: string
   /** The title's tooltip, for one that may truncate. */
   titleTooltip?: string
+  /** The title is a path or an id: monospace, at the scale's mono size. */
+  titleMono?: boolean
   /** Inline after the title, muted; it truncates before the title does. */
   meta?: ReactNode
   /** A second line under the title, muted. */
@@ -206,6 +240,12 @@ export function ManagedListRow({
    * the row's last control — the ⋯ the question came from.
    */
   confirm?: ManagedListConfirm | null
+  /**
+   * The row is one choice of a {@link ManagedList} with `role="radiogroup"`:
+   * the whole row is the radio (named by its content), focusable when it is
+   * the one checked, picked by a click, Space or Enter.
+   */
+  radio?: { checked: boolean; disabled?: boolean; onSelect: () => void }
   /** More of the row under the second line (expanded notes), in the title column. */
   children?: ReactNode
 }): React.JSX.Element {
@@ -244,9 +284,32 @@ export function ManagedListRow({
       data-managed-row=""
       data-two-line={stacked ? '' : undefined}
       data-confirming={confirming ? '' : undefined}
-      className="managed-list-row flex items-center gap-2.5"
+      className={`managed-list-row flex items-center gap-2.5 ${
+        radio
+          ? `focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] focus-visible:outline-offset-[-2px] ${
+              radio.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+            }`
+          : ''
+      }`}
+      {...(radio
+        ? {
+            role: 'radio',
+            'aria-checked': radio.checked,
+            'aria-disabled': radio.disabled || undefined,
+            tabIndex: radio.checked && !radio.disabled ? 0 : -1,
+            onClick: () => {
+              if (!radio.disabled && !radio.checked) radio.onSelect()
+            }
+          }
+        : {})}
       onKeyDown={
-        confirming
+        radio
+          ? (event) => {
+              if (event.key !== ' ' && event.key !== 'Enter') return
+              event.preventDefault()
+              if (!radio.disabled && !radio.checked) radio.onSelect()
+            }
+          : confirming
           ? (event) => {
               if (event.key !== 'Escape') return
               // The row's question takes Escape: a dialog listening further up must not close.
@@ -267,7 +330,7 @@ export function ManagedListRow({
         <div className="flex min-w-0 items-baseline gap-2">
           <span
             id={titleId}
-            className={`min-w-0 truncate ${s.title} ${titleClassName} text-[var(--color-text)]`}
+            className={`min-w-0 truncate ${titleMono ? `font-mono ${s.mono}` : s.title} ${titleClassName} text-[var(--color-text)]`}
             title={confirming ? confirm.text : titleTooltip}
           >
             {confirming ? confirm.text : title}
@@ -543,6 +606,19 @@ export interface ManagedListPickerOption<V extends string> {
 
 /** The picker's menu: wide enough for a one-line description under each label. */
 const PICKER_SURFACE = CONTEXT_MENU_SURFACE.replace('w-44', 'w-60')
+/** The field picker's menu: at least as wide, and as wide as a longer label needs (a file path). */
+const FIELD_PICKER_SURFACE = CONTEXT_MENU_SURFACE.replace('w-44', 'w-max min-w-60 max-w-[24rem]')
+
+/**
+ * The field picker's trigger: the shape and height of the dialogs' text
+ * fields (`FIELD_BASE` in the sharing dialogs, `settingsInputClass`), so
+ * beside a search field it reads as a control (ux_rules rule 11).
+ */
+const FIELD_TRIGGER =
+  'inline-flex min-w-0 items-center justify-between gap-1.5 whitespace-nowrap rounded-md border border-[var(--color-border)] ' +
+  'bg-[var(--color-bg)] px-2.5 py-1.5 text-left text-[13px] text-[var(--color-text)] transition-colors ' +
+  'hover:border-[var(--color-text-muted)] focus:border-[var(--color-accent)] focus:outline-none aria-expanded:border-[var(--color-accent)] ' +
+  'disabled:cursor-not-allowed disabled:opacity-60'
 
 /**
  * A value picked in place: the value as text with a caret, no box, a tint
@@ -550,13 +626,24 @@ const PICKER_SURFACE = CONTEXT_MENU_SURFACE.replace('w-44', 'w-60')
  * 10), and in a row it is described by the row's title, so a screen reader
  * hears whose value it is; `menuLabel` names the menu it opens ("Access for
  * Bob"). The menu opens on the current value.
+ *
+ * `variant="field"` draws the same picker as a form field — a bordered box
+ * the height of a text input, value left and caret right, its menu's right
+ * edge at the trigger's, as in a row, so a field at the end of a line (Access
+ * beside the search) never hangs its menu past the dialog — for a choice beside other fields (Access in Share with
+ * a person, a start page). It works outside a row; give it a `label`, its
+ * accessible name, since there is no row title to describe it.
  */
 export function ManagedListPicker<V extends string>({
   value,
   options,
   onChange,
   menuLabel,
-  disabled
+  disabled,
+  label,
+  title,
+  variant = 'inline',
+  className = ''
 }: {
   value: V
   options: ManagedListPickerOption<V>[]
@@ -564,8 +651,16 @@ export function ManagedListPicker<V extends string>({
   onChange: (value: V) => void
   menuLabel: string
   disabled?: boolean
+  /** The trigger's accessible name, where the value alone would not say what it is for. */
+  label?: string
+  /** The trigger's tooltip: the whole value, where it may truncate. */
+  title?: string
+  variant?: 'inline' | 'field'
+  /** Extra classes on the trigger: a width, a cap on it. */
+  className?: string
 }): React.JSX.Element {
   const s = useScale()
+  const field = variant === 'field'
   const menu = useTriggeredMenu()
   const idBase = useId()
   const rowTitleId = useContext(RowTitleContext)
@@ -581,12 +676,20 @@ export function ManagedListPicker<V extends string>({
       <button
         type="button"
         {...menu.trigger}
-        aria-describedby={rowTitleId}
+        aria-label={label}
+        aria-describedby={label ? `${idBase}-value` : rowTitleId}
+        title={title}
         disabled={disabled}
-        className={`${s.pick} mr-0.5 inline-flex shrink-0 items-center gap-[3px] whitespace-nowrap rounded-[7px] font-medium text-[var(--color-text)] transition-colors ${HOVER_TINT} disabled:cursor-not-allowed disabled:opacity-50`}
+        className={
+          field
+            ? `${FIELD_TRIGGER} ${className}`
+            : `${s.pick} mr-0.5 inline-flex min-w-0 shrink-0 items-center gap-[3px] whitespace-nowrap rounded-[7px] font-medium text-[var(--color-text)] transition-colors ${HOVER_TINT} disabled:cursor-not-allowed disabled:opacity-50 ${className}`
+        }
       >
-        <span>{current?.label ?? value}</span>
-        <ChevronDown size={13} aria-hidden="true" className="text-[var(--color-text-secondary)]" />
+        <span id={`${idBase}-value`} className="min-w-0 truncate">
+          {current?.label ?? value}
+        </span>
+        <ChevronDown size={13} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
       </button>
       {menu.at && (
         <ContextMenu
@@ -595,7 +698,7 @@ export function ManagedListPicker<V extends string>({
           anchor={menu.at.anchor}
           align="right"
           label={menuLabel}
-          className={PICKER_SURFACE}
+          className={field ? FIELD_PICKER_SURFACE : PICKER_SURFACE}
           onClose={menu.close}
         >
           {options.map((option, index) => {
@@ -621,7 +724,7 @@ export function ManagedListPicker<V extends string>({
                   {checked && <Check size={13} aria-hidden="true" />}
                 </span>
                 <span className="min-w-0">
-                  <span id={labelId} className="block">
+                  <span id={labelId} className={field ? 'block truncate' : 'block'} title={field ? option.label : undefined}>
                     {option.label}
                   </span>
                   {option.description && (
