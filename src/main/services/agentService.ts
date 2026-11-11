@@ -6,6 +6,7 @@ import {
   agentOverrideRepo,
   agentShortcutRepo,
   agentColorRepo,
+  agentPinnedFileRepo,
   AgentRow,
   RemoteTarget
 } from '../db/agents'
@@ -458,6 +459,7 @@ export const agentService = {
     agentRepo.delete(userId, agentId)
     agentShortcutRepo.deleteForAgent(agentId)
     agentColorRepo.deleteForAgent(agentId)
+    agentPinnedFileRepo.deleteForAgent(agentId)
     agentReadinessService.forget(agentId)
     logger.info('agent deleted', { agentId })
   },

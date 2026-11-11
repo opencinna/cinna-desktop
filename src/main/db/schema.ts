@@ -519,6 +519,25 @@ export const agentColors = sqliteTable(
 )
 
 /**
+ * Files a profile pinned for an agent — see `migrations/agent-pinned-files.ts`.
+ * `path` is relative to the agent folder when `inside`, absolute otherwise.
+ */
+export const agentPinnedFiles = sqliteTable(
+  'agent_pinned_files',
+  {
+    userId: text('user_id').notNull(),
+    agentId: text('agent_id').notNull(),
+    path: text('path').notNull(),
+    inside: integer('inside', { mode: 'boolean' }).notNull(),
+    rank: real('rank').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.agentId, table.path] })]
+)
+
+/**
  * Per-profile enable/disable preference for sync-managed LLM providers and
  * chat modes (materialized from the Cinna account-config endpoint). The synced
  * rows in `llm_providers` / `chat_modes` are owned by account-config sync, so

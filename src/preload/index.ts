@@ -51,11 +51,16 @@ import type {
   AgentFilePathInput,
   AuthorizeAgentFileInput,
   AuthorizeAgentFileResult,
+  ListPinnedAgentFilesInput,
+  ListPinnedAgentFilesResult,
+  MovePinnedAgentFileInput,
   ReadAgentFilePreviewResult,
   ReadAgentFileTextInput,
   ReadAgentFileTextResult,
   ResolveAgentFileRefsInput,
-  ResolveAgentFileRefsResult
+  ResolveAgentFileRefsResult,
+  SetPinnedAgentFileInput,
+  SetPinnedAgentFileResult
 } from '../shared/agentFiles'
 import type {
   FilesOpenInBrowserInput,
@@ -2062,7 +2067,16 @@ const api = {
       ipcRenderer.invoke('agent-files:reveal', input),
     /** An HTML file in the default web browser, not the `.html` default app. */
     openInBrowser: (input: AgentFilePathInput): Promise<AgentFileActionResult> =>
-      ipcRenderer.invoke('agent-files:open-in-browser', input)
+      ipcRenderer.invoke('agent-files:open-in-browser', input),
+    /** The active profile's pinned files for a folder agent, in order; a missing file has `exists: false`. */
+    listPins: (input: ListPinnedAgentFilesInput): Promise<ListPinnedAgentFilesResult> =>
+      ipcRenderer.invoke('agent-files:pins-list', input),
+    /** Pin (`pinned: true`) or unpin a file for the agent; a repeat is a no-op. A folder is refused. */
+    setPin: (input: SetPinnedAgentFileInput): Promise<SetPinnedAgentFileResult> =>
+      ipcRenderer.invoke('agent-files:pins-set', input),
+    /** Give a pinned file a new rank (drag reorder). */
+    movePin: (input: MovePinnedAgentFileInput): Promise<AgentFileActionResult> =>
+      ipcRenderer.invoke('agent-files:pins-move', input)
   },
 
   /**

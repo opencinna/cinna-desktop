@@ -792,3 +792,46 @@ export const MAX_AGENT_FILE_COPY_BYTES = 25 * 1024 * 1024
 
 /** The whole file as UTF-8 text, never truncated. */
 export type ReadAgentFileTextResult = { success: true; text: string } | AgentFileFailure
+
+/**
+ * A file the profile pinned for a folder agent, as the Pinned files card shows
+ * it. Pins belong to the (profile, agent), not to a chat.
+ */
+export interface PinnedAgentFile {
+  /** Absolute: an inside pin is resolved against the agent's *current* folder. */
+  path: string
+  /** Relative to the agent folder when inside it, else `~/…` or absolute. */
+  displayPath: string
+  /** Stored relative to the agent folder, so it follows the folder when it moves. */
+  inside: boolean
+  /** List order, ascending; a drag writes a value between the new neighbours. */
+  rank: number
+  /**
+   * False when nothing is there any more (or it is no longer a file): the pin
+   * is kept, and can still be unpinned. Only stat-ed, never read; a path
+   * behind a macOS privacy prompt is not probed and reads as present.
+   */
+  exists: boolean
+}
+
+export interface ListPinnedAgentFilesInput {
+  agentId: string
+}
+
+export type ListPinnedAgentFilesResult = { success: true; pins: PinnedAgentFile[] } | AgentFileFailure
+
+/**
+ * Pin (`pinned: true`) or unpin a file: the state the user asked for, so a
+ * repeat is a no-op. A folder is refused (`not_a_file`).
+ */
+export interface SetPinnedAgentFileInput extends AgentFilePathInput {
+  pinned: boolean
+}
+
+/** Whether the file is pinned now. */
+export type SetPinnedAgentFileResult = { success: true; pinned: boolean } | AgentFileFailure
+
+export interface MovePinnedAgentFileInput extends AgentFilePathInput {
+  /** The new rank: any finite number, normally between the new neighbours'. */
+  rank: number
+}

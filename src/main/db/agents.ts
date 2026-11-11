@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, sql } from 'drizzle-orm'
+import { and, asc, eq, isNotNull, sql } from 'drizzle-orm'
 import { sep } from 'node:path'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
@@ -8,6 +8,7 @@ import {
   agentOverrides,
   agentShortcuts,
   agentColors,
+  agentPinnedFiles,
   agentTaskDispatch,
   agentTaskDispatchRuns,
   chatOnDemandAgents,
@@ -42,6 +43,7 @@ export type A2ASessionRow = typeof a2aSessions.$inferSelect
 export type AgentOverrideRow = typeof agentOverrides.$inferSelect
 export type AgentShortcutRow = typeof agentShortcuts.$inferSelect
 export type AgentColorRow = typeof agentColors.$inferSelect
+export type AgentPinnedFileRow = typeof agentPinnedFiles.$inferSelect
 
 export interface CreateAgentInput {
   id?: string
@@ -698,6 +700,15 @@ export const agentRepo = {
           .where(eq(agentColors.agentId, oldId))
           .run().changes
       )
+      // And the pinned files, keyed by the profile that pinned them.
+      count(
+        'agent_pinned_files',
+        tx
+          .update(agentPinnedFiles)
+          .set({ agentId: newId })
+          .where(eq(agentPinnedFiles.agentId, oldId))
+          .run().changes
+      )
       // And the task dispatcher's run mode and pause, keyed the same way.
       count(
         'agent_task_dispatch',
@@ -930,6 +941,84 @@ export const agentColorRepo = {
    */
   deleteForAgent(agentId: string): void {
     getDb().delete(agentColors).where(eq(agentColors.agentId, agentId)).run()
+  }
+}
+
+/**
+ * Files a profile pinned for an agent, in `rank` order. `path` is the stored
+ * form — relative to the agent folder when `inside`, absolute otherwise; the
+ * service decides it and resolves it back.
+ */
+export const agentPinnedFileRepo = {
+  list(userId: string, agentId: string): AgentPinnedFileRow[] {
+    return getDb()
+      .select()
+      .from(agentPinnedFiles)
+      .where(and(eq(agentPinnedFiles.userId, userId), eq(agentPinnedFiles.agentId, agentId)))
+      .orderBy(asc(agentPinnedFiles.rank), asc(agentPinnedFiles.createdAt))
+      .all()
+  },
+
+  /**
+   * Pin `path` at the bottom of the list unless it is pinned already, where
+   * it keeps its place. Returns whether a row was added.
+   */
+  add(userId: string, agentId: string, path: string, inside: boolean): boolean {
+    return getDb().transaction((tx) => {
+      const mine = and(eq(agentPinnedFiles.userId, userId), eq(agentPinnedFiles.agentId, agentId))
+      if (tx.select({ path: agentPinnedFiles.path }).from(agentPinnedFiles).where(and(mine, eq(agentPinnedFiles.path, path))).get()) {
+        return false
+      }
+      const last = tx
+        .select({ rank: sql<number | null>`max(${agentPinnedFiles.rank})` })
+        .from(agentPinnedFiles)
+        .where(mine)
+        .get()
+      const rank = (last?.rank ?? 0) + 1
+      tx.insert(agentPinnedFiles).values({ userId, agentId, path, inside, rank, createdAt: new Date() }).run()
+      return true
+    })
+  },
+
+  /** Unpin `path`. Returns whether it was pinned. */
+  remove(userId: string, agentId: string, path: string): boolean {
+    return (
+      getDb()
+        .delete(agentPinnedFiles)
+        .where(
+          and(
+            eq(agentPinnedFiles.userId, userId),
+            eq(agentPinnedFiles.agentId, agentId),
+            eq(agentPinnedFiles.path, path)
+          )
+        )
+        .run().changes > 0
+    )
+  },
+
+  /** Drag reorder: `rank` is a value between the new neighbours. False when `path` is not pinned. */
+  move(userId: string, agentId: string, path: string, rank: number): boolean {
+    return (
+      getDb()
+        .update(agentPinnedFiles)
+        .set({ rank })
+        .where(
+          and(
+            eq(agentPinnedFiles.userId, userId),
+            eq(agentPinnedFiles.agentId, agentId),
+            eq(agentPinnedFiles.path, path)
+          )
+        )
+        .run().changes > 0
+    )
+  },
+
+  /**
+   * Drop a deleted agent's pins in every profile. Only for agents that are
+   * really gone: a remote row sync drops may come back with the same id.
+   */
+  deleteForAgent(agentId: string): void {
+    getDb().delete(agentPinnedFiles).where(eq(agentPinnedFiles.agentId, agentId)).run()
   }
 }
 

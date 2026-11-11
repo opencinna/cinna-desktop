@@ -49,6 +49,34 @@ export function displayPathFor(real: string, realAgentDir: string, realHome: str
 }
 
 /**
+ * Whether a path must not be touched for an agent: it sits in a folder behind
+ * a macOS privacy prompt (`isGuarded`) and the agent folder is not inside that
+ * same guarded folder. Lexical only — deciding it touches nothing.
+ */
+export function guardedProbeRule(
+  agentDir: string,
+  realAgentDir: string,
+  isGuarded: (path: string) => boolean,
+  paths: PathCanonicalizer
+): (path: string) => boolean {
+  /** The guarded folder a path sits in (the outermost guarded ancestor), or null. */
+  const guardedRootOf = (path: string): string | null => {
+    let current = paths.lexical(path)
+    if (!isGuarded(current)) return null
+    for (;;) {
+      const parent = dirname(current)
+      if (parent === current || !isGuarded(parent)) return current
+      current = parent
+    }
+  }
+  const agentSpellings = [paths.lexical(resolve(agentDir)), paths.lexical(realAgentDir)]
+  return (path: string): boolean => {
+    const root = guardedRootOf(path)
+    return root !== null && !agentSpellings.some((dir) => isWithin(root, dir))
+  }
+}
+
+/**
  * Which inline code spans and markdown link `href`s name a real file or
  * folder, for one agent.
  *
@@ -98,21 +126,7 @@ export async function resolveFileRefs(
   }
   const realHome = await paths.realpath(home).catch(() => resolve(home))
 
-  /** The guarded folder a path sits in (the outermost guarded ancestor), or null. */
-  const guardedRootOf = (path: string): string | null => {
-    let current = paths.lexical(path)
-    if (!options.isGuarded(current)) return null
-    for (;;) {
-      const parent = dirname(current)
-      if (parent === current || !options.isGuarded(parent)) return current
-      current = parent
-    }
-  }
-  const agentSpellings = [paths.lexical(resolve(agentDir)), paths.lexical(realAgentDir)]
-  const offLimits = (path: string): boolean => {
-    const root = guardedRootOf(path)
-    return root !== null && !agentSpellings.some((dir) => isWithin(root, dir))
-  }
+  const offLimits = guardedProbeRule(agentDir, realAgentDir, options.isGuarded, paths)
 
   // One stat per distinct path per call: the base heuristic retries the same
   // joins across candidates.

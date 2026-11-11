@@ -1,13 +1,16 @@
 import { BrowserWindow } from 'electron'
 import { userActivation } from '../auth/activation'
 import { agentFileService, nativeConsentPrompt } from '../host/desktop/agentFiles'
+import { agentPinnedFileService } from '../services/agentFiles/agentPinnedFiles'
 import { ipcHandle } from './_wrap'
 import type {
   AgentFileActionResult,
   AuthorizeAgentFileResult,
+  ListPinnedAgentFilesResult,
   ReadAgentFilePreviewResult,
   ReadAgentFileTextResult,
-  ResolveAgentFileRefsResult
+  ResolveAgentFileRefsResult,
+  SetPinnedAgentFileResult
 } from '../../shared/agentFiles'
 
 /**
@@ -47,6 +50,23 @@ export function registerAgentFileHandlers(): void {
   ipcHandle('agent-files:open-in-browser', (_event, data: unknown): Promise<AgentFileActionResult> => {
     userActivation.requireActivated()
     return agentFileService.openInBrowser(data)
+  })
+
+  // Pins belong to the active profile (the service reads its scope) and to a
+  // folder agent main locates itself; the renderer names only the agent and path.
+  ipcHandle('agent-files:pins-list', (_event, data: unknown): Promise<ListPinnedAgentFilesResult> => {
+    userActivation.requireActivated()
+    return agentPinnedFileService.list(data)
+  })
+
+  ipcHandle('agent-files:pins-set', (_event, data: unknown): Promise<SetPinnedAgentFileResult> => {
+    userActivation.requireActivated()
+    return agentPinnedFileService.set(data)
+  })
+
+  ipcHandle('agent-files:pins-move', (_event, data: unknown): Promise<AgentFileActionResult> => {
+    userActivation.requireActivated()
+    return agentPinnedFileService.move(data)
   })
 
   ipcHandle('agent-files:reveal',(_event, data: unknown): Promise<AgentFileActionResult> => {

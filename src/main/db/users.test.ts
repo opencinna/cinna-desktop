@@ -124,6 +124,15 @@ describe('deleteWithCascade', () => {
     expect([...inboxDismissalRepo.keys(KEEPER, 'skill_disconnected')]).toEqual(['b'])
   })
 
+  it('takes the profile’s pinned files with it, and leaves another profile’s alone', async () => {
+    const { agentPinnedFileRepo } = await import('./agents')
+    agentPinnedFileRepo.add(USER, 'folder:a', 'plan.md', true)
+    agentPinnedFileRepo.add(KEEPER, 'folder:a', 'main.py', true)
+    userRepo.deleteWithCascade(USER)
+    expect(count('agent_pinned_files')).toBe(1)
+    expect(agentPinnedFileRepo.list(KEEPER, 'folder:a').map((row) => row.path)).toEqual(['main.py'])
+  })
+
   it('leaves referential integrity intact afterwards', () => {
     seedTask(USER, 't-1')
     userRepo.deleteWithCascade(USER)

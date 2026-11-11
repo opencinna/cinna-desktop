@@ -55,7 +55,8 @@ vi.mock('../db/agents', () => ({
   },
   agentOverrideRepo: { listForUser: () => db.overrides, set: db.overrideSet },
   agentShortcutRepo: { deleteForAgent: () => {} },
-  agentColorRepo: { deleteForAgent: () => {} }
+  agentColorRepo: { deleteForAgent: () => {} },
+  agentPinnedFileRepo: { deleteForAgent: () => {} }
 }))
 
 const readiness = vi.hoisted(() => ({

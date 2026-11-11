@@ -24,6 +24,7 @@ import { migrateA2aSessions } from './a2a-sessions'
 import { migrateAgentOverrides } from './agent-overrides'
 import { migrateAgentShortcuts } from './agent-shortcuts'
 import { migrateAgentColors } from './agent-colors'
+import { migrateAgentPinnedFiles } from './agent-pinned-files'
 import { migrateAgentMcpProviders } from './agent-mcp-providers'
 import { migrateAccountConfig } from './account-config'
 import { migrateUsers, migrateUserIdColumns } from './users'
@@ -104,6 +105,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateAgentOverrides(sqlite)
   migrateAgentShortcuts(sqlite)
   migrateAgentColors(sqlite)
+  // Per-profile pinned files of an agent; creation only, no FK, no DML.
+  migrateAgentPinnedFiles(sqlite)
   // Folder-agent MCP addons reference `agents` and `mcp_providers`; creation only.
   migrateAgentMcpProviders(sqlite)
   migrateA2aSessions(sqlite)
