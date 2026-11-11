@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react'
-import { Globe, Loader2, Plus, Users } from 'lucide-react'
+import { Globe, Plus, Users } from 'lucide-react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import type {
   AgentPeopleDto,
@@ -30,7 +30,7 @@ import {
   ManagedListSpacer,
   type ManagedListPickerOption
 } from '../../../ui/ManagedList'
-import { ShareWithPersonDialog } from './ShareDialogs'
+import { MakePublicButton, ShareWithPersonDialog } from './ShareDialogs'
 
 /**
  * Who has access to a catalog item — a shared desktop agent's People
@@ -250,23 +250,15 @@ export function PeopleSection({
         editable ? (
           <div className="flex items-center gap-2">
             {offerEveryone && (
-              <SettingsButton
+              <MakePublicButton
                 onClick={() => {
                   setConfirmingKey(null)
                   setAddingEveryone(true)
                   save([...asInput(list), { principal: { kind: 'everyone' }, access: 'use' }], 'everyone')
                 }}
                 disabled={pending}
-                aria-busy={pending && addingEveryone}
-              >
-                {/* The spinner takes the globe's place: the label does not move. */}
-                {pending && addingEveryone ? (
-                  <Loader2 size={13} className="animate-spin" aria-hidden="true" />
-                ) : (
-                  <Globe size={13} aria-hidden="true" />
-                )}
-                {SHARE_UI_TEXT.shareWithEveryone}
-              </SettingsButton>
+                busy={pending && addingEveryone}
+              />
             )}
             <SettingsButton
               onClick={() => {

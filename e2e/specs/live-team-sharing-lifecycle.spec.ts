@@ -122,7 +122,7 @@ test('A’s Remove sharing with delete is refused while B holds it; after B remo
     await section(a, 'Remove sharing').getByRole('button', { name: 'Remove sharing…', exact: true }).click()
     const dialog = a.page.getByRole('dialog', { name: 'Remove sharing' })
     await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
-    await dialog.getByRole('checkbox', { name: 'Also delete it from the catalog — teammates can no longer get it' }).check()
+    await dialog.getByRole('switch', { name: 'Also delete it from the catalog — teammates can no longer get it' }).click()
     await dialog.getByRole('button', { name: 'Remove sharing', exact: true }).click()
     return dialog
   }

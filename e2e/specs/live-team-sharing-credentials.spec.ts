@@ -283,7 +283,7 @@ test('Use the team’s version keeps this computer’s .env and attachments', as
   await b.page.getByRole('dialog', { name: 'Share changes' }).getByRole('button', { name: 'Bring together', exact: true }).click()
   const conflict = b.page.getByRole('dialog', { name: 'The team changed this agent too' })
   await expect(conflict).toBeVisible({ timeout: 60_000 })
-  await conflict.getByRole('button', { name: 'Use the team’s version (keep mine as a copy)', exact: true }).click()
+  await conflict.getByRole('button', { name: 'Use the team’s version', exact: true }).click()
   await expect(conflict).toHaveCount(0, { timeout: 60_000 })
 
   const after = await findAgent(b, name)

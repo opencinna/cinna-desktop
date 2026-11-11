@@ -9,7 +9,7 @@ import { autoAttachedKey, useFinishSetupStore } from '../../../stores/finishSetu
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { CredentialRow } from '../../settings/CredentialRow'
 import { credentialHealth, credentialOwnership } from '../../settings/credentialPresentation'
-import { CANCEL, DialogShell, FIELD_BASE, PRIMARY, SECONDARY } from './sharing/ShareDialogs'
+import { CANCEL, DIALOG_TEXT, DialogFooter, DialogShell, FIELD_BASE, PRIMARY, SECONDARY } from './sharing/ShareDialogs'
 
 /**
  * Finish setting up a folder agent that arrived without its credentials — a
@@ -293,8 +293,8 @@ function StatusMark({ status }: { status: FinishSetupStatus }): React.JSX.Elemen
       ? 'text-[var(--color-severity-warning-text)]'
       : 'text-[var(--color-text-muted)]'
   return (
-    <span className={`flex shrink-0 items-center gap-1 text-[11px] ${tone}`}>
-      <Icon size={12} aria-hidden="true" />
+    <span className={`flex shrink-0 items-center gap-1 text-[13px] ${tone}`}>
+      <Icon size={14} aria-hidden="true" />
       {status}
     </span>
   )
@@ -359,13 +359,13 @@ export function FinishSetupDialog({
       width="w-[36rem]"
       align="top"
     >
-      <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+      <p className={DIALOG_TEXT}>
         Credentials never travel with a shared agent. Connect each one here to run it on this computer.
       </p>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
         {setup.isLoading && (
-          <div className="flex h-5 items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
-            <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+          <div className="flex h-[1lh] items-center gap-1.5 text-[13px] text-[var(--color-text-muted)]">
+            <Loader2 size={13} className="animate-spin" aria-hidden="true" />
             Reading this agent’s credentials…
           </div>
         )}
@@ -388,7 +388,7 @@ export function FinishSetupDialog({
         ))}
         {skillSlots.length > 0 && (
           <div className="space-y-2 pt-1">
-            <div className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+            <div className={DIALOG_TEXT}>
               <span className="font-medium text-[var(--color-text)]">Skills</span> find these by Service URI. A missing one does not stop the agent; the skill fails when it needs it.
             </div>
             {skillSlots.map((skillSlot) => (
@@ -413,28 +413,15 @@ export function FinishSetupDialog({
           </div>
         )}
       </div>
-      {/* Two lines are reserved beside the buttons, so a refusal never grows the dialog or moves them. */}
-      <div className="flex h-9 shrink-0 items-center gap-3">
-        <div className="min-w-0 flex-1">
-          {shownError ? (
-            <p role="alert" title={shownError} className="line-clamp-2 text-[11px] leading-[1.125rem] text-[var(--color-danger)]">
-              {shownError}
-            </p>
-          ) : notice ? (
-            <p role="status" title={notice} className="line-clamp-2 text-[11px] leading-[1.125rem] text-[var(--color-text-secondary)]">
-              {notice}
-            </p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <button ref={laterRef} type="button" className={CANCEL} disabled={busy} onClick={onLater}>
-            Finish later
-          </button>
-          <button type="button" className={PRIMARY} disabled={busy} onClick={() => onDone(allKeys)}>
-            {finishing ? <Loader2 size={13} className="animate-spin" aria-label="Saving" /> : 'Done'}
-          </button>
-        </div>
-      </div>
+      {/* The shared footer: a refusal or notice goes under the buttons, and the scrolling list above gives up the room. */}
+      <DialogFooter error={shownError} notice={notice}>
+        <button ref={laterRef} type="button" className={CANCEL} disabled={busy} onClick={onLater}>
+          Finish later
+        </button>
+        <button type="button" className={PRIMARY} disabled={busy} onClick={() => onDone(allKeys)}>
+          {finishing ? <Loader2 size={14} className="animate-spin" aria-label="Saving" /> : 'Done'}
+        </button>
+      </DialogFooter>
     </DialogShell>
   )
 }
@@ -447,7 +434,7 @@ export function FinishSetupDialog({
 function KeyName({ name, prefix }: { name: string; prefix: string | null }): React.JSX.Element {
   const split = prefix && name.startsWith(prefix) && name.length > prefix.length
   return (
-    <span className="flex w-44 shrink-0 font-mono text-[11px]" title={name}>
+    <span className="flex w-48 shrink-0 font-mono text-[12px]" title={name}>
       {split ? (
         <>
           <span className="min-w-0 truncate text-[var(--color-text-muted)]">{prefix}</span>
@@ -543,21 +530,20 @@ function SlotRow({
       data-testid={testId ?? `finish-setup-slot-${slot.name}`}
       className="space-y-1.5 rounded-md border border-[var(--color-border)] px-3 py-2"
     >
-      <div className="flex h-5 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-text)]" title={slot.name}>
+      <div className="flex h-6 items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-[var(--color-text)]" title={slot.name}>
           {slot.name}
         </span>
         <StatusMark status={status} />
       </div>
       {detail && (
-        <div className="h-4 truncate text-[11px] leading-4 text-[var(--color-text-muted)]" title={detail}>
+        <div className="h-5 truncate text-[13px] leading-5 text-[var(--color-text-muted)]" title={detail}>
           {detail}
         </div>
       )}
 
       {slot.attached && (
         <CredentialRow
-          compact
           name={slot.attached.credential.name}
           type={slot.attached.credential.type}
           serviceUri={slot.attached.credential.serviceUri}
@@ -568,7 +554,6 @@ function SlotRow({
 
       {slot.options.map((option) => (
         <CredentialRow
-          compact
           key={optionKey(option)}
           name={option.credential.name}
           type={option.credential.type}
@@ -584,7 +569,7 @@ function SlotRow({
               onClick={() => onUse(option)}
             >
               {attachingKey === optionKey(option) ? (
-                <Loader2 size={12} className="animate-spin" aria-label="Connecting" />
+                <Loader2 size={13} className="animate-spin" aria-label="Connecting" />
               ) : (
                 'Use this'
               )}
@@ -594,14 +579,14 @@ function SlotRow({
       ))}
 
       {(keys.length > 0 || fieldless) && slot.options.length > 0 && (
-        <div className="h-5 text-[11px] leading-5 text-[var(--color-text-muted)]">or enter it on this computer</div>
+        <div className="h-5 text-[13px] leading-5 text-[var(--color-text-muted)]">or enter it on this computer</div>
       )}
 
       {keys.length > 0 && (
         <>
           {keys.map((key) =>
             editable.includes(key) ? (
-              <div key={key} className="flex h-8 items-center gap-2">
+              <div key={key} className="flex h-9 items-center gap-2">
                 <label className="flex min-w-0 flex-1 items-center gap-2">
                   <KeyName name={key} prefix={slot.envPrefix} />
                   <input
@@ -635,10 +620,10 @@ function SlotRow({
                 )}
               </div>
             ) : (
-              <div key={key} className="flex h-8 items-center gap-2">
+              <div key={key} className="flex h-9 items-center gap-2">
                 <KeyName name={key} prefix={slot.envPrefix} />
-                <span className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-[var(--color-text-secondary)]">
-                  <CheckCircle2 size={12} aria-hidden="true" className="text-[var(--color-severity-ok-text)]" />
+                <span className="flex min-w-0 flex-1 items-center gap-1 text-[13px] text-[var(--color-text-secondary)]">
+                  <CheckCircle2 size={14} aria-hidden="true" className="text-[var(--color-severity-ok-text)]" />
                   Set
                 </span>
                 <button
@@ -666,7 +651,7 @@ function SlotRow({
                   if (!busy) save()
                 }}
               >
-                {saving ? <Loader2 size={12} className="animate-spin" aria-label="Saving" /> : 'Save'}
+                {saving ? <Loader2 size={13} className="animate-spin" aria-label="Saving" /> : 'Save'}
               </button>
             </div>
           )}
@@ -674,8 +659,8 @@ function SlotRow({
       )}
 
       {fieldless && (
-        <div className="flex h-8 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--color-text-secondary)]" title={`${slot.envPrefix}<FIELD>`}>
+        <div className="flex h-9 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-text-secondary)]" title={`${slot.envPrefix}<FIELD>`}>
             Set <code className="font-mono">{slot.envPrefix}…</code> names in credentials/.env
           </span>
           <button
@@ -690,7 +675,7 @@ function SlotRow({
       )}
 
       {slot.state === 'missing' && !slot.attached && slot.options.length === 0 && keys.length === 0 && !fieldless && (
-        <div className="h-5 truncate text-[11px] leading-5 text-[var(--color-text-muted)]" title={emptyNote}>
+        <div className="h-5 truncate text-[13px] leading-5 text-[var(--color-text-muted)]" title={emptyNote}>
           {emptyNote ?? 'None of your credentials fits it. Attach one on the Credentials tab.'}
         </div>
       )}

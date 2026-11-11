@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Info, Loader2 } from 'lucide-react'
-import { CANCEL, DialogShell, ErrorLine, FIELD_BASE, PRIMARY } from '../agents/local/sharing/ShareDialogs'
+import { CANCEL, DIALOG_LABEL, DialogShell, ErrorLine, FIELD_BASE, PRIMARY } from '../agents/local/sharing/ShareDialogs'
 import { SettingsInfoTip } from '../settings/SettingsLayout'
 import { AgentChip } from './AgentChip'
 import { useAgentColor } from '../../utils/agentColors'
@@ -106,8 +106,9 @@ export function ImprovementRequestDialog({
   }
 
   const colorOf = useAgentColor()
-  const label = 'block text-[11px] text-[var(--color-text-muted)] mb-1'
-  const infoLine = 'flex items-start gap-2 text-xs leading-relaxed'
+  // The sharing dialogs' scale (Settings): labels and body at 13.
+  const label = `${DIALOG_LABEL} mb-1`
+  const infoLine = 'flex items-start gap-2 text-[13px] leading-relaxed'
   const agentName = context?.targetAgentName ?? target?.agentName ?? ''
   const since = target ? sinceLabel(target, now) : null
   const recipient = context?.recipientDisplay ?? 'the bundle’s publisher'
@@ -121,7 +122,7 @@ export function ImprovementRequestDialog({
         }}
       >
         <div>
-          <div className="flex h-7 items-center">
+          <div className="flex h-[2.125rem] items-center">
             {targets.length > 1 ? (
               <select
                 aria-label="Agent session"
@@ -131,7 +132,7 @@ export function ImprovementRequestDialog({
                   setAgentId(event.target.value)
                   onTargetChange?.()
                 }}
-                className={`w-full py-1 ${FIELD_BASE}`}
+                className={`w-full ${FIELD_BASE}`}
               >
                 {targets.map((t) => (
                   <option key={t.agentId} value={t.agentId}>{targetLabel(t, now)}</option>
@@ -140,7 +141,7 @@ export function ImprovementRequestDialog({
             ) : (
               <div className="flex min-w-0 items-center gap-2" data-improvement-agent>
                 {target && <AgentChip name={target.agentName} colors={colorOf(target.agentId)} label={`Agent "${target.agentName}"`} />}
-                {since && <span className="truncate text-[11px] text-[var(--color-text-muted)]">{since}</span>}
+                {since && <span className="truncate text-[12px] text-[var(--color-text-muted)]">{since}</span>}
               </div>
             )}
           </div>
@@ -215,7 +216,7 @@ export function ImprovementRequestDialog({
         </div>
 
         <div className="flex items-center gap-1.5">
-          <label className="flex items-center gap-2 text-xs text-[var(--color-text)]">
+          <label className="flex items-center gap-2 text-[13px] text-[var(--color-text)]">
             <input
               type="checkbox"
               checked={includeMemory}
@@ -235,7 +236,7 @@ export function ImprovementRequestDialog({
 
         <div className="flex items-center justify-end gap-2 pt-1">
           {unsendable && (
-            <span data-improvement-unsendable className="text-[11px] text-[var(--color-text-muted)]">
+            <span data-improvement-unsendable className="text-[13px] text-[var(--color-text-muted)]">
               Can’t be sent
             </span>
           )}

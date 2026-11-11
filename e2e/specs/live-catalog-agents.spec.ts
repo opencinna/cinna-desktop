@@ -104,7 +104,7 @@ test('§7 1–3, 10: A shares report-bot, B sees one catalog, Gets it and runs i
     await a.page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab', { name: 'Sharing', exact: true }).click()
     await section(a, 'Remove sharing').getByRole('button', { name: 'Remove sharing…', exact: true }).click()
     const dialog = a.page.getByRole('dialog', { name: 'Remove sharing' })
-    await dialog.getByRole('checkbox', { name: 'Also delete it from the catalog — teammates can no longer get it' }).check()
+    await dialog.getByRole('switch', { name: 'Also delete it from the catalog — teammates can no longer get it' }).click()
     await dialog.getByRole('button', { name: 'Remove sharing', exact: true }).click()
     await expect(dialog.getByRole('alert')).toHaveText('1 person uses this. It can be removed once nobody does.', { timeout: 60_000 })
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()

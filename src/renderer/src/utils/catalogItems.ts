@@ -175,7 +175,6 @@ export const SKILL_SHARE_TEXT = {
   noteLabel: 'Note (optional)',
   notePlaceholder: 'What this version does or changes',
   whoCanUse: 'Who can use it',
-  everyone: 'Everyone on this server can use it',
   /** The people list while Everyone is ticked and no one is named. */
   noOneNamed: 'No one named — add people who may change it.',
   shareButton: 'Publish',

@@ -170,7 +170,7 @@ test('T4.1 / T4.7 A provides their own credential for the slot: B’s Add to age
     await skillRow(a, skill, 'Authored').getByRole('button', { name: `Publish a new version of ${skill}…`, exact: true }).click()
     const dialog = a.page.getByRole('dialog', { name: `Publish a new version of ${skill}` })
     await expect(dialog.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled({ timeout: 30_000 })
-    await expect(dialog.getByRole('combobox', { name: `What people need for ${slot}`, exact: true }).locator('option:checked')).toHaveText(provided.name)
+    await expect(dialog.getByRole('button', { name: `What people need for ${slot}`, exact: true })).toHaveText(provided.name)
     await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 60_000 })
     await expect.poll(async () => (await skillItem(fixture, personA.token, skill))?.latest?.revision_number, { timeout: 20_000 }).toBe(2)

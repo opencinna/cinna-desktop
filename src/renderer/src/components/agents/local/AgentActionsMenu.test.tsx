@@ -238,7 +238,7 @@ describe('AgentActionsMenu — Share with the team', () => {
 })
 
 describe('AgentActionsMenu — Share with the team’s people', () => {
-  it('offers Everyone on this server above the people picker, unticked, and sends it with the people named', async () => {
+  it('offers Make public beside Who can use it, off by default; on, Everyone leads the list and is sent, its X turns it off', async () => {
     library = LIBRARY
     const draft = vi.fn().mockResolvedValue({ success: true, value: { name: 'Alpha', description: '' } })
     ;(window as unknown as { api: unknown }).api = { sharing: { shareWithTeamDraft: draft } }
@@ -246,13 +246,35 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: SHARE_UI_TEXT.shareWithTeam }))
     const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithTeamTitle })
     await act(async () => {})
-    const box = within(dialog).getByRole('checkbox', { name: SHARE_UI_TEXT.everyoneCanUse }) as HTMLInputElement
-    expect(box.checked).toBe(false)
-    // Placed as in the skill Share dialog: before the people search.
+    const makePublic = (): HTMLElement | null => within(dialog).queryByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone })
+    const chosen = dialog.querySelector('[data-chosen-people]') as HTMLElement
+    const surface = chosen.querySelector('.managed-list') as HTMLElement
+    // Off: the list says only the sharer has it, and has no Everyone row.
+    expect(chosen.textContent).toBe(SHARE_UI_TEXT.peopleOnlyMe)
+    // Placed as in the skill Share dialog: beside the heading, before the people search.
     const search = within(dialog).getByLabelText(SHARE_UI_TEXT.peopleSearchLabel, { selector: 'input' })
-    expect(box.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    fireEvent.click(box)
-    expect(dialog.querySelector('[data-chosen-people]')?.textContent).toBe(SHARE_UI_TEXT.peopleNoOneNamed)
+    expect(makePublic()!.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(makePublic()!.closest('[data-who-can-use-heading]')!.textContent).toContain(SHARE_UI_TEXT.whoCanUse)
+    const height = surface.className
+    // Pressed from the keyboard, so it has the focus as it goes.
+    makePublic()!.focus()
+    fireEvent.click(makePublic()!)
+    // On: Everyone leads the list, drawn as People draws it, and the button is gone while it is on.
+    const everyone = managedRow(chosen, SHARE_UI_TEXT.everyone)
+    expect(everyone.querySelector('svg.lucide-globe')).not.toBeNull()
+    expect(everyone.textContent).toContain(SHARE_ACCESS_TEXT.use)
+    expect(chosen.textContent).toContain(SHARE_UI_TEXT.peopleNoOneNamed)
+    expect(makePublic()).toBeNull()
+    expect(surface.className).toBe(height)
+    // The pressed button is gone: focus goes to the X that takes Everyone off again, not to the page.
+    const removeEveryone = within(everyone).getByRole('button', { name: SHARE_UI_TEXT.removeFromList(SHARE_UI_TEXT.everyone) })
+    expect(document.activeElement).toBe(removeEveryone)
+    // Nothing is sent yet: its X turns it off at once, and Make public is back, with the focus.
+    fireEvent.click(removeEveryone)
+    expect(() => managedRow(chosen, SHARE_UI_TEXT.everyone)).toThrow()
+    expect(chosen.textContent).toBe(SHARE_UI_TEXT.peopleOnlyMe)
+    expect(document.activeElement).toBe(makePublic())
+    fireEvent.click(makePublic()!)
     fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.share }))
     expect(shareWithTeam).toHaveBeenCalledWith(
       { agentId: 'folder:alpha', input: { name: 'Alpha', people: [], everyone: true } },
@@ -269,7 +291,9 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
         success: true,
         value: [
           { userId: 'u2', email: 'bob@x.test', name: 'Bob' },
-          { userId: 'u3', email: 'cy@x.test', name: 'Cy' }
+          { userId: 'u3', email: 'cy@x.test', name: 'Cy' },
+          // An email that would only repeat the name is not shown twice.
+          { userId: 'u4', email: 'Dee', name: 'Dee' }
         ]
       })
       ;(window as unknown as { api: unknown }).api = { sharing: { shareWithTeamDraft: draft, searchPeople } }
@@ -296,7 +320,12 @@ describe('AgentActionsMenu — Share with the team’s people', () => {
       // Outside the dialog, so its scrolling body cannot cut the list off.
       expect(screen.getByRole('dialog').contains(results())).toBe(false)
       // A real press: mousedown first, which the dialog must not take for a press outside it.
-      fireEvent.mouseDown(screen.getByRole('option', { name: 'Bob <bob@x.test>' }))
+      // Each answer is drawn like the row it becomes: initials, name, muted email.
+      const option = screen.getByRole('option', { name: 'Bob <bob@x.test>' })
+      expect(option.textContent).toBe('BBobbob@x.test')
+      expect(within(option).getByText('bob@x.test').className).toContain('text-[var(--color-text-muted)]')
+      expect(screen.getByRole('option', { name: 'Dee' }).textContent).toBe('DDee')
+      fireEvent.mouseDown(option)
       expect(screen.queryByRole('dialog')).not.toBeNull()
       fireEvent.click(screen.getByRole('option', { name: 'Bob <bob@x.test>' }))
       // A pick closes the dropdown, empties the field for the next person, and

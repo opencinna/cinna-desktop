@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { repoRoot } from '../playwright.config'
 import type { Locator } from '@playwright/test'
 import type { CinnaApp } from './app'
-import { expectAccess, removeAccess } from './managedList'
+import { ACCESS_LABEL, expectAccess, removeAccess } from './managedList'
 import { installFakeAcpEngine, type FakeAcpEngine } from './fakeAcpEngine'
 import {
   expect,
@@ -319,9 +319,15 @@ export async function shareSkill(
     await dialog.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
     await dialog.page().getByRole('option', { name: `${person.name} <${person.email}>` }).click()
   }
-  if (input.everyone) await dialog.getByRole('checkbox', { name: 'Everyone on this server can use it', exact: true }).check()
+  if (input.everyone) {
+    // Make public, beside Who can use it, puts Everyone at the top of the list.
+    await dialog.getByRole('button', { name: 'Make public', exact: true }).click()
+    await expect(dialog.locator('[data-chosen-people] [data-managed-row]').first()).toContainText('Everyone on this server')
+  }
   for (const [slot, label] of Object.entries(input.provide ?? {})) {
-    await dialog.getByRole('combobox', { name: `What people need for ${slot}`, exact: true }).selectOption({ label })
+    // The slot's row picker opens a menu of the same name (portaled to the page).
+    await dialog.getByRole('button', { name: `What people need for ${slot}`, exact: true }).click()
+    await dialog.page().getByRole('menu', { name: `What people need for ${slot}`, exact: true }).getByRole('menuitemradio', { name: label, exact: true }).click()
   }
   if (input.note) await dialog.getByRole('textbox', { name: 'Note (optional)' }).fill(input.note)
   await dialog.getByRole('button', { name: 'Publish', exact: true }).click()
@@ -827,7 +833,9 @@ export async function addToWhoCanUse(
   const share = dialog.page().getByRole('dialog', { name: 'Share with a person', exact: true })
   await share.getByRole('combobox', { name: 'Find a person' }).fill(person.name)
   await dialog.page().getByRole('option', { name: `${person.name} <${person.email}>` }).click()
-  await share.getByRole('combobox', { name: 'Access', exact: true }).selectOption(access)
+  // Access is a menu (People's access picker drawn as a field), portaled to the page.
+  await share.getByRole('button', { name: 'Access', exact: true }).click()
+  await dialog.page().getByRole('menu', { name: 'Access', exact: true }).getByRole('menuitemradio', { name: ACCESS_LABEL[access], exact: true }).click()
   await beforeAdd?.()
   await share.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(share).toHaveCount(0, { timeout: 30_000 })

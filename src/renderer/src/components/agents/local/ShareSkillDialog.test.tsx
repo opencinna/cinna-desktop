@@ -99,6 +99,33 @@ async function openDialog(name = 'Publish erp-lookup…', title = 'Publish erp-l
   return screen.findByRole('dialog', { name: title })
 }
 
+const NEEDS = 'What people need for erp.example.com'
+
+/** The slot's picker: the row's menu button, named for the slot. */
+function needsPicker(dialog: HTMLElement): HTMLButtonElement {
+  return within(dialog).getByRole('button', { name: NEEDS }) as HTMLButtonElement
+}
+
+/** Open the slot's picker and read what it offers, then close it again. */
+function needsOptions(dialog: HTMLElement): string[] {
+  fireEvent.click(needsPicker(dialog))
+  const menu = screen.getByRole('menu', { name: NEEDS })
+  const options = within(menu).getAllByRole('menuitemradio').map((item) => item.textContent)
+  fireEvent.keyDown(menu, { key: 'Escape' })
+  return options
+}
+
+/** Pick `label` in the slot's picker. */
+function pickNeed(dialog: HTMLElement, label: string): void {
+  fireEvent.click(needsPicker(dialog))
+  fireEvent.click(within(screen.getByRole('menu', { name: NEEDS })).getByRole('menuitemradio', { name: label }))
+}
+
+/** Make public, beside Who can use it. */
+function makePublic(dialog: HTMLElement): HTMLButtonElement {
+  return within(dialog).getByRole('button', { name: 'Make public' }) as HTMLButtonElement
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   // A queued answer a test left unused must not reach the next one.
@@ -133,7 +160,7 @@ describe('ShareSkillDialog', () => {
     const dialog = await openDialog()
     expect(preview).toHaveBeenCalledWith('folder:a', 'erp-lookup')
     expect(within(dialog).getAllByText('Loading…')).toHaveLength(2)
-    expect((within(dialog).getByRole('combobox', { name: 'What people need for erp.example.com' }) as HTMLSelectElement).disabled).toBe(true)
+    expect(needsPicker(dialog).disabled).toBe(true)
     expect((within(dialog).getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -151,14 +178,18 @@ describe('ShareSkillDialog', () => {
     const dialog = await openDialog()
     await within(dialog).findByText('Version 1 (1.0.0)')
     expect(within(dialog).getByText('test.cinna.skill.erp-lookup').tagName).toBe('CODE')
-    const select = within(dialog).getByRole('combobox', { name: 'What people need for erp.example.com' }) as HTMLSelectElement
-    expect(select.disabled).toBe(false)
-    expect([...select.options].map((option) => option.textContent)).toEqual(['Each person connects their own', 'ERP token'])
-    expect(select.value).toBe('')
+    // A row per slot, its title the slot in mono, its choice the row's picker.
+    const needs = within(dialog).getByRole('list', { name: 'What people need' })
+    expect(within(needs).getByText('erp.example.com').className).toContain('font-mono')
+    expect(needs.contains(needsPicker(dialog))).toBe(true)
+    expect(needsPicker(dialog).disabled).toBe(false)
+    expect(needsOptions(dialog)).toEqual(['Each person connects their own', 'ERP token'])
+    expect(needsPicker(dialog).textContent).toBe('Each person connects their own')
     expect(within(dialog).queryByText(/not kept/)).toBeNull()
-    fireEvent.change(select, { target: { value: 'cred-1' } })
+    pickNeed(dialog, 'ERP token')
+    expect(needsPicker(dialog).textContent).toBe('ERP token')
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Note (optional)' }), { target: { value: 'First cut' } })
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Everyone on this server can use it' }))
+    fireEvent.click(makePublic(dialog))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publish' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(publish).toHaveBeenCalledWith({
@@ -184,7 +215,7 @@ describe('ShareSkillDialog', () => {
     dialog = await openDialog('Publish a new version of erp-lookup…', 'Publish a new version of erp-lookup')
     expect(within(dialog).getByText('People who can use it keep access.')).toBeTruthy()
     expect(within(dialog).queryByText('Who can use it')).toBeNull()
-    expect(within(dialog).queryByRole('checkbox')).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Make public' })).toBeNull()
     await within(dialog).findByText('Version 1 (1.0.0)')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publish' }))
     await waitFor(() => expect(publish).toHaveBeenCalled())
@@ -199,7 +230,7 @@ describe('ShareSkillDialog', () => {
     renderTab([skill()])
     const dialog = await openDialog()
     // Until the preview says, who can use it is not yet a choice.
-    expect((within(dialog).getByRole('checkbox', { name: 'Everyone on this server can use it' }) as HTMLInputElement).disabled).toBe(true)
+    expect(makePublic(dialog).disabled).toBe(true)
     expect((within(dialog).getByLabelText('Find a person', { selector: 'input' }) as HTMLInputElement).disabled).toBe(true)
     answer(later())
     expect(await screen.findByRole('dialog', { name: 'Publish a new version of erp-lookup' })).toBeTruthy()
@@ -215,9 +246,8 @@ describe('ShareSkillDialog', () => {
     const view = renderTab([skill({ shared: { packageUuid: 'u', packageId: 'p', revisionNumber: 3 } })])
     let dialog = await openDialog('Publish a new version of erp-lookup…', 'Publish a new version of erp-lookup')
     await within(dialog).findByText('Version 4 (1.0.0)')
-    const select = within(dialog).getByRole('combobox', { name: 'What people need for erp.example.com' }) as HTMLSelectElement
-    expect(select.value).toBe('cred-1')
-    expect(select.title).toBe('ERP token')
+    expect(needsPicker(dialog).textContent).toBe('ERP token')
+    expect(needsPicker(dialog).title).toBe('ERP token')
     expect(within(dialog).queryByText(/not kept/)).toBeNull()
     view.unmount()
 
@@ -232,11 +262,10 @@ describe('ShareSkillDialog', () => {
     renderTab([skill({ shared: { packageUuid: 'u', packageId: 'p', revisionNumber: 3 } })])
     dialog = await openDialog('Publish a new version of erp-lookup…', 'Publish a new version of erp-lookup')
     expect(await within(dialog).findByText('Credentials the first publisher provided are not kept — each person connects their own.')).toBeTruthy()
-    const only = within(dialog).getByRole('combobox', { name: 'What people need for erp.example.com' }) as HTMLSelectElement
-    expect([...only.options].map((option) => option.textContent)).toEqual(['Each person connects their own'])
+    expect(needsOptions(dialog)).toEqual(['Each person connects their own'])
   })
 
-  it('strikes a person at Can use while Everyone is ticked, in place, and does not send them', async () => {
+  it('strikes a person at Can use while Everyone is on, in place, and does not send them', async () => {
     publish.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 1, version: '1.0.0', packageUuid: 'u', packageId: 'p', recorded: true })
     renderTab([skill()])
     const dialog = await openDialog()
@@ -249,7 +278,12 @@ describe('ShareSkillDialog', () => {
     expect(within(list).getByText('bob@x.test')).toBeTruthy()
     expect(within(dialog).queryByText('Everyone can use it — Can use is not sent')).toBeNull()
 
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Everyone on this server can use it' }))
+    const height = list.parentElement!.className
+    fireEvent.click(makePublic(dialog))
+    // Everyone is the list's first row, the button gone while it is on, and the list's height fixed.
+    expect(within(list).getAllByRole('listitem')[0].textContent).toContain('Everyone on this server')
+    expect(within(dialog).queryByRole('button', { name: 'Make public' })).toBeNull()
+    expect(list.parentElement!.className).toBe(height)
     const name = within(list).getByText('Bob')
     expect(name.className).toContain('line-through')
     expect(name.getAttribute('title')).toBe('Bob <bob@x.test>: everyone can already use it, so Can use is not sent')
@@ -257,6 +291,19 @@ describe('ShareSkillDialog', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publish' }))
     await waitFor(() => expect(publish).toHaveBeenCalled())
     expect(publish.mock.calls[0][0]).toMatchObject({ everyone: true, people: [{ userId: 'u-bob', access: 'use' }] })
+  })
+
+  it('hands the focus between Make public and Everyone’s X, each of which takes the other’s place', async () => {
+    renderTab([skill()])
+    const dialog = await openDialog()
+    await within(dialog).findByText('Version 1 (1.0.0)')
+    // Pressed from the keyboard: focused, then gone with Everyone on.
+    makePublic(dialog).focus()
+    fireEvent.click(makePublic(dialog))
+    const removeEveryone = within(dialog).getByRole('button', { name: 'Remove Everyone on this server from the list' })
+    expect(document.activeElement).toBe(removeEveryone)
+    fireEvent.click(removeEveryone)
+    expect(document.activeElement).toBe(makePublic(dialog))
   })
 
   it('pins its top and scrolls its fields between the heading and the buttons', async () => {
@@ -313,21 +360,35 @@ describe('ShareSkillDialog: Share as, for a skill someone else shares (co-mainta
     publish.mockResolvedValue({ ok: true, name: 'erp-lookup', revisionNumber: 3, version: '1.0.2', packageUuid: 'pkg-0', packageId: 'p', recorded: true })
     renderTab([skill()])
     const dialog = await openDialog()
-    const group = await within(dialog).findByRole('group', { name: 'Publish as' })
-    expect(within(group).getAllByRole('radio').map((radio) => [radio.parentElement!.textContent, (radio as HTMLInputElement).checked])).toEqual([
+    const group = await within(dialog).findByRole('radiogroup', { name: 'Publish as' })
+    expect(within(group).getAllByRole('radio').map((radio) => [radio.textContent, radio.getAttribute('aria-checked') === 'true'])).toEqual([
       ['New version of Ann’s erp-lookup', true],
       ['New version of Cy’s erp-lookup', false],
       ['A separate skill', false]
     ])
+    // Every row carries a radio mark in its lead, so the unpicked ones read as choices too (rule 11).
+    const marks = (): Array<string | null> =>
+      within(group).getAllByRole('radio').map((radio) => radio.querySelector('[data-radio-mark]')!.getAttribute('data-radio-mark'))
+    expect(marks()).toEqual(['checked', 'unchecked', 'unchecked'])
+    const sizes = within(group).getAllByRole('radio').map((radio) => radio.querySelector('[data-radio-mark]')!.className.match(/\bh-\d+ w-\d+\b/)![0])
+    expect(new Set(sizes).size).toBe(1)
     expect(within(dialog).getByText('Version 3')).toBeTruthy()
     expect(within(dialog).getByText('test.cinna.skill.erp-lookup.ann').tagName).toBe('CODE')
     // Who can use and the credential choices are not offered (left in place, hidden), a line says why.
-    expect(within(dialog).queryByRole('checkbox', { name: 'Everyone on this server can use it' })).toBeNull()
-    expect(within(dialog).queryByRole('combobox', { name: 'What people need for erp.example.com' })).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Make public' })).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: NEEDS })).toBeNull()
     expect(within(dialog).getByText('Who can use it stays as Ann set it.')).toBeTruthy()
-    expect(within(dialog).getByText('People who can use it keep access.')).toBeTruthy()
+    // No intro under Share as: that line says it, once.
+    expect(within(dialog).queryByText('People who can use it keep access.')).toBeNull()
 
     fireEvent.click(within(group).getByRole('radio', { name: 'New version of Cy’s erp-lookup' }))
+    expect(within(group).getByRole('radio', { name: 'New version of Cy’s erp-lookup' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(dialog).getByText('Version 4')).toBeTruthy()
+    // The arrow keys move the choice, as in a radio group.
+    fireEvent.keyDown(within(group).getByRole('radio', { name: 'New version of Cy’s erp-lookup' }), { key: 'ArrowUp' })
+    expect(within(group).getByRole('radio', { name: 'New version of Ann’s erp-lookup' }).getAttribute('aria-checked')).toBe('true')
+    expect(document.activeElement).toBe(within(group).getByRole('radio', { name: 'New version of Ann’s erp-lookup' }))
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
     expect(within(dialog).getByText('Version 4')).toBeTruthy()
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Note (optional)' }), { target: { value: 'From B' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publish' }))
@@ -350,8 +411,8 @@ describe('ShareSkillDialog: Share as, for a skill someone else shares (co-mainta
     fireEvent.click(await within(dialog).findByRole('radio', { name: 'A separate skill' }))
     expect(within(dialog).getByText('Version 1 (1.0.0)')).toBeTruthy()
     expect(within(dialog).getByText('test.cinna.skill.erp-lookup').tagName).toBe('CODE')
-    fireEvent.change(within(dialog).getByRole('combobox', { name: 'What people need for erp.example.com' }), { target: { value: 'cred-1' } })
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Everyone on this server can use it' }))
+    pickNeed(dialog, 'ERP token')
+    fireEvent.click(makePublic(dialog))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publish' }))
     await waitFor(() => expect(publish).toHaveBeenCalled())
     expect(publish.mock.calls[0][0]).toEqual({
@@ -369,7 +430,7 @@ describe('ShareSkillDialog: Share as, for a skill someone else shares (co-mainta
     preview.mockResolvedValue(withCandidates('Ann'))
     renderTab([skill()])
     const dialog = await openDialog()
-    await within(dialog).findByRole('group', { name: 'Publish as' })
+    await within(dialog).findByRole('radiogroup', { name: 'Publish as' })
     const body = dialog.querySelector('[data-share-skill-body]') as HTMLElement
     const note = within(dialog).getByRole('textbox', { name: 'Note (optional)' })
     const noteRow = note.closest('label') as HTMLElement
@@ -378,12 +439,12 @@ describe('ShareSkillDialog: Share as, for a skill someone else shares (co-mainta
       return rows.slice(0, rows.indexOf(noteRow) + 1)
     }
     const before = upToNote()
-    // Share as, the intro (one sentence swapped in one cell), the version and id, then the note.
-    expect(before[0]).toBe(within(dialog).getByRole('group', { name: 'Publish as' }))
-    expect(before).toHaveLength(4)
-    const swaps = [...dialog.querySelectorAll('[data-share-swap]')]
-    expect(swaps).toHaveLength(1)
-    expect(before[1]).toBe(swaps[0])
+    // Share as, the one meta line (version and id), then the note: no intro that would only repeat them.
+    expect(before[0]).toBe(dialog.querySelector('[data-share-as]'))
+    expect(before[0].contains(within(dialog).getByRole('radiogroup', { name: 'Publish as' }))).toBe(true)
+    expect(before).toHaveLength(3)
+    expect(before[1]).toBe(dialog.querySelector('[data-share-meta]'))
+    expect(before[1].contains(dialog.querySelector('[data-share-version]'))).toBe(true)
     // Below the note: what the next version keeps, as lines.
     expect(noteRow.nextElementSibling!.hasAttribute('data-share-keeps-access')).toBe(true)
     expect(body.lastElementChild!.hasAttribute('data-share-keeps-providers')).toBe(true)
@@ -395,8 +456,8 @@ describe('ShareSkillDialog: Share as, for a skill someone else shares (co-mainta
     after.forEach((element, index) => expect(element).toBe(before[index]))
     // Who can use and the credential choices appear below it.
     const below = [...body.children].slice(after.length)
-    expect(below.some((row) => within(row as HTMLElement).queryByRole('checkbox', { name: 'Everyone on this server can use it' }))).toBe(true)
-    expect(below.some((row) => within(row as HTMLElement).queryByRole('combobox', { name: 'What people need for erp.example.com' }))).toBe(true)
+    expect(below.some((row) => within(row as HTMLElement).queryByRole('button', { name: 'Make public' }))).toBe(true)
+    expect(below.some((row) => within(row as HTMLElement).queryByRole('button', { name: NEEDS }))).toBe(true)
     expect(dialog.querySelector('[data-share-keeps-access]')).toBeNull()
 
     fireEvent.click(within(dialog).getByRole('radio', { name: 'New version of Ann’s erp-lookup' }))
@@ -412,7 +473,7 @@ describe('ShareSkillDialog: Share as, for a skill someone else shares (co-mainta
     expect(note.disabled).toBe(true)
     expect(document.activeElement).not.toBe(note)
     answer(withCandidates('Ann'))
-    await within(dialog).findByRole('group', { name: 'Publish as' })
+    await within(dialog).findByRole('radiogroup', { name: 'Publish as' })
     await waitFor(() => expect(note.disabled).toBe(false))
     expect(document.activeElement).toBe(note)
   })
@@ -428,12 +489,12 @@ describe('ShareSkillDialog: Share as, for a skill someone else shares (co-mainta
     renderTab([skill()])
     const dialog = await openDialog()
     await within(dialog).findByText('Version 1 (1.0.0)')
-    expect(within(dialog).queryByRole('group', { name: 'Publish as' })).toBeNull()
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Publish as' })).toBeNull()
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Note (optional)' }), { target: { value: 'Kept' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publish' }))
-    expect(await within(dialog).findByRole('group', { name: 'Publish as' })).toBeTruthy()
+    expect(await within(dialog).findByRole('radiogroup', { name: 'Publish as' })).toBeTruthy()
     expect(preview).toHaveBeenCalledTimes(2)
-    expect(within(dialog).getByRole('radio', { name: 'New version of Ann’s erp-lookup' }) as HTMLInputElement).toHaveProperty('checked', true)
+    expect(within(dialog).getByRole('radio', { name: 'New version of Ann’s erp-lookup' }).getAttribute('aria-checked')).toBe('true')
     expect((within(dialog).getByRole('textbox', { name: 'Note (optional)' }) as HTMLTextAreaElement).value).toBe('Kept')
     expect(screen.getByRole('dialog', { name: 'Publish erp-lookup' })).toBeTruthy()
   })
@@ -451,7 +512,7 @@ describe('ShareSkillDialog: a copy behind the package (co-maintainers D4)', () =
     const alert = await within(dialog).findByRole('alert')
     expect(alert.querySelector('p')!.textContent).toBe('Ann published Version 3 since your copy. Get it first, then publish your changes.')
     // Last before the buttons (rule 6).
-    expect(alert.nextElementSibling).toBe(within(dialog).getByRole('button', { name: 'Publish' }).parentElement)
+    expect(alert.nextElementSibling).toBe(within(dialog).getByRole('button', { name: 'Publish' }).closest('[data-dialog-footer]'))
     expect((within(dialog).getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(within(alert).getByRole('button', { name: 'Get Version 3' }))
     await waitFor(() => expect(getLatest).toHaveBeenCalledWith('folder:a', 'erp-lookup', false))

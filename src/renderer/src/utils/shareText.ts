@@ -204,10 +204,10 @@ export const SHARE_UI_TEXT = {
     'The session couldn’t be started — the changes were brought together, so Finish or Discard from the badge.',
   conflictTitle: 'The team changed this agent too',
   conflictBody:
-    'Your changes and the team’s don’t fit together. Pick one to carry on with — nothing is lost either way.',
-  useTeamVersion: 'Use the team’s version (keep mine as a copy)',
+    'Your changes and the team’s don’t fit together. Keep yours and share later, or use the team’s version and keep yours as a copy — nothing is lost either way.',
+  useTeamVersion: 'Use the team’s version',
   usingTeamVersion: 'Switching…',
-  keepMine: 'Keep working on mine (share later)',
+  keepMine: 'Keep mine',
   keptCopy: (name: string) => `Your version is kept as ${name}.`,
   keptCopyUnnamed: 'Your version is kept as a copy beside this agent.',
   notCarried: (files: string) => `Some of this computer’s files didn’t come across: ${files}.`,
@@ -284,7 +284,6 @@ export const SHARE_UI_TEXT = {
   shareWithEveryone: 'Make public',
   /** Share with the team's checkbox: the same words as the skill Share dialog's. */
   whoCanUse: 'Who can use it',
-  everyoneCanUse: 'Everyone on this server can use it',
   /** Share with the team's people list while Everyone is ticked and no one is named. */
   peopleNoOneNamed: 'No one named — add people who may change it, as Can edit.',
   shareWithPersonTitle: 'Share with a person',
@@ -304,7 +303,7 @@ export const SHARE_UI_TEXT = {
   removeSharingBody: (name: string) =>
     `Stop sharing ${name} with the team? Its folder, files and history stay on this computer, and it becomes an ordinary agent you can share again later. Teammates keep their own copies.`,
   alsoDeleteFromLibrary: 'Also delete it from the catalog — teammates can no longer get it',
-  removeSharingOnlyHint: 'Untick the box above to remove sharing from this computer only.',
+  removeSharingOnlyHint: 'Turn off the switch above to remove sharing from this computer only.',
   deleteNoAccess: 'Only a maintainer can delete it from the catalog.',
   noLongerSharedNote: (name: string) => `${name} is no longer shared with the team.`,
   removeFromComputer: 'Remove from this computer',

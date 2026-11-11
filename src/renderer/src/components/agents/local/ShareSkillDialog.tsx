@@ -7,43 +7,49 @@ import { SKILL_SHARE_TEXT, catalogVersionLabel } from '../../../utils/catalogIte
 import {
   CANCEL,
   ChosenPeopleList,
+  DIALOG_CODE,
+  DIALOG_HEADING,
+  DIALOG_LABEL,
+  DIALOG_NOTE,
+  DIALOG_TEXT,
+  DialogFooter,
   DialogShell,
-  ErrorLine,
   FIELD_BASE,
   PeopleSearch,
   PRIMARY,
   SECONDARY,
+  WhoCanUseHeading,
   personLabel,
+  useEveryoneFocusHandOff,
   type ChosenPerson
 } from './sharing/ShareDialogs'
+import { ManagedList, ManagedListPicker, ManagedListRow, type ManagedListPickerOption } from '../../ui/ManagedList'
 
 /** The preview, as the dialog waits for it. */
 type PreviewState = { kind: 'loading' } | { kind: 'ready'; preview: SkillPublishPreviewDto } | { kind: 'failed'; message: string }
 
-/** The select's value for "each person connects their own". */
+/** The picker's value for "each person connects their own". */
 const OWN = ''
 
 /** "Share as" picking a separate skill rather than one of the editable packages. */
 const SEPARATE = 'separate'
 
 /**
- * Two contents in one grid cell, one shown: the area is as tall as the taller
- * of the two, so switching between them moves nothing below (rule 1). The
- * other is kept laid out but invisible, hidden from assistive tech and inert.
- * Only for the one-sentence intro: a tall block in one cell reserves its
- * height as blank space when the short one is shown.
+ * The Share as row's lead: a radio circle in both states, an empty muted ring
+ * unpicked and the accent ring with its dot picked, one size, so every row
+ * reads as a choice and picking one moves nothing (ux_rules rules 1 and 11).
  */
-function SwapArea({ second, first, alternate }: { second: boolean; first: React.ReactNode; alternate: React.ReactNode }): React.JSX.Element {
-  const cell = 'col-start-1 row-start-1 min-w-0'
+function RadioMark({ checked }: { checked: boolean }): React.JSX.Element {
   return (
-    <div data-share-swap className="grid">
-      <div className={second ? `${cell} invisible` : cell} aria-hidden={second || undefined} inert={second || undefined}>
-        {first}
-      </div>
-      <div className={second ? cell : `${cell} invisible`} aria-hidden={!second || undefined} inert={!second || undefined}>
-        {alternate}
-      </div>
-    </div>
+    <span
+      aria-hidden="true"
+      data-radio-mark={checked ? 'checked' : 'unchecked'}
+      className={`flex h-4 w-4 items-center justify-center rounded-full border-[1.5px] ${
+        checked ? 'border-[var(--color-accent)]' : 'border-[var(--color-text-muted)]'
+      }`}
+    >
+      {checked && <span className="h-2 w-2 rounded-full bg-[var(--color-accent)]" />}
+    </span>
   )
 }
 
@@ -75,9 +81,14 @@ function SwapArea({ second, first, alternate }: { second: boolean; first: React.
  * **Share as**: the next version of one of them (the default) or a separate
  * skill. The next version leaves who can use it and the credentials as that
  * package has them, so those controls give way to a line saying so. They sit
- * below the note, so switching changes only what is under the radios and the
- * note (rule 1): the radio under the pointer and the note never move. The
- * intro sentence above the note swaps in one grid cell ({@link SwapArea}).
+ * below the note, so switching changes only what is under the choice and the
+ * note (rule 1): the row under the pointer and the note never move. Share as
+ * is a managed list of choices with radio semantics, the chosen row checked
+ * in its lead column; the credentials are a list too, a row per slot with
+ * its picker, as People picks access. With Share as there is no intro
+ * sentence: it would only repeat the rows and the line under the note, and
+ * without it Who can use it shows at 800×600. Version and catalog id share
+ * one meta line.
  *
  * Share as arrives with the preview, above the note, so the note is disabled
  * (as every other control) until the preview answers and is focused then: a
@@ -96,7 +107,7 @@ function SwapArea({ second, first, alternate }: { second: boolean; first: React.
  *
  * It does not own the share: `onShare` is the caller's, whose mutation
  * outlives the dialog, and the dialog closes on success only. A refusal
- * renders under the fields, last before the buttons, moving nothing above it.
+ * renders beside the buttons, in the footer's reserved height, moving nothing.
  */
 export function ShareSkillDialog({
   agentId,
@@ -128,6 +139,7 @@ export function ShareSkillDialog({
   const [choices, setChoices] = useState<Record<string, string>>({})
   const [people, setPeople] = useState<ChosenPerson[]>([])
   const [everyone, setEveryone] = useState(false)
+  const { makePublicRef, removeEveryoneRef } = useEveryoneFocusHandOff(everyone)
   // A package uuid of the preview's `editablePackages`, or SEPARATE; null is the first candidate.
   const [shareAs, setShareAs] = useState<string | null>(null)
   // Asked again after a Get, or when the share found an editable package the preview did not list.
@@ -229,56 +241,57 @@ export function ShareSkillDialog({
   const chosenName = (slot: string): string =>
     candidatesFor(slot).find((candidate) => candidate.id === choices[slot])?.name ?? SKILL_SHARE_TEXT.eachPersonOwn
 
+  const credentialOptions = (slot: string): ManagedListPickerOption<string>[] => [
+    { value: OWN, label: SKILL_SHARE_TEXT.eachPersonOwn },
+    ...candidatesFor(slot).map((candidate) => ({ value: candidate.id, label: candidate.name }))
+  ]
   const credentialsBlock = (
-    <div className="space-y-1">
-      <span className="block text-[11px] text-[var(--color-text-muted)]">{SKILL_SHARE_TEXT.needsLabel}</span>
-      <ul aria-label={SKILL_SHARE_TEXT.needsLabel} className="space-y-1">
+    <div className="space-y-1.5">
+      <span className={`block ${DIALOG_HEADING}`}>{SKILL_SHARE_TEXT.needsLabel}</span>
+      {/* A row per slot, its choice in the row's picker, as People picks access. */}
+      <ManagedList aria-label={SKILL_SHARE_TEXT.needsLabel}>
         {skill.credentials.map((credential) => (
-          <li key={credential.slot} className="flex items-center gap-2">
-            <code
-              title={credential.description ? `${credential.slot} (${credential.type}) — ${credential.description}` : `${credential.slot} (${credential.type})`}
-              className="min-w-0 flex-1 truncate rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[11px] text-[var(--color-text-secondary)]"
-            >
-              {credential.slot}
-            </code>
-            <select
-              aria-label={SKILL_SHARE_TEXT.needsFor(credential.slot)}
-              title={chosenName(credential.slot)}
-              value={choices[credential.slot] ?? OWN}
-              disabled={pending || !preview}
-              onChange={(event) => setChoices((current) => ({ ...current, [credential.slot]: event.target.value }))}
-              className={`${FIELD_BASE} w-[16rem] shrink-0 truncate`}
-            >
-              <option value={OWN}>{SKILL_SHARE_TEXT.eachPersonOwn}</option>
-              {candidatesFor(credential.slot).map((candidate) => (
-                <option key={candidate.id} value={candidate.id} title={candidate.name}>
-                  {candidate.name}
-                </option>
-              ))}
-            </select>
-          </li>
+          <ManagedListRow
+            key={credential.slot}
+            title={credential.slot}
+            titleMono
+            titleTooltip={
+              credential.description
+                ? `${credential.slot} (${credential.type}) — ${credential.description}`
+                : `${credential.slot} (${credential.type})`
+            }
+            trailing={
+              <ManagedListPicker
+                value={choices[credential.slot] ?? OWN}
+                options={credentialOptions(credential.slot)}
+                label={SKILL_SHARE_TEXT.needsFor(credential.slot)}
+                menuLabel={SKILL_SHARE_TEXT.needsFor(credential.slot)}
+                title={chosenName(credential.slot)}
+                disabled={pending || !preview}
+                onChange={(id) => setChoices((current) => ({ ...current, [credential.slot]: id }))}
+                className="max-w-[16rem]"
+              />
+            }
+          />
         ))}
-      </ul>
+      </ManagedList>
       {providersLine && (
-        <p data-providers-line className="text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+        <p data-providers-line className={DIALOG_NOTE}>
           {providersLine}
         </p>
       )}
     </div>
   )
   const whoCanUseBlock = (
-    <div className="space-y-2">
-      <span className="block text-[11px] font-medium text-[var(--color-text-secondary)]">{SKILL_SHARE_TEXT.whoCanUse}</span>
-      <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text)]">
-        <input
-          type="checkbox"
-          className="accent-[var(--color-accent)]"
-          checked={everyone}
-          disabled={pending || !preview}
-          onChange={(event) => setEveryone(event.target.checked)}
-        />
-        {SKILL_SHARE_TEXT.everyone}
-      </label>
+    <div className="space-y-1.5">
+      {/* People's model: Make public beside the heading puts Everyone at the top of the list. */}
+      <WhoCanUseHeading
+        title={SKILL_SHARE_TEXT.whoCanUse}
+        everyone={everyone}
+        disabled={pending || !preview}
+        onMakePublic={() => setEveryone(true)}
+        makePublicRef={makePublicRef}
+      />
       <PeopleSearch
         disabled={pending || !preview}
         exclude={new Set(people.map((person) => person.userId))}
@@ -289,6 +302,7 @@ export function ShareSkillDialog({
         disabled={pending || !preview}
         onChange={setPeople}
         emptyText={everyone ? SKILL_SHARE_TEXT.noOneNamed : undefined}
+        everyone={{ on: everyone, onRemove: () => setEveryone(false), removeRef: removeEveryoneRef }}
         unsent={{
           is: coveredByEveryone,
           title: (person) => SKILL_SHARE_TEXT.coveredByEveryone(person.label),
@@ -301,72 +315,69 @@ export function ShareSkillDialog({
   const title = firstShare ? SKILL_SHARE_TEXT.title(skill.name) : SKILL_SHARE_TEXT.titleNewVersion(skill.name)
   return (
     <DialogShell title={title} pending={pending} onDismiss={onCancel} initialFocusRef={noteRef} align="top">
-      <div data-share-skill-body className="-mx-1 min-h-0 flex-1 space-y-3 overflow-y-auto px-1 pb-0.5">
+      <div data-share-skill-body className="-mx-1 min-h-0 flex-1 space-y-2 overflow-y-auto px-1 pb-0.5">
         {candidates.length > 0 && (
-          <fieldset data-share-as className="space-y-1">
-            <legend className="mb-1 block text-[11px] font-medium text-[var(--color-text-secondary)]">{SKILL_SHARE_TEXT.shareAs}</legend>
-            {candidates.map((candidate) => (
-              <label key={candidate.packageUuid} title={candidate.packageId} className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text)]">
-                <input
-                  type="radio"
-                  name="share-as"
-                  className="accent-[var(--color-accent)]"
-                  checked={chosen?.packageUuid === candidate.packageUuid}
-                  disabled={pending}
-                  onChange={() => setShareAs(candidate.packageUuid)}
+          <div data-share-as className="space-y-1.5">
+            <span className={`block ${DIALOG_HEADING}`}>{SKILL_SHARE_TEXT.shareAs}</span>
+            {/* A choice of one, as rows: the chosen one carries the check. */}
+            <ManagedList role="radiogroup" aria-label={SKILL_SHARE_TEXT.shareAs}>
+              {[...candidates.map((candidate) => ({
+                key: candidate.packageUuid,
+                label: SKILL_SHARE_TEXT.newVersionOf(candidate.publisher, skill.name),
+                tooltip: candidate.packageId,
+                checked: chosen?.packageUuid === candidate.packageUuid,
+                pick: () => setShareAs(candidate.packageUuid)
+              })), {
+                key: SEPARATE,
+                label: SKILL_SHARE_TEXT.separateSkill,
+                tooltip: undefined,
+                checked: chosen === null,
+                pick: () => setShareAs(SEPARATE)
+              }].map((choice) => (
+                <ManagedListRow
+                  key={choice.key}
+                  lead={<RadioMark checked={choice.checked} />}
+                  title={choice.label}
+                  titleTooltip={choice.tooltip}
+                  radio={{ checked: choice.checked, disabled: pending, onSelect: choice.pick }}
                 />
-                <span className="min-w-0 truncate">{SKILL_SHARE_TEXT.newVersionOf(candidate.publisher, skill.name)}</span>
-              </label>
-            ))}
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text)]">
-              <input
-                type="radio"
-                name="share-as"
-                className="accent-[var(--color-accent)]"
-                checked={chosen === null}
-                disabled={pending}
-                onChange={() => setShareAs(SEPARATE)}
-              />
-              {SKILL_SHARE_TEXT.separateSkill}
-            </label>
-          </fieldset>
+              ))}
+            </ManagedList>
+          </div>
         )}
-        {candidates.length > 0 ? (
-          <SwapArea
-            second={chosen !== null}
-            first={<p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">{SKILL_SHARE_TEXT.firstBody}</p>}
-            alternate={<p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">{SKILL_SHARE_TEXT.laterBody}</p>}
-          />
-        ) : (
-          <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+        {/* No intro under Share as: its rows say what is published, and the line
+            under the note (or Who can use it) says who gets it — the sentence
+            would only repeat them, and the room is what lets Who can use it
+            show at 800×600. */}
+        {candidates.length === 0 && (
+          <p className={DIALOG_TEXT}>
             {firstShare ? SKILL_SHARE_TEXT.firstBody : SKILL_SHARE_TEXT.laterBody}
           </p>
         )}
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1 text-xs">
-          <dt className="text-[11px] text-[var(--color-text-muted)]">{SKILL_SHARE_TEXT.versionLabel}</dt>
-          <dd data-share-version className="truncate text-[var(--color-text)]">
+        {/* One meta line: the version, then the catalog id, which gives way first. */}
+        <div data-share-meta className="flex min-w-0 items-baseline gap-x-2 text-[13px]">
+          <span className="shrink-0 text-[var(--color-text-muted)]">{SKILL_SHARE_TEXT.versionLabel}</span>
+          <span data-share-version className="shrink-0 text-[var(--color-text)]">
             {chosen
               ? catalogVersionLabel((chosen.latestRevisionNumber ?? 0) + 1, null)
               : preview
                 ? catalogVersionLabel(preview.nextRevisionNumber, preview.version)
                 : SKILL_SHARE_TEXT.loading}
-          </dd>
-          <dt className="text-[11px] text-[var(--color-text-muted)]">{SKILL_SHARE_TEXT.catalogIdLabel}</dt>
-          <dd className="min-w-0 truncate">
+          </span>
+          <span aria-hidden="true" className="shrink-0 text-[var(--color-text-muted)]">·</span>
+          <span className="shrink-0 text-[var(--color-text-muted)]">{SKILL_SHARE_TEXT.catalogIdLabel}</span>
+          <span className="min-w-0 truncate">
             {preview ? (
-              <code
-                title={chosen?.packageId ?? preview.packageId}
-                className="rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[11px] text-[var(--color-text-secondary)]"
-              >
+              <code title={chosen?.packageId ?? preview.packageId} className={DIALOG_CODE}>
                 {chosen?.packageId ?? preview.packageId}
               </code>
             ) : (
               <span className="text-[var(--color-text-muted)]">{SKILL_SHARE_TEXT.loading}</span>
             )}
-          </dd>
-        </dl>
+          </span>
+        </div>
         <label className="block space-y-1">
-          <span className="block text-[11px] text-[var(--color-text-muted)]">{SKILL_SHARE_TEXT.noteLabel}</span>
+          <span className={DIALOG_LABEL}>{SKILL_SHARE_TEXT.noteLabel}</span>
           <textarea
             ref={noteRef}
             rows={2}
@@ -380,13 +391,14 @@ export function ShareSkillDialog({
                 submit()
               }
             }}
-            className={`w-full resize-none ${FIELD_BASE}`}
+            // A block, so no line-box gap under it.
+            className={`block w-full resize-none ${FIELD_BASE}`}
           />
         </label>
         {/* What the Share as choice decides, below the note: it appears and goes with the radio. */}
         {firstShare &&
           (chosen !== null ? (
-            <p data-share-keeps-access className="text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+            <p data-share-keeps-access className={DIALOG_NOTE}>
               {SKILL_SHARE_TEXT.candidateKeepsAccess(shown?.publisher ?? null)}
             </p>
           ) : (
@@ -394,7 +406,7 @@ export function ShareSkillDialog({
           ))}
         {skill.credentials.length > 0 &&
           (chosen !== null ? (
-            <p data-share-keeps-providers className="text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+            <p data-share-keeps-providers className={DIALOG_NOTE}>
               {SKILL_SHARE_TEXT.publisherProvidersNotKept}
             </p>
           ) : (
@@ -404,9 +416,9 @@ export function ShareSkillDialog({
       {stale && (
         <div role="alert" data-share-stale className="flex items-center gap-3">
           <div className="min-w-0 flex-1 space-y-1">
-            <p className="text-[11px] leading-relaxed text-[var(--color-danger)]">{SKILL_SHARE_TEXT.stale(stale.publishedBy, stale.latestRevision)}</p>
+            <p className="text-[13px] leading-relaxed text-[var(--color-danger)]">{SKILL_SHARE_TEXT.stale(stale.publishedBy, stale.latestRevision)}</p>
             {hasUnshared && (
-              <p data-share-stale-changes className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+              <p data-share-stale-changes className={DIALOG_TEXT}>
                 {SKILL_SHARE_TEXT.staleHasChanges(stale.latestRevision)}
               </p>
             )}
@@ -415,7 +427,7 @@ export function ShareSkillDialog({
             <button type="button" onClick={getLatest} disabled={getting || pending} aria-busy={getting} className={`${SECONDARY} shrink-0`}>
               {getting ? (
                 <>
-                  <Loader2 size={11} className="animate-spin" aria-hidden="true" />
+                  <Loader2 size={13} className="animate-spin" aria-hidden="true" />
                   {SKILL_SHARE_TEXT.getting}
                 </>
               ) : (
@@ -425,24 +437,23 @@ export function ShareSkillDialog({
           )}
         </div>
       )}
-      <ErrorLine
+      <DialogFooter
         error={getError ?? (refusal?.code === 'stale' ? null : error) ?? (state.kind === 'failed' ? state.message : null)}
-      />
-      <div className="flex justify-end gap-2">
+      >
         <button type="button" onClick={onCancel} disabled={pending} className={CANCEL}>
           {SKILL_SHARE_TEXT.cancel}
         </button>
         <button type="button" onClick={submit} disabled={blocked} aria-busy={pending} className={PRIMARY}>
           {pending ? (
             <>
-              <Loader2 size={11} className="animate-spin" aria-hidden="true" />
+              <Loader2 size={13} className="animate-spin" aria-hidden="true" />
               {SKILL_SHARE_TEXT.sharing}
             </>
           ) : (
             SKILL_SHARE_TEXT.shareButton
           )}
         </button>
-      </div>
+      </DialogFooter>
     </DialogShell>
   )
 }

@@ -192,7 +192,7 @@ test('a teammate shared first: Share changes brings their version in, sends once
   expect((await catalogEntryOrFail(team.fixture, slug)).desktop.head_sha).toBe(head(aPath))
 })
 
-test('the same lines on both: Keep working on mine leaves both changed; Use the team’s version keeps mine as a copy', async ({ team }) => {
+test('the same lines on both: Keep mine leaves both changed; Use the team’s version keeps mine as a copy', async ({ team }) => {
   test.setTimeout(300_000)
   const { a, b, name, aPath, bPath, slug } = await sharedWithEditor(team)
   const conflict = () => b.page.getByRole('dialog', { name: 'The team changed this agent too' })
@@ -217,22 +217,22 @@ test('the same lines on both: Keep working on mine leaves both changed; Use the 
     await dialog.getByRole('button', { name: 'Bring together', exact: true }).click()
   }
 
-  await test.step('Keep working on mine', async () => {
+  await test.step('Keep mine', async () => {
     await refreshLibrary(b)
     await bringTogetherFromShare()
     await expect(conflict()).toBeVisible({ timeout: 60_000 })
-    await expect(conflict().getByRole('button', { name: 'Keep working on mine (share later)', exact: true })).toBeFocused()
-    await conflict().getByRole('button', { name: 'Keep working on mine (share later)', exact: true }).click()
+    await expect(conflict().getByRole('button', { name: 'Keep mine', exact: true })).toBeFocused()
+    await conflict().getByRole('button', { name: 'Keep mine', exact: true }).click()
     await expect(conflict()).toHaveCount(0)
     await openAgent(b, name)
     await expect(badge(b, 'You and the team both changed it')).toBeVisible()
     expect(readFileSync(join(bPath, ACME_MD), 'utf8')).toContain('skates (from B)')
   })
 
-  await test.step('Use the team’s version (keep mine as a copy)', async () => {
+  await test.step('Use the team’s version', async () => {
     await bringTogetherFromShare()
     await expect(conflict()).toBeVisible({ timeout: 60_000 })
-    await conflict().getByRole('button', { name: 'Use the team’s version (keep mine as a copy)', exact: true }).click()
+    await conflict().getByRole('button', { name: 'Use the team’s version', exact: true }).click()
     await expect(conflict()).toHaveCount(0, { timeout: 60_000 })
     const listed = await b.page.evaluate(() => window.api.localAgents.list())
     const original = listed.agents.find((row) => row.name === name)!

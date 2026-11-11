@@ -222,7 +222,12 @@ describe('Who can use a skill', () => {
     expect(onClose).not.toHaveBeenCalled()
     fireEvent.change(search, { target: { value: 'car' } })
     fireEvent.click(await screen.findByRole('option', { name: /Carol/ }, { timeout: 2000 }))
-    fireEvent.change(within(add).getByLabelText(SHARE_UI_TEXT.accessLabel), { target: { value: 'edit' } })
+    // Access is a menu; a press in it, portaled over both dialogs, closes neither.
+    fireEvent.click(within(add).getByRole('button', { name: SHARE_UI_TEXT.accessLabel }))
+    const menuItem = within(screen.getByRole('menu', { name: SHARE_UI_TEXT.accessLabel })).getByRole('menuitemradio', { name: SHARE_ACCESS_TEXT.edit })
+    fireEvent.mouseDown(menuItem)
+    fireEvent.click(menuItem)
+    expect(screen.getAllByRole('dialog')).toHaveLength(2)
     fireEvent.click(within(add).getByRole('button', { name: SHARE_UI_TEXT.addPerson }))
     await waitFor(() => expect(sharing.setItemPeople).toHaveBeenCalledTimes(1))
     expect(sharing.setItemPeople).toHaveBeenLastCalledWith(PKG, [

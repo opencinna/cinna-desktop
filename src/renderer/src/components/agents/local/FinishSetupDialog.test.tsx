@@ -238,7 +238,7 @@ describe('Finish setup', () => {
     expect(await within(dialog()).findByRole('status')).toHaveProperty('textContent', 'Nothing here opens .env, so credentials/.env was shown in the file manager.')
   })
 
-  it('shows a refusal in the footer\'s reserved line, adding nothing to the dialog', async () => {
+  it('shows a refusal under the buttons, last in the dialog, adding nothing above them', async () => {
     renderHarness()
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-weather')
@@ -249,8 +249,13 @@ describe('Finish setup', () => {
     fireEvent.click(within(row('weather')).getByRole('button', { name: 'Save' }))
     const alert = await within(dialog()).findByRole('alert')
     expect(shape()).toBe(before)
-    expect(alert.parentElement?.parentElement?.className).toContain('h-9')
-    expect(alert.parentElement?.parentElement?.contains(screen.getByRole('button', { name: 'Done' }))).toBe(true)
+    // Whole, after the buttons: the dialog grows downward only.
+    const footer = alert.parentElement!
+    expect(footer.hasAttribute('data-dialog-footer')).toBe(true)
+    expect(alert.previousElementSibling!.contains(screen.getByRole('button', { name: 'Done' }))).toBe(true)
+    expect(footer.lastElementChild).toBe(alert)
+    expect(dialog().lastElementChild).toBe(footer)
+    expect(alert.className).not.toContain('line-clamp')
   })
 
   it('ignores the backdrop and Escape while something typed is unsaved, and not otherwise', async () => {

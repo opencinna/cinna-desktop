@@ -501,7 +501,7 @@ describe('SharingTab — people', () => {
     expect(within(people).queryByRole('button', { name: SHARE_UI_TEXT.shareWithEveryone })).toBeNull()
   })
 
-  it('adds a person picked in Share with a person, as Can use unless changed', async () => {
+  it('adds a person picked in Share with a person, as Can use unless changed in its Access menu', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       sharing.searchPeople.mockResolvedValue(ok([{ userId: 'u2', email: 'bob@x.test', name: 'Bob' }]))
@@ -517,8 +517,20 @@ describe('SharingTab — people', () => {
       expect(screen.queryByRole('listbox')).toBeNull()
       const field = within(dialog).getByLabelText(SHARE_UI_TEXT.peopleSearchLabel, { selector: 'input' }) as HTMLInputElement
       expect(field.value).toBe('Bob <bob@x.test>')
-      expect((within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel) as HTMLSelectElement).value).toBe('use')
-      expect(within(dialog).getByLabelText(SHARE_UI_TEXT.accessLabel).className.split(/\s+/)).not.toContain('w-full')
+      // Access is People's menu drawn as a field beside the search: value and caret, Can use to start.
+      const access = within(dialog).getByRole('button', { name: SHARE_UI_TEXT.accessLabel })
+      expect(access.getAttribute('aria-haspopup')).toBe('menu')
+      expect(access.textContent).toBe(SHARE_ACCESS_TEXT.use)
+      expect(access.className.split(/\s+/)).not.toContain('w-full')
+      expect(access.className).toContain('border')
+      fireEvent.click(access)
+      const menu = screen.getByRole('menu', { name: SHARE_UI_TEXT.accessLabel })
+      // Each level says what it adds, as in the People list's picker.
+      expect(within(menu).getByRole('menuitemradio', { name: SHARE_ACCESS_TEXT.edit }).getAttribute('aria-describedby')).toBeTruthy()
+      fireEvent.click(within(menu).getByRole('menuitemradio', { name: SHARE_ACCESS_TEXT.edit }))
+      expect(access.textContent).toBe(SHARE_ACCESS_TEXT.edit)
+      // The menu, portaled out of the dialog, closes nothing.
+      expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.shareWithPersonTitle })).toBeTruthy()
       // Editing the field drops the pick until someone is picked again.
       fireEvent.change(field, { target: { value: 'Bob' } })
       expect((within(dialog).getByRole('button', { name: SHARE_UI_TEXT.addPerson }) as HTMLButtonElement).disabled).toBe(true)
@@ -530,7 +542,7 @@ describe('SharingTab — people', () => {
       expect(sharing.setPeople).toHaveBeenCalledWith(AGENT.id, [
         { principal: { kind: 'user', userId: 'u1' }, access: 'maintain' },
         { principal: { kind: 'everyone' }, access: 'use' },
-        { principal: { kind: 'user', userId: 'u2' }, access: 'use' }
+        { principal: { kind: 'user', userId: 'u2' }, access: 'edit' }
       ])
       await waitFor(() => expect(screen.queryByRole('dialog', { name: SHARE_UI_TEXT.shareWithPersonTitle })).toBeNull())
     } finally {
@@ -556,13 +568,14 @@ describe('SharingTab — remove sharing', () => {
     return screen.getByRole('dialog', { name: SHARE_UI_TEXT.removeSharingTitle })
   }
 
-  it('offers to delete from the library to a maintainer, unchecked, and says so in the note on success', async () => {
+  it('offers to delete from the library to a maintainer as a switch, off, and says so in the note on success', async () => {
     const { onNote } = mount(status())
     await waitFor(() => expect(section(SHARE_UI_TEXT.whereShared).textContent).toContain('Alpha in the library'))
     const dialog = open()
-    const box = within(dialog).getByRole('checkbox', { name: SHARE_UI_TEXT.alsoDeleteFromLibrary }) as HTMLInputElement
-    expect(box.checked).toBe(false)
+    const box = within(dialog).getByRole('switch', { name: SHARE_UI_TEXT.alsoDeleteFromLibrary })
+    expect(box.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(box)
+    expect(box.getAttribute('aria-checked')).toBe('true')
     await act(async () => {
       fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removeSharingConfirm }))
     })
@@ -577,33 +590,45 @@ describe('SharingTab — remove sharing', () => {
     mount(status())
     await waitFor(() => expect(section(SHARE_UI_TEXT.whereShared).textContent).toContain('Alpha in the library'))
     const dialog = open()
-    fireEvent.click(within(dialog).getByRole('checkbox'))
+    fireEvent.click(within(dialog).getByRole('switch'))
     await act(async () => {
       fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removeSharingConfirm }))
     })
     await waitFor(() =>
-      expect(within(dialog).getByRole('alert').textContent).toBe('Another person has this agent in their workspace.')
+      expect(within(dialog).getByRole('alert').textContent).toBe(
+        `Another person has this agent in their workspace. ${SHARE_UI_TEXT.removeSharingOnlyHint}`
+      )
     )
     expect(screen.getByRole('dialog', { name: SHARE_UI_TEXT.removeSharingTitle })).toBeTruthy()
   })
 
-  it('clears a refused delete when the choice changes, and says unticking still removes sharing here', async () => {
+  it('clears a refused delete when the choice changes, and says turning it off still removes sharing here', async () => {
     const refusal = '2 people use this. It can be removed once nobody does.'
     sharing.unshare.mockResolvedValue(ok(done({ done: false, refusal: 'failed', detail: refusal })))
     mount(status())
     await waitFor(() => expect(section(SHARE_UI_TEXT.whereShared).textContent).toContain('Alpha in the library'))
     const dialog = open()
-    expect(dialog.textContent).not.toContain(SHARE_UI_TEXT.removeSharingOnlyHint)
-    const box = within(dialog).getByRole('checkbox')
+    // Nothing is reserved for the hint: the dialog ends with its buttons until a refusal.
+    expect(within(dialog).queryByText(SHARE_UI_TEXT.removeSharingOnlyHint, { exact: false })).toBeNull()
+    const footer = dialog.querySelector('[data-dialog-footer]') as HTMLElement
+    expect(footer.lastElementChild!.hasAttribute('data-dialog-buttons')).toBe(true)
+    expect(dialog.lastElementChild).toBe(footer)
+    const box = within(dialog).getByRole('switch')
     fireEvent.click(box)
     await act(async () => {
       fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removeSharingConfirm }))
     })
-    await waitFor(() => expect(within(dialog).getByRole('alert').textContent).toBe(refusal))
-    expect(dialog.textContent).toContain(SHARE_UI_TEXT.removeSharingOnlyHint)
+    // The refusal, then the way out, in one alert under the buttons.
+    expect(SHARE_UI_TEXT.removeSharingOnlyHint).toBe('Turn off the switch above to remove sharing from this computer only.')
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert').textContent).toBe(`${refusal} ${SHARE_UI_TEXT.removeSharingOnlyHint}`)
+    )
+    const alert = within(dialog).getByRole('alert')
+    expect(alert.previousElementSibling!.hasAttribute('data-dialog-buttons')).toBe(true)
+    expect(footer.lastElementChild).toBe(alert)
     fireEvent.click(box)
     expect(within(dialog).queryByRole('alert')).toBeNull()
-    expect(dialog.textContent).not.toContain(SHARE_UI_TEXT.removeSharingOnlyHint)
+    expect(within(dialog).queryByText(SHARE_UI_TEXT.removeSharingOnlyHint, { exact: false })).toBeNull()
     sharing.unshare.mockResolvedValue(ok(done()))
     await act(async () => {
       fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removeSharingConfirm }))
@@ -623,7 +648,7 @@ describe('SharingTab — remove sharing', () => {
     await waitFor(() => expect(sharing.library).toHaveBeenCalled())
     await act(async () => {})
     const dialog = open()
-    expect(within(dialog).queryByRole('checkbox')).toBeNull()
+    expect(within(dialog).queryByRole('switch')).toBeNull()
     await act(async () => {
       fireEvent.click(within(dialog).getByRole('button', { name: SHARE_UI_TEXT.removeSharingConfirm }))
     })

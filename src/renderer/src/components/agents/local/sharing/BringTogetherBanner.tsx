@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { SHARE_UI_TEXT } from '../../../../utils/shareText'
-import { PRIMARY, SECONDARY } from './ShareDialogs'
+import { CHROME_PRIMARY, CHROME_SECONDARY } from './ShareDialogs'
 import { useAgentShareStatus } from './useAgentShareStatus'
 import type { ShareActions } from './useShareActions'
 
@@ -57,7 +57,7 @@ export function BringTogetherBanner({
             actions.notNow()
           }}
           disabled={pending}
-          className={SECONDARY}
+          className={CHROME_SECONDARY}
         >
           {SHARE_UI_TEXT.notNow}
         </button>
@@ -66,7 +66,7 @@ export function BringTogetherBanner({
           onClick={actions.bringTogether}
           disabled={pending}
           aria-busy={pending}
-          className={PRIMARY}
+          className={CHROME_PRIMARY}
         >
           {pending ? (
             <>

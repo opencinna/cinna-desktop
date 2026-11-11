@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentShareResult, AgentShareStatus } from '../../../../../../shared/agentSharing'
@@ -375,7 +375,23 @@ describe('AgentShareBadge — the conflict dialog', () => {
     return mounted
   }
 
-  it('Keep working on mine closes it and changes nothing', async () => {
+  it('is the usual right-aligned footer: Keep mine first and focused, the team’s version last and filled', async () => {
+    await openConflict()
+    const dialog = screen.getByRole('dialog', { name: SHARE_UI_TEXT.conflictTitle })
+    const keep = within(dialog).getByRole('button', { name: SHARE_UI_TEXT.keepMine })
+    const team = within(dialog).getByRole('button', { name: SHARE_UI_TEXT.useTeamVersion })
+    expect(keep.parentElement).toBe(team.parentElement)
+    // The shared footer: the buttons are its last part, on the right of the message's room.
+    const footer = keep.parentElement!.parentElement!
+    expect(footer.hasAttribute('data-dialog-footer')).toBe(true)
+    expect(footer.lastElementChild).toBe(keep.parentElement)
+    expect(keep.nextElementSibling).toBe(team)
+    expect(team.className).toContain('bg-[var(--color-accent)]')
+    expect(keep.className).not.toContain('bg-[var(--color-accent)]')
+    expect(document.activeElement).toBe(keep)
+  })
+
+  it('Keep mine closes it and changes nothing', async () => {
     await openConflict()
     fireEvent.click(screen.getByRole('button', { name: SHARE_UI_TEXT.keepMine }))
     expect(screen.queryByRole('dialog')).toBeNull()
