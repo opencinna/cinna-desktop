@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `1166fb7be314822c`.
+Your current kit is version `adcf3a9600be76c7`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,31 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.24.1 — the capability request body, stated exactly
+
+Wording, plus a richer 422 `detail`. Every 1.x folder stays valid.
+
+- **`guides/04-credentials.md`** — the capability request body is spelled out
+  (keys, nesting, `example_request` / `example_response` are strings, unknown
+  keys are refused with 422, whose `detail` now carries `errors` and the
+  `expected` shape). In the cloud, `agent_api_session(...)` also takes the
+  credential id, which is how a platform-made connection (no slot) is reached.
+
+## 1.24.0 — capability requests on agent_api connections
+
+Additive. Every 1.x folder stays valid: the manifest schema and the folder roles
+are unchanged; `kit.json` gains one `protocols` key.
+
+- **`protocols/api-requests-tools.schema.json`** (new, `kit.json` →
+  `protocols.api_requests_tools`) — the producer's `cinna` tools
+  `api_requests_list`, `api_requests_get` and `api_requests_update_status`, with
+  error codes `not_found`, `agent_api_disabled` and `invalid_input`. cinna-core
+  serves them in building mode to an agent whose workspace has `agent_api/`.
+- **`guides/04-credentials.md`** — a caller of another agent's API can file a
+  capability request (`POST <base_url>/_cinna/improvement-requests`, or
+  `file_capability_request` on the cloud SDK session) after the user confirms the
+  draft, and read its status back. `/_cinna/` is reserved on every agent API.
 
 ## How cloud credential names answer `requires_credentials`
 

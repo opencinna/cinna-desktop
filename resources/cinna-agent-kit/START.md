@@ -156,4 +156,4 @@ It compares `.cinna-kit/VERSION` against `https://opencinna.io/api/agent-start/v
 
 ---
 
-Kit version 1166fb7be314822c · https://opencinna.io/agent-start · human-readable page: https://opencinna.io/agent-start?format=html
+Kit version adcf3a9600be76c7 · https://opencinna.io/agent-start · human-readable page: https://opencinna.io/agent-start?format=html
