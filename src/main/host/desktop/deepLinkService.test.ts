@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({ app: {} }))
+const appState = vi.hoisted(() => ({ ready: true }))
+vi.mock('electron', () => ({ app: { isReady: () => appState.ready } }))
 const focusMainWindow = vi.hoisted(() => vi.fn())
-vi.mock('../../window/focus', () => ({ focusMainWindow }))
+const ensureMainWindow = vi.hoisted(() => vi.fn(async () => null))
+vi.mock('../../window/focus', () => ({ focusMainWindow, ensureMainWindow }))
 const oauth = vi.hoisted(() => ({ inProgress: false }))
 vi.mock('../../auth/cinna-oauth', () => ({ isCinnaOAuthInProgress: () => oauth.inProgress }))
+const nudgeOAuthFlows = vi.hoisted(() => vi.fn(() => 0))
+vi.mock('../../services/serviceCredentials/service', () => ({ serviceCredentialService: { nudgeOAuthFlows } }))
 
-const { deepLinkActionOf, deepLinkService, deepLinkUrlFromArgv } = await import('./deepLinkService')
+const { deepLinkActionOf, deepLinkService, deepLinkUrlFromArgv, parseOAuthDoneLink } = await import('./deepLinkService')
 const { connectIntentService } = await import('./connectIntentService')
 const { skillLinkIntentService } = await import('./skillLinkIntentService')
 const { CONNECT_INTENT_ARGV_FLAG, CONNECT_INTENT_CHANNEL } = await import('../../../shared/connectIntent')
@@ -29,6 +33,9 @@ beforeEach(() => {
   oauth.inProgress = false
   send.mockClear()
   focusMainWindow.mockClear()
+  nudgeOAuthFlows.mockClear()
+  ensureMainWindow.mockClear()
+  appState.ready = true
   clearLogEntries()
   deepLinkService.install(() => ({ isDestroyed: () => false, webContents: { send } }) as never)
 })
@@ -167,5 +174,64 @@ describe('the E2E flag', () => {
     expect(url).toBe(SKILL)
     deepLinkService.deliver(url!, 'test-argv')
     expect(skillLinkIntentService.getPending()?.link.packageId).toBe('com.acme.erp-lookup')
+  })
+})
+
+/**
+ * Core's Google sign-in end page hands the user back with `cinna://oauth-done`. A nudge, never a
+ * result: it brings the window forward and asks the waiting connects to poll now, and touches no slot.
+ */
+describe('cinna://oauth-done', () => {
+  const ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+
+  it.each([
+    [`cinna://oauth-done?credential_id=${ID}`, { credentialId: ID, failed: false }],
+    [`cinna:///oauth-done?credential_id=${ID.toUpperCase()}`, { credentialId: ID, failed: false }],
+    ['cinna://oauth-done?status=error', { credentialId: null, failed: true }],
+    ['cinna://oauth-done?credential_id=../../etc&status=ok&next=https://evil.example', { credentialId: null, failed: false }],
+    ['cinna://oauth-done?credential_id=g-1', { credentialId: null, failed: false }],
+    ['cinna://skill/x', null],
+    ['https://cinna.acme.com/oauth-done?credential_id=' + ID, null]
+  ])('%s parses as %j', (url, parsed) => {
+    expect(parseOAuthDoneLink(url)).toEqual(parsed)
+  })
+
+  it('brings a window back (reopened if closed), focuses it and polls the named flow now, from every delivery path', async () => {
+    for (const source of ['open-url', 'second-instance', 'argv'] as const) deepLinkService.deliver(`cinna://oauth-done?credential_id=${ID}`, source)
+    expect(nudgeOAuthFlows.mock.calls).toEqual([[ID], [ID], [ID]])
+    expect(ensureMainWindow).toHaveBeenCalledTimes(3)
+    await vi.waitFor(() => expect(focusMainWindow).toHaveBeenCalledTimes(3))
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('makes no window before the app is ready (a cold launch from the link): startup shows the first one', () => {
+    appState.ready = false
+    deepLinkService.deliver(`cinna://oauth-done?credential_id=${ID}`, 'open-url')
+    expect(ensureMainWindow).not.toHaveBeenCalled()
+    expect(focusMainWindow).toHaveBeenCalledTimes(1)
+    expect(nudgeOAuthFlows).toHaveBeenCalledWith(ID)
+  })
+
+  it('polls every waiting flow for a failure, or an id that is not a UUID', () => {
+    deepLinkService.deliver('cinna://oauth-done?status=error', 'open-url')
+    deepLinkService.deliver('cinna://oauth-done?credential_id=not-a-uuid', 'open-url')
+    expect(nudgeOAuthFlows.mock.calls).toEqual([[null], [null]])
+  })
+
+  it('arrives from the argv the way a cold launch on Linux delivers it', () => {
+    const url = deepLinkUrlFromArgv(['/usr/bin/cinna', `cinna://oauth-done?credential_id=${ID}`])
+    expect(url).not.toBeNull()
+    deepLinkService.deliver(url!, 'argv')
+    expect(nudgeOAuthFlows).toHaveBeenCalledWith(ID)
+  })
+
+  it('leaves both intent slots alone, and a pending connect intent where it was', () => {
+    oauth.inProgress = true
+    deepLinkService.deliver(CONNECT, 'open-url')
+    deepLinkService.deliver(`cinna://oauth-done?credential_id=${ID}`, 'open-url')
+    expect(connectIntentService.getPending()?.serverUrl).toBe('https://cinna.acme.com')
+    expect(skillLinkIntentService.getPending()).toBeNull()
+    expect(getLogEntries().some((e) => e.message.includes('unknown action'))).toBe(false)
+    expect(nudgeOAuthFlows).toHaveBeenCalledTimes(1)
   })
 })

@@ -48,7 +48,7 @@ import {
   type LibraryEntry
 } from '../libraryService'
 import { catalogLocalInstalls } from '../catalogLocalInstalls'
-import { catalogSkillService } from '../catalogSkillService'
+import { catalogSkillService, skillCredentialsAfterGet } from '../catalogSkillService'
 import { marketplaceSkillService } from '../marketplaceSkillService'
 import { marketplacePluginService } from '../marketplacePluginService'
 import { beginTeamBehindRead, noteTeamBehind } from '../catalogSkillUpdates'
@@ -1816,8 +1816,8 @@ export const sharingService = {
     const status = await sharingService.status(userId, agentId, false).catch(() => null)
     void catalogLocalInstalls.reportInstalled(profile, entry, status?.headSha ?? null)
     // Every catalog skill the agent pins, fetched in the background (U7); a refusal is an issue on its row, never a failed Get.
-    catalogSkillService.ensurePinnedInBackground(userId, agentId)
-    marketplaceSkillService.ensurePinnedInBackground(userId, agentId)
+    // Then one fill of the skills' slots, which names every deliverable skill so the composer asks for what is still missing.
+    void skillCredentialsAfterGet(userId, agentId, [catalogSkillService.ensurePinned(userId, agentId), marketplaceSkillService.ensurePinned(userId, agentId)])
     marketplacePluginService.ensurePinnedInBackground(userId, agentId)
     return { ...result({ done: true, refusal: null }, status, agentId), ...setup }
   },

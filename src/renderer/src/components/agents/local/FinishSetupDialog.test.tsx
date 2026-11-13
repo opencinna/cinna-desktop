@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode, createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AutoAttachedCredential, CredentialSetupDto, CredentialSetupSkillSlot, CredentialSetupSlot, ServiceCredentialDto } from '../../../../../shared/serviceCredentials'
+import type { AutoAttachedCredential, CredentialSetupDto, CredentialSetupSkillSlot, CredentialSetupSlot, OAuthConnectFlow, ServiceCredentialDto } from '../../../../../shared/serviceCredentials'
 import { useFinishSetupStore } from '../../../stores/finishSetup.store'
 import { notReadyNote, useFinishSetup } from './FinishSetupDialog'
 
@@ -19,7 +19,7 @@ const record = (over: Partial<ServiceCredentialDto>): ServiceCredentialDto => ({
 })
 const slot = (over: Partial<CredentialSetupSlot>): CredentialSetupSlot => ({
   name: 'acme', type: 'api_token', optional: false, envPrefix: null, state: 'missing', attached: null,
-  expectedKeys: [], presentKeys: [], options: [], notReady: null, ...over
+  expectedKeys: [], presentKeys: [], options: [], notReady: null, oauth: null, ...over
 })
 let setup: CredentialSetupDto
 const setupState = vi.fn(async () => ({ ok: true, value: setup }))
@@ -28,7 +28,7 @@ let skillAttached: AutoAttachedCredential[] = []
 const setupSkills = vi.fn(async () => ({ ok: true, value: skillAttached }))
 const skillSlot = (over: Partial<CredentialSetupSkillSlot>): CredentialSetupSkillSlot => ({
   slot: 'erp-api', type: 'api_token', skills: ['erp-orders'], description: null, state: 'missing', attached: null,
-  typeMismatch: null, notLocal: null, notReady: null, options: [], provision: null, ...over
+  typeMismatch: null, notLocal: null, notReady: null, options: [], provision: null, oauth: null, ...over
 })
 const openCredentials = vi.fn(async (): Promise<unknown> => ({ created: false, revealed: false }))
 const setEnvValues = vi.fn(async (_id: string, values: Record<string, string>): Promise<unknown> => {
@@ -36,8 +36,15 @@ const setEnvValues = vi.fn(async (_id: string, values: Record<string, string>): 
   setup = { ...setup, slots: setup.slots.map((s) => ({ ...s, presentKeys: [...new Set([...s.presentKeys, ...Object.keys(values).filter((k) => s.expectedKeys.includes(k))])] })) }
   return { ok: true, value: [] }
 })
+let flowNow: OAuthConnectFlow | null = null
+const oauthFlow = vi.fn(async () => ({ ok: true, value: flowNow }))
+const authorizeSlot = vi.fn(async (_id: string, slotKey: string): Promise<unknown> => ({ ok: true, value: gflow({ slot: slotKey }) }))
+const reopenOAuth = vi.fn(async () => ({ ok: true, value: undefined }))
+const cancelOAuth = vi.fn(async () => ({ ok: true, value: undefined }))
+const gflow = (over: Partial<OAuthConnectFlow>): OAuthConnectFlow => ({ id: 'flow-1', agentId: AGENT, group: 'acct', type: 'gmail_oauth_readonly', credentialId: 'g-1',
+  reconnect: false, slot: 'mail', state: 'waiting', error: null, expiresAt: Date.now() + 600_000, ...over })
 window.api = {
-  serviceCredentials: { setupState, attach, setupSkills, onChanged: () => () => {} },
+  serviceCredentials: { setupState, attach, setupSkills, oauthFlow, authorizeSlot, reopenOAuth, cancelOAuth, onChanged: () => () => {} },
   localAgents: { setEnvValues, openCredentials }
 } as never
 
@@ -56,10 +63,11 @@ const field = (name: string, key: string) => within(row(name)).getByLabelText(ke
 
 beforeEach(() => {
   setupState.mockClear(); attach.mockClear(); setEnvValues.mockClear(); openCredentials.mockClear(); setupSkills.mockClear()
+  oauthFlow.mockClear(); authorizeSlot.mockClear(); reopenOAuth.mockClear(); cancelOAuth.mockClear(); flowNow = null
   skillAttached = []
   useFinishSetupStore.setState({ pending: [], autoAttached: {} })
   setup = {
-    setupNeeded: true, skillSlots: [],
+    oauthAccount: true, setupNeeded: true, skillSlots: [],
     slots: [
       slot({ name: 'acme', state: 'connected', attached: { credential: record({}), state: 'ready' } }),
       slot({ name: 'weather', envPrefix: 'WEATHER_', expectedKeys: ['WEATHER_API_KEY'] })
@@ -126,7 +134,7 @@ describe('Finish setup', () => {
 
   it('says Set on this computer, Optional, Missing with why an attachment stopped counting, and offers records', async () => {
     setup = {
-      setupNeeded: true, skillSlots: [],
+      oauthAccount: true, setupNeeded: true, skillSlots: [],
       slots: [
         slot({ name: 'env', state: 'env', envPrefix: 'ENV_', expectedKeys: ['ENV_KEY'], presentKeys: ['ENV_KEY'] }),
         slot({ name: 'extra', optional: true }),
@@ -160,7 +168,7 @@ describe('Finish setup', () => {
   })
 
   it('keeps a saved name on screen as Set, keeps focus in the row, and never reshapes it while typing', async () => {
-    setup = { setupNeeded: true, skillSlots: [], slots: [slot({ name: 'mail', envPrefix: 'MAIL_', expectedKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'] })] }
+    setup = { oauthAccount: true, setupNeeded: true, skillSlots: [], slots: [slot({ name: 'mail', envPrefix: 'MAIL_', expectedKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'] })] }
     renderHarness()
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-mail')
@@ -195,7 +203,7 @@ describe('Finish setup', () => {
   })
 
   it('Replace moves focus to its field, and Cancel puts the saved name back without saving', async () => {
-    setup = { setupNeeded: false, skillSlots: [], slots: [slot({ name: 'mail', state: 'env', envPrefix: 'MAIL_', expectedKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'], presentKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'] })] }
+    setup = { oauthAccount: true, setupNeeded: false, skillSlots: [], slots: [slot({ name: 'mail', state: 'env', envPrefix: 'MAIL_', expectedKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'], presentKeys: ['MAIL_LOGIN', 'MAIL_PASSWORD'] })] }
     renderHarness()
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-mail')
@@ -223,7 +231,7 @@ describe('Finish setup', () => {
   })
 
   it('offers a slot with no fields its records and Open credentials/.env, never a field', async () => {
-    setup = { setupNeeded: true, skillSlots: [], slots: [slot({ name: 'vendor', envPrefix: 'VENDOR_', options: [{ group: 'g', ref: 'v1', credential: record({ id: 'v1', cloudId: 'v1', name: 'Vendor key' }) }] })] }
+    setup = { oauthAccount: true, setupNeeded: true, skillSlots: [], slots: [slot({ name: 'vendor', envPrefix: 'VENDOR_', options: [{ group: 'g', ref: 'v1', credential: record({ id: 'v1', cloudId: 'v1', name: 'Vendor key' }) }] })] }
     renderHarness()
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-vendor')
@@ -285,7 +293,7 @@ describe('Finish setup', () => {
     expect(setEnvValues).toHaveBeenLastCalledWith(AGENT, { WEATHER_API_KEY: 'k' })
 
     setEnvValues.mockClear()
-    setup = { setupNeeded: true, skillSlots: [], slots: [slot({ name: 'other', envPrefix: 'OTHER_', expectedKeys: ['OTHER_KEY'] })] }
+    setup = { oauthAccount: true, setupNeeded: true, skillSlots: [], slots: [slot({ name: 'other', envPrefix: 'OTHER_', expectedKeys: ['OTHER_KEY'] })] }
     fireEvent.click(screen.getByText('open'))
     await screen.findByTestId('finish-setup-slot-other')
     fireEvent.change(field('other', 'OTHER_KEY'), { target: { value: 'later' } })
@@ -385,6 +393,119 @@ describe('Finish setup', () => {
       expect(screen.queryByRole('dialog')).toBeNull()
       expect(setupSkills).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('Finish setup: Google slots', () => {
+  const mail = (over: Partial<CredentialSetupSlot> = {}) => slot({ name: 'mail', type: 'gmail_oauth_readonly', oauth: 'authorize', ...over })
+  const gmailRecord = (over: Partial<ServiceCredentialDto> = {}) => record({ id: 'g-old', cloudId: 'g-old', name: 'Gmail (read-only)', type: 'gmail_oauth_readonly', serviceUri: 'gmail', relation: 'owned', ownerEmail: null, ...over })
+  async function openWith(slots: CredentialSetupSlot[], over: Partial<CredentialSetupDto> = {}) {
+    setup = { oauthAccount: true, setupNeeded: true, skillSlots: [], slots, ...over }
+    renderHarness()
+    fireEvent.click(screen.getByText('open'))
+    await screen.findByTestId(`finish-setup-slot-${slots[0]?.name ?? 'none'}`).catch(() => undefined)
+    await waitFor(() => expect(oauthFlow).toHaveBeenCalled())
+  }
+  /** The authorize line: one row of one height in every state, a credential row's (rule 1). */
+  const HEIGHT = 'h-[calc(1.25rem+1.5em+2px)]'
+  const line = (name = 'mail') => {
+    const lines = within(row(name)).getAllByTestId('authorize-line')
+    expect(lines).toHaveLength(1)
+    expect(lines[0].className).toContain(HEIGHT)
+    expect(lines[0].className).toContain('text-[14px]')
+    return lines[0]
+  }
+
+  it('offers Authorize in place of the "none fits" note, and starts the slot’s sign-in with only its key', async () => {
+    await openWith([mail()])
+    expect(within(line()).getByText('Sign in with Google to connect it.')).toBeTruthy()
+    expect(within(row('mail')).queryByText(/None of your credentials/)).toBeNull()
+    const button = within(line()).getByRole('button', { name: 'Authorize' })
+    // Done is the dialog's one primary.
+    expect(button.className).not.toContain('bg-[var(--color-accent)]')
+    fireEvent.click(button)
+    await waitFor(() => expect(authorizeSlot).toHaveBeenCalledWith(AGENT, 'mail'))
+    // Main's answer is the slot's flow: the line now waits for the browser, at the same height.
+    expect(await within(line()).findByText('Finish in your browser…')).toBeTruthy()
+    // Cancel left of Reopen browser: the Authorize that follows lands where Reopen browser was, not under the pointer.
+    expect(within(line()).getAllByRole('button').map((b) => b.textContent)).toEqual(['Cancel', 'Reopen browser'])
+    fireEvent.click(within(line()).getByRole('button', { name: 'Reopen browser' }))
+    await waitFor(() => expect(reopenOAuth).toHaveBeenCalledWith(AGENT, 'flow-1'))
+    fireEvent.click(within(line()).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(cancelOAuth).toHaveBeenCalledWith(AGENT, 'flow-1'))
+    expect(await within(line()).findByRole('button', { name: 'Authorize' })).toBeTruthy()
+  })
+
+  it('beside records to use, reads "or connect another Google account" with a secondary button', async () => {
+    await openWith([mail({ options: [{ group: 'acct', ref: 'g-2', credential: gmailRecord({ id: 'g-2', cloudId: 'g-2', oauthStatus: 'ready' }) }] })])
+    expect(within(line()).getByText('or connect another Google account')).toBeTruthy()
+    expect(within(line()).getByRole('button', { name: 'Authorize' }).className).not.toContain('bg-[var(--color-accent)]')
+  })
+
+  it('reads Reconnect for an owned record whose access expired, and replaces its note', async () => {
+    await openWith([mail({ oauth: 'reconnect', notReady: gmailRecord({ oauthStatus: 'reauth_required' }) })])
+    expect(within(line()).getByRole('button', { name: 'Reconnect' })).toBeTruthy()
+    expect(within(row('mail')).queryByText(/has to be reconnected first/)).toBeNull()
+  })
+
+  it('keeps a shared record’s note, since only its owner can reconnect it', async () => {
+    await openWith([mail({ notReady: gmailRecord({ relation: 'shared', ownerEmail: 'boss@example.test', oauthStatus: 'reauth_required' }) })])
+    expect(within(row('mail')).getByText('Gmail (read-only) fits it, but its Google access has to be reconnected first.')).toBeTruthy()
+    expect(within(line()).getByRole('button', { name: 'Authorize' })).toBeTruthy()
+  })
+
+  it('after a failure, offers Authorize again with the reason under it, last in the card', async () => {
+    flowNow = gflow({ state: 'failed', error: { code: 'timeout', message: 'x' } })
+    await openWith([mail()])
+    const alert = await within(row('mail')).findByRole('alert')
+    expect(alert.textContent).toBe('Google sign-in was not finished in time.')
+    expect(row('mail').lastElementChild).toBe(alert)
+    expect(within(line()).getByRole('button', { name: 'Authorize' })).toBeTruthy()
+  })
+
+  it('shows a refused start under the row, and nothing else moves', async () => {
+    authorizeSlot.mockResolvedValueOnce({ ok: false, code: 'account_unavailable', message: 'Sign in to Cinna to authorize it.' })
+    await openWith([mail()])
+    fireEvent.click(within(line()).getByRole('button', { name: 'Authorize' }))
+    expect((await within(row('mail')).findByRole('alert')).textContent).toBe('Sign in to Cinna to authorize it.')
+    expect(within(line()).getByRole('button', { name: 'Authorize' })).toBeTruthy()
+  })
+
+  it('holds a row’s Authorize while another slot’s sign-in waits', async () => {
+    flowNow = gflow({ slot: 'skill:drive' })
+    await openWith([mail()])
+    const button = await within(line()).findByRole('button', { name: 'Authorize' })
+    await waitFor(() => expect(button.getAttribute('aria-disabled')).toBe('true'))
+    expect(button.title).toBe('Finish the other Google sign-in first.')
+    expect(button.className).toContain('opacity-50')
+    expect(within(line()).getByText('Finish the other Google sign-in first.')).toBeTruthy()
+    fireEvent.click(button)
+    expect(authorizeSlot).not.toHaveBeenCalled()
+  })
+
+  it('says to sign in to Cinna, with no button, when the profile has no account', async () => {
+    await openWith([mail()], { oauthAccount: false })
+    expect(within(line()).getByText('Sign in to Cinna to authorize it.')).toBeTruthy()
+    expect(within(line()).queryByRole('button')).toBeNull()
+  })
+
+  it('dismisses the slot’s flow once it attached the record, and stays open', async () => {
+    flowNow = gflow({ state: 'attached' })
+    await openWith([mail({ state: 'connected', oauth: null, attached: { credential: gmailRecord({ oauthStatus: 'ready' }), state: 'ready' } })])
+    await waitFor(() => expect(cancelOAuth).toHaveBeenCalledWith(AGENT, 'flow-1'))
+    expect(dialog()).toBeTruthy()
+    expect(within(row('mail')).getByText('Connected')).toBeTruthy()
+    expect(within(row('mail')).queryByTestId('authorize-line')).toBeNull()
+  })
+
+  it('authorizes a skill slot by skill:<slot>', async () => {
+    setup = { oauthAccount: true, setupNeeded: false, slots: [], skillSlots: [skillSlot({ slot: 'gmail', type: 'gmail_oauth', skills: ['inbox'], oauth: 'authorize' })] }
+    renderHarness()
+    fireEvent.click(screen.getByText('open'))
+    const skillRow = await screen.findByTestId('finish-setup-skill-slot-gmail')
+    expect(within(skillRow).queryByText(/None of your credentials/)).toBeNull()
+    fireEvent.click(within(skillRow).getByRole('button', { name: 'Authorize' }))
+    await waitFor(() => expect(authorizeSlot).toHaveBeenCalledWith(AGENT, 'skill:gmail'))
   })
 })
 

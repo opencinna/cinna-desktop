@@ -492,21 +492,31 @@ function account(): { profile: string; host: string } | Refused {
  * `skill` names the skill an Add to agent or Update just pinned: once the pass settles — attached
  * something or nothing, refused by a running turn, or failed — one payload carries
  * `skillSlotsSettled` with it, and the composer prompts for whatever that skill still lacks (read
- * from the agent's DTO, not decided here). Background passes name no skill and never prompt.
+ * from the agent's DTO, not decided here). Background passes name no skill and never prompt, except
+ * the one after a team library Get (`deliverableFor`, the user whose view lists the agent): it names
+ * every deliverable skill the agent has once the fill settles, since the user just took the agent.
  */
-export async function skillCredentials(agentId: string, options: { onBusy?: () => void; skill?: string } = {}): Promise<AutoAttachedCredential[]> {
-  const { onBusy, skill } = options
+export async function skillCredentials(agentId: string, options: { onBusy?: () => void; skill?: string; deliverableFor?: string } = {}): Promise<AutoAttachedCredential[]> {
+  const { onBusy, skill, deliverableFor } = options
   let items: AutoAttachedCredential[] = []
+  /** A holder refused the write and a retry is armed: a Get's settle waits for that real fill. */
+  let refused = false
   try {
     const { serviceCredentialService } = await import('./serviceCredentials/service')
-    items = await (onBusy ? serviceCredentialService.autoAttachSkills(agentId, { onBusy }) : serviceCredentialService.autoAttachSkills(agentId))
+    items = await (onBusy ? serviceCredentialService.autoAttachSkills(agentId, { onBusy: () => { refused = true; onBusy() } }) : serviceCredentialService.autoAttachSkills(agentId))
   } catch (err) {
     logger.warn('skill credentials could not be attached', { agentId, error: err instanceof Error ? err.message : String(err) })
     items = []
   }
+  let named = skill !== undefined ? [skill] : []
+  if (deliverableFor !== undefined && !refused) {
+    // Read after the fill: the skills fetched in the background are on this computer now.
+    try { named = (localAgentService.get(deliverableFor, agentId).skills ?? []).filter((row) => row.deliverable).map((row) => row.name) }
+    catch (err) { logger.warn('the agent’s skills could not be read after a Get', { agentId, error: err instanceof Error ? err.message : String(err) }) }
+  }
   const payload: ServiceCredentialsChangedPayload = {
     ...(items.length ? { autoAttached: { agentId, items } } : {}),
-    ...(skill !== undefined ? { skillSlotsSettled: { agentId, skills: [skill] } } : {})
+    ...(named.length ? { skillSlotsSettled: { agentId, skills: named } } : {})
   }
   try {
     if (payload.autoAttached || payload.skillSlotsSettled) publishEvent(SERVICE_CREDENTIALS_CHANGED, payload, 'all')
@@ -516,24 +526,48 @@ export async function skillCredentials(agentId: string, options: { onBusy?: () =
   return items
 }
 
-/** Agents whose background skill attach a holder refused, waiting for the agent to be free. */
-const attachRetryPending = new Set<string>()
+/**
+ * Agents whose background skill attach a holder refused, waiting for the agent to be free, with the
+ * user whose Get asked for the settle naming its skills (undefined for any other background fill).
+ */
+const attachRetryPending = new Map<string, string | undefined>()
 
 /**
  * {@link skillCredentials} after a background fetch of pinned skills. The fetch can land while a
  * turn holds the agent, which refuses the write; then it is tried once more when the agent's last
  * holder leaves — one pending retry per agent, and the retry does not arm another.
  */
-export function skillCredentialsInBackground(agentId: string): Promise<AutoAttachedCredential[]> {
-  return skillCredentials(agentId, { onBusy: () => {
-    if (attachRetryPending.has(agentId)) return
-    attachRetryPending.add(agentId)
+export function skillCredentialsInBackground(agentId: string, deliverableFor?: string): Promise<AutoAttachedCredential[]> {
+  return skillCredentials(agentId, { ...(deliverableFor !== undefined ? { deliverableFor } : {}), onBusy: () => {
+    // A Get refused by a turn names its skills after the retry's fill, not now: one pending retry per agent, which a Get upgrades.
+    if (attachRetryPending.has(agentId)) {
+      if (deliverableFor !== undefined) attachRetryPending.set(agentId, deliverableFor)
+      return
+    }
+    attachRetryPending.set(agentId, deliverableFor)
     turnLock.whenFree(agentId, () => {
+      const forGet = attachRetryPending.get(agentId)
       attachRetryPending.delete(agentId)
-      void skillCredentials(agentId)
+      void skillCredentials(agentId, forGet !== undefined ? { deliverableFor: forGet } : {})
     })
   } })
 }
+
+/**
+ * After a team library **Get** (not an Update, not any other background fetch): once the agent's pinned
+ * skills are fetched (`fetches`, settled or not), fill its skill slots once and name every deliverable
+ * skill in the settle, so the composer prompts for those still lacking a credential. One fill, after
+ * both the catalog and the marketplace fetch, so a skill fetched by the second is not missed. Never rejects.
+ */
+export function skillCredentialsAfterGet(userId: string, agentId: string, fetches: Promise<unknown>[]): Promise<void> {
+  // A fetch that never settles must not hold the fill back: after the wait, fill with what is on this computer.
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const waited = new Promise<void>((resolve) => { timer = setTimeout(resolve, afterGetTiming.fetchWaitMs) })
+  return Promise.race([Promise.allSettled(fetches), waited]).finally(() => clearTimeout(timer))
+    .then(() => skillCredentialsInBackground(agentId, userId)).then(() => undefined, () => undefined)
+}
+/** How long the fill after a Get waits for the pinned-skill fetches before it runs anyway. Tests shorten it. */
+export const afterGetTiming = { fetchWaitMs: 60_000 }
 
 /**
  * Detach what auto-attach put on the agent for skill slots nothing declares any more (a removed skill,

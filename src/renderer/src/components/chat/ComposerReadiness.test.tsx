@@ -14,7 +14,7 @@ import type { ComposerReadiness } from './ComposerReadiness'
 
 afterEach(() => vi.useRealTimers())
 
-const { isCatalogCommand, RefusableExamplePrompts, readinessNoticeItem, skillCredentialsNotice, credentialRows, useDropSettledPrompts } = await import('./ComposerReadiness')
+const { isCatalogCommand, RefusableExamplePrompts, readinessNoticeItem, skillCredentialsNotice, credentialRows, useDropSettledPrompts, folderCredentialsNotice, folderGoogleSlot, skillGoogleSlot, slotOAuthAction } = await import('./ComposerReadiness')
 const { useSkillCredentialPromptStore } = await import('../../stores/skillCredentialPrompt.store')
 const { ComposerNoticePanel } = await import('./ComposerNoticePanel')
 
@@ -280,6 +280,104 @@ describe('skillCredentialsNotice', () => {
     })
     expect(credentialRows(folderRow, null)).toEqual({ credentials: folderRow, skillCredentials: null })
     expect(credentialRows(null, prompt)).toEqual({ credentials: null, skillCredentials: prompt })
+  })
+})
+
+describe('Authorize on a credential row', () => {
+  const slot = (name: string, type: string, satisfied = false) => ({ name, type, optional: false, envPrefix: null, serviceUri: null, expectedKeys: [], presentKeys: [], satisfied, attachment: null })
+  const folderOf = (credentials: ReturnType<typeof slot>[], skills: unknown[] = []) => ({ id: 'folder:kit', readiness: 'credentials_needed', readinessReason: 'Missing credential: mail.', credentials, skills }) as never
+  const cred = (s: string, type: string) => ({ slot: s, type, description: null, filled: false })
+  const skill = (name: string, credentials: ReturnType<typeof cred>[]) => ({ name, description: '', version: null, source: 'catalog', path: '', deliverable: true, issues: [], credentials })
+  const authorizeWith = (phase: 'idle' | 'starting' | 'waiting' | 'blocked', error: string | null = null, slotKey = 'mail', type = 'gmail_oauth_readonly', action: 'authorize' | 'reconnect' = 'authorize', errorCode: string | null = null) =>
+    ({ slot: { slotKey, type }, action, state: { phase, error, errorCode }, onAuthorize: vi.fn(), onReopen: vi.fn() })
+  function Row({ notice }: { notice: ReturnType<typeof folderCredentialsNotice> }): React.JSX.Element {
+    return <ComposerNoticePanel notices={notice ? [notice] : []} />
+  }
+
+  it('picks exactly one missing Google slot, and nothing for several or for another type', () => {
+    expect(folderGoogleSlot(folderOf([slot('mail', 'gmail_oauth_readonly'), slot('erp', 'api_token', true)]))).toEqual({ slotKey: 'mail', type: 'gmail_oauth_readonly' })
+    expect(folderGoogleSlot(folderOf([slot('mail', 'gmail_oauth_readonly'), slot('drive', 'gdrive_oauth')]))).toBeNull()
+    expect(folderGoogleSlot(folderOf([slot('erp', 'api_token')]))).toBeNull()
+    const two = folderOf([], [skill('inbox', [cred('gmail', 'gmail_oauth')]), skill('digest', [cred('gmail', 'gmail_oauth')])])
+    expect(skillGoogleSlot(two, ['inbox', 'digest'])).toEqual({ slotKey: 'skill:gmail', type: 'gmail_oauth' })
+    expect(skillGoogleSlot(folderOf([], [skill('inbox', [cred('gmail', 'gmail_oauth'), cred('cal', 'gcalendar_oauth')])]), ['inbox'])).toBeNull()
+    expect(skillGoogleSlot(folderOf([], [skill('erp', [cred('erp-api', 'api_token')])]), ['erp'])).toBeNull()
+  })
+
+  it('takes main’s verdict: Reconnect where the dialog says so, nothing without an account or before main answered', () => {
+    const setup = { oauthAccount: true, setupNeeded: true, slots: [{ name: 'mail', oauth: 'reconnect' }, { name: 'erp', oauth: null }],
+      skillSlots: [{ slot: 'gmail', type: 'api_token', oauth: null }, { slot: 'gmail', type: 'gmail_oauth', oauth: 'authorize' }] } as never
+    expect(slotOAuthAction(setup, 'mail')).toBe('reconnect')
+    expect(slotOAuthAction(setup, 'erp')).toBeNull()
+    expect(slotOAuthAction(setup, 'skill:gmail')).toBe('authorize')
+    expect(slotOAuthAction({ ...(setup as object), oauthAccount: false } as never, 'mail')).toBeNull()
+    expect(slotOAuthAction(undefined, 'mail')).toBeNull()
+    render(<Row notice={folderCredentialsNotice(folderOf([slot('mail', 'gmail_oauth_readonly')]), vi.fn(), authorizeWith('idle', null, 'mail', 'gmail_oauth_readonly', 'reconnect'))} />)
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy()
+  })
+
+  it('reads Authorize, then Reopen while it waits, then Try again with the reason, at one line throughout', () => {
+    const folder = folderOf([slot('mail', 'gmail_oauth_readonly')])
+    const idle = authorizeWith('idle')
+    const first = folderCredentialsNotice(folder, vi.fn(), idle)!
+    expect(first).toMatchObject({ key: 'folder-credentials', singleLine: true, text: 'Gmail (read-only) isn’t connected.' })
+    const { rerender } = render(<Row notice={first} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize' }))
+    expect(idle.onAuthorize).toHaveBeenCalledTimes(1)
+
+    const waiting = authorizeWith('waiting')
+    const second = folderCredentialsNotice(folder, vi.fn(), waiting)!
+    expect(second).toMatchObject({ singleLine: true, text: 'Finish in your browser.' })
+    rerender(<Row notice={second} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }))
+    expect(waiting.onReopen).toHaveBeenCalledTimes(1)
+    expect(waiting.onAuthorize).not.toHaveBeenCalled()
+
+    const failed = authorizeWith('idle', 'Google sign-in was not finished in time.', 'mail', 'gmail_oauth_readonly', 'authorize', 'timeout')
+    const third = folderCredentialsNotice(folder, vi.fn(), failed)!
+    // Short on the line, whole in the title.
+    expect(third).toMatchObject({ singleLine: true, text: 'Sign-in timed out.', title: 'Google sign-in was not finished in time.' })
+    expect(folderCredentialsNotice(folder, vi.fn(), authorizeWith('idle', 'Google sign-in is not set up on this Cinna server.', 'mail', 'gmail_oauth_readonly', 'authorize', 'oauth_not_configured'))!.text).toBe('Not set up on this server.')
+    expect(folderCredentialsNotice(folder, vi.fn(), authorizeWith('idle', 'Core said no.', 'mail', 'gmail_oauth_readonly', 'authorize', 'other'))!.text).toBe('Core said no.')
+    rerender(<Row notice={third} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(failed.onAuthorize).toHaveBeenCalledTimes(1)
+    // All four labels share the button's one cell, so it keeps its width.
+    expect(screen.getByRole('button', { name: 'Try again' }).querySelectorAll('.col-start-1.row-start-1')).toHaveLength(4)
+  })
+
+  it('holds Authorize, dimmed and saying why, while another sign-in of the agent waits', () => {
+    const blocked = authorizeWith('blocked')
+    const notice = folderCredentialsNotice(folderOf([slot('mail', 'gmail_oauth_readonly')]), vi.fn(), blocked)!
+    expect(notice).toMatchObject({ text: 'Finish the other sign-in first.', title: 'Finish the other Google sign-in first.' })
+    render(<Row notice={notice} />)
+    const button = screen.getByRole('button', { name: 'Authorize' })
+    expect(button.getAttribute('aria-disabled')).toBe('true')
+    expect(button.className).toContain('!opacity-50')
+    fireEvent.click(button)
+    expect(blocked.onAuthorize).not.toHaveBeenCalled()
+  })
+
+  it('stays Finish setup when the missing set is not that one Google slot', () => {
+    const finish = vi.fn()
+    const notice = folderCredentialsNotice(folderOf([slot('mail', 'gmail_oauth_readonly'), slot('drive', 'gdrive_oauth')]), finish, authorizeWith('idle'))!
+    render(<Row notice={notice} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Finish setup' }))
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(folderCredentialsNotice(folderOf([slot('mail', 'gmail_oauth_readonly')]), vi.fn(), null)?.text).toBe('Missing credential: mail.')
+  })
+
+  it('authorizes a prompted skill’s one Google slot from its row, keeping the ×', () => {
+    const folder = folderOf([], [skill('inbox', [cred('gmail', 'gmail_oauth')])])
+    const authorize = authorizeWith('idle', null, 'skill:gmail', 'gmail_oauth')
+    const dismiss = vi.fn()
+    const notice = skillCredentialsNotice(folder, ['inbox'], vi.fn(), dismiss, authorize)!
+    expect(notice).toMatchObject({ key: 'skill-credentials', singleLine: true, text: 'inbox needs Gmail.', dismissLabel: 'Dismiss skill credential prompt' })
+    render(<ComposerNoticePanel notices={[notice]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize' }))
+    expect(authorize.onAuthorize).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss skill credential prompt' }))
+    expect(dismiss).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -1531,8 +1531,9 @@ describe('Google OAuth credentials (core-brokered)', () => {
       const a = await setup([plain(), gmail('g-new', { oauth_status: 'pending_authorization', granted_user_email: null })], ['plain'])
       world.oauthCreate.mockResolvedValue(authorized('g-new'))
       const flow = await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
-      expect(flow).toMatchObject({ agentId: a.id, group: acc, type: 'gmail_oauth_readonly', credentialId: 'g-new', reconnect: false, state: 'waiting', error: null })
-      expect(world.oauthCreate).toHaveBeenCalledWith('account-a', 'gmail_oauth_readonly', expect.anything())
+      expect(flow).toMatchObject({ agentId: a.id, group: acc, type: 'gmail_oauth_readonly', credentialId: 'g-new', reconnect: false, slot: null, state: 'waiting', error: null })
+      // New from the Credentials tab gives no Service URI.
+      expect(world.oauthCreate).toHaveBeenCalledWith('account-a', 'gmail_oauth_readonly', expect.anything(), undefined)
       expect(world.open).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/auth?state=fixture-state-g-new')
       // The consent URL stays in main.
       expect(JSON.stringify([flow, service.oauthFlow(a.id)])).not.toContain('fixture-state')
@@ -1640,6 +1641,111 @@ describe('Google OAuth credentials (core-brokered)', () => {
       world.metadata = [gmail('g-1', { revision: 'g2' })]
       await vi.waitFor(() => expect(flowState(a.id)).toBe('attached'), { timeout: 3000 })
       expect(service.attachments(a.id).map(d => [d.ref, d.state])).toEqual([['g-1', 'ready']])
+    })
+  })
+
+  describe('Authorize for one slot (Finish setup, the composer)', () => {
+    const mailSlot = (over: Record<string, unknown> = {}) => ({ name: 'mail', type: 'gmail_oauth_readonly', optional: false, envPrefix: null, serviceUri: 'gmail', expectedKeys: [], presentKeys: [], satisfied: false, attachment: null, ...over })
+    const inbox = (type = 'gmail_oauth_readonly', slot = 'gmail-inbox') => ({ name: 'inbox', description: '', version: null, source: 'authored', path: '', deliverable: true, issues: [], credentials: [{ slot, type, description: null }] })
+    async function slotAgent(items: any[], credentials: any[], skills: any[] = [], refs: string[] = []) {
+      const a = await setup(items, refs) as any
+      a.credentials = credentials; a.skills = skills
+      return a
+    }
+    const sent = () => world.oauthCreate.mock.calls.map(([user, type, , serviceUri]) => [user, type, serviceUri])
+
+    it('creates the record with the agent slot’s Service URI, attaches it once ready, and marks it as attached by hand', async () => {
+      const a = await slotAgent([plain(), gmail('g-new', { oauth_status: 'pending_authorization', granted_user_email: null })], [mailSlot()], [], ['plain'])
+      expect(service.setupState(a.id)).toMatchObject({ oauthAccount: true, slots: [{ name: 'mail', oauth: 'authorize' }] })
+      world.oauthCreate.mockResolvedValue({ ...authorized('g-new'), body: { ...authorized('g-new').body, service_uri: 'gmail' } })
+      const flow = await service.authorizeSlot(a.id, 'mail')
+      expect(flow).toMatchObject({ slot: 'mail', reconnect: false, credentialId: 'g-new', type: 'gmail_oauth_readonly', group: acc, state: 'waiting' })
+      expect(sent()).toEqual([['account-a', 'gmail_oauth_readonly', 'gmail']])
+      expect(world.open).toHaveBeenCalledOnce()
+      world.metadata = [plain(), gmail('g-new', { revision: 'g2' })]
+      await vi.waitFor(() => expect(flowState(a.id)).toBe('attached'), { timeout: 3000 })
+      expect(service.attachments(a.id).map(d => [d.ref, d.state])).toEqual([['plain', 'ready'], ['g-new', 'ready']])
+      expect(desktopStateService.read(a.path, a.kind).serviceCredentials?.accounts[acc]).toEqual([{ ref: 'plain' }, { ref: 'g-new' }])
+    })
+
+    it('uses the slot’s name as the Service URI when it declares none, and a skill slot’s slot for skill:<slot>', async () => {
+      const a = await slotAgent([], [mailSlot({ name: 'work-mail', serviceUri: null, type: 'gmail_oauth' })], [inbox('gcalendar_oauth', 'team-calendar')])
+      world.oauthCreate.mockResolvedValue({ ...authorized('g-new'), body: { ...authorized('g-new').body, service_uri: 'x' } })
+      expect((await service.authorizeSlot(a.id, 'work-mail')).slot).toBe('work-mail')
+      const skillFlow = await service.authorizeSlot(a.id, 'skill:team-calendar')
+      expect(skillFlow).toMatchObject({ slot: 'skill:team-calendar', type: 'gcalendar_oauth' })
+      expect(sent()).toEqual([['account-a', 'gmail_oauth', 'work-mail'], ['account-a', 'gcalendar_oauth', 'team-calendar']])
+      expect(service.setupState(a.id).skillSlots[0].oauth).toBe('authorize')
+    })
+
+    it('reconnects an owned record that fits but lost its grant, and appends it once ready', async () => {
+      const expired = gmail('g-old', { oauth_status: 'reauth_required' })
+      const a = await slotAgent([plain(), expired], [mailSlot()], [], ['plain'])
+      expect(service.setupState(a.id).slots[0]).toMatchObject({ notReady: { cloudId: 'g-old' }, oauth: 'reconnect' })
+      world.oauthAuthorize.mockResolvedValue(authorized('g-old'))
+      const flow = await service.authorizeSlot(a.id, 'mail')
+      expect(flow).toMatchObject({ slot: 'mail', reconnect: true, credentialId: 'g-old' })
+      expect(world.oauthAuthorize).toHaveBeenCalledWith('account-a', 'g-old', expect.anything())
+      expect(world.oauthCreate).not.toHaveBeenCalled()
+      world.metadata = [plain(), gmail('g-old', { revision: 'g2' })]
+      await vi.waitFor(() => expect(flowState(a.id)).toBe('attached'), { timeout: 3000 })
+      expect(service.attachments(a.id).map(d => d.ref)).toEqual(['plain', 'g-old'])
+      // Reconnect from the Credentials tab still refuses a record that is not attached.
+      await expect(service.reconnectOAuth(a.id, acc, 'g-other')).rejects.toMatchObject({ code: 'not_attached' })
+    })
+
+    it('creates its own record when the one that fits is shared: only its owner can reconnect that', async () => {
+      const shared = gmail('g-shared', { oauth_status: 'reauth_required', relation: 'shared', owner_email: 'boss@example.test' })
+      const a = await slotAgent([shared], [mailSlot()])
+      expect(service.setupState(a.id).slots[0]).toMatchObject({ notReady: { cloudId: 'g-shared' }, oauth: 'authorize' })
+      world.oauthCreate.mockResolvedValue(authorized('g-mine'))
+      expect(await service.authorizeSlot(a.id, 'mail')).toMatchObject({ reconnect: false, credentialId: 'g-mine' })
+      expect(world.oauthAuthorize).not.toHaveBeenCalled()
+    })
+
+    it('refuses an unknown slot, a connected one, a non-Google one, and no signed-in account, with no flow', async () => {
+      const a = await slotAgent([plain()], [mailSlot(), mailSlot({ name: 'done', attachment: { credentialId: 'x', state: 'ready' }, satisfied: true }), mailSlot({ name: 'api', type: 'api_token' })], [], ['plain'])
+      a.credentials[1].attachment = { credentialId: service.attachments(a.id)[0].credential!.id, state: 'ready' }
+      await expect(service.authorizeSlot(a.id, 'nope')).rejects.toMatchObject({ code: 'unknown_slot' })
+      await expect(service.authorizeSlot(a.id, 'skill:mail')).rejects.toMatchObject({ code: 'unknown_slot' })
+      await expect(service.authorizeSlot(a.id, 'done')).rejects.toMatchObject({ code: 'already_connected' })
+      await expect(service.authorizeSlot(a.id, 'api')).rejects.toMatchObject({ code: 'unsupported_type' })
+      expect(service.setupState(a.id).slots.map(s => s.oauth)).toEqual(['authorize', null, null])
+      world.user = '__default__'; await service.activate('__default__')
+      expect(service.setupState(a.id).oauthAccount).toBe(false)
+      await expect(service.authorizeSlot(a.id, 'mail')).rejects.toMatchObject({ code: 'account_unavailable', message: 'Sign in to Cinna to authorize it.' })
+      expect(world.oauthCreate).not.toHaveBeenCalled()
+      expect(service.oauthFlow(a.id)).toBeNull()
+    })
+
+    it('carries on, with a warning, when an older Core does not answer the Service URI', async () => {
+      const a = await slotAgent([], [mailSlot()])
+      world.oauthCreate.mockResolvedValue(authorized('g-new'))
+      expect(await service.authorizeSlot(a.id, 'mail')).toMatchObject({ state: 'waiting', credentialId: 'g-new' })
+      expect(getLogEntries().some(e => e.message.includes('did not say which Service URI'))).toBe(true)
+    })
+  })
+
+  describe('cinna://oauth-done nudge', () => {
+    it('polls the matching waiting flow now, and no other', async () => {
+      const a = await setup([gmail('g-new', { oauth_status: 'pending_authorization' })], [])
+      const b = addAgent('bare')
+      world.oauthCreate.mockResolvedValueOnce(authorized('g-new')).mockResolvedValueOnce(authorized('g-two'))
+      oauthFlowTiming.pollMs = 60_000
+      await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
+      await service.createOAuth(b.id, acc, 'gmail_oauth_readonly')
+      world.metadata = [gmail('g-new', { revision: 'g2' }), gmail('g-two', { revision: 'g2' })]
+      const calls = world.list.mock.calls.length
+      expect(service.nudgeOAuthFlows('11111111-2222-3333-4444-555555555555')).toBe(0)
+      await sleep()
+      expect(world.list.mock.calls.length).toBe(calls)
+      expect([flowState(a.id), flowState(b.id)]).toEqual(['waiting', 'waiting'])
+      expect(service.nudgeOAuthFlows('G-NEW')).toBe(1)
+      await vi.waitFor(() => expect(flowState(a.id)).toBe('attached'), { timeout: 3000 })
+      expect(flowState(b.id)).toBe('waiting')
+      // No id: every waiting flow.
+      expect(service.nudgeOAuthFlows(null)).toBe(1)
+      await vi.waitFor(() => expect(flowState(b.id)).toBe('attached'), { timeout: 3000 })
     })
   })
 

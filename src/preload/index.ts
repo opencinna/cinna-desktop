@@ -550,6 +550,12 @@ const api = {
     createOAuth: (id: string, group: string, type: GoogleOAuthType): Promise<ServiceCredentialResult<OAuthConnectFlow>> => ipcRenderer.invoke('service-credentials:create-oauth', id, group, type),
     /** Reconnect an attached Google OAuth record (`ref` = Core id) whose grant is pending or rejected; same flow as `createOAuth`. */
     reconnectOAuth: (id: string, group: string, ref: string): Promise<ServiceCredentialResult<OAuthConnectFlow>> => ipcRenderer.invoke('service-credentials:reconnect-oauth', id, group, ref),
+    /**
+     * Authorize one missing Google OAuth slot (`slotKey`: an agent slot's name, or `skill:<slot>`): main reads the
+     * type and Service URI from its own scan, reconnects an owned record that fits it or creates one, opens the
+     * consent page, and attaches the record once Core reports it ready. Same one-per-agent flow as `createOAuth`.
+     */
+    authorizeSlot: (id: string, slotKey: string): Promise<ServiceCredentialResult<OAuthConnectFlow>> => ipcRenderer.invoke('service-credentials:authorize-slot', id, slotKey),
     /** The agent's current connect flow, or null. Changes are announced through `onChanged`. */
     oauthFlow: (id: string): Promise<ServiceCredentialResult<OAuthConnectFlow | null>> => ipcRenderer.invoke('service-credentials:oauth-flow', id),
     /** Open the flow's consent page again (`waiting` only). */

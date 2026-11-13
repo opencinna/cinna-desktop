@@ -49,9 +49,13 @@ export const serviceCredentialCloud = {
   /**
    * Google OAuth, Core-brokered. Each answers `{status, ok, body}` so Core's coded refusals
    * (`{detail: {code, message}}`) come back as data. Create sends no name: Core names the record
-   * by its type ("Gmail (read-only)") and reuses the caller's newest pending one of that type.
+   * by its type ("Gmail (read-only)") and reuses the caller's newest pending one of that type and
+   * Service URI. `serviceUri` (an Authorize for one slot) gives the record that Service URI; without
+   * it the field is not sent.
    */
-  createOAuth: (userId: string, type: string, signal?: AbortSignal) => cinnaSend(userId, '/api/v1/external/credentials/oauth', { method: 'POST', json: { type }, signal: within(30_000, signal) }),
+  createOAuth: (userId: string, type: string, signal?: AbortSignal, serviceUri?: string) => cinnaSend(userId, '/api/v1/external/credentials/oauth', {
+    method: 'POST', json: serviceUri ? { type, service_uri: serviceUri } : { type }, signal: within(30_000, signal)
+  }),
   authorizeOAuth: (userId: string, id: string, signal?: AbortSignal) => cinnaSend(userId, `/api/v1/external/credentials/${encodeURIComponent(id)}/oauth/authorize`, { method: 'POST', signal: within(30_000, signal) }),
   accessToken: (userId: string, id: string, body: { min_ttl: number; known_expires_at: number | null }, signal?: AbortSignal) =>
     cinnaSend(userId, `/api/v1/external/credentials/${encodeURIComponent(id)}/access-token`, { method: 'POST', json: body, signal: within(25_000, signal) })

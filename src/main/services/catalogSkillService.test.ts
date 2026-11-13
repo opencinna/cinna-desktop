@@ -96,7 +96,7 @@ vi.mock('./localAgents/gitService', () => ({
   gitService: { readShareRemote: async () => ({ ...remote, refusal: null }) }
 }))
 
-const { catalogSkillService } = await import('./catalogSkillService')
+const { catalogSkillService, skillCredentialsAfterGet, afterGetTiming } = await import('./catalogSkillService')
 const { catalogSkillCache, removeTree } = await import('./catalogSkillCache')
 const { catalogLocalInstalls } = await import('./catalogLocalInstalls')
 const { beginTeamBehindRead, catalogSkillDisconnectedItems, catalogSkillUpdateItems, noteTeamBehind, withCatalogSkillUpdates } = await import('./catalogSkillUpdates')
@@ -629,6 +629,65 @@ describe('fetching what an agent pins (U7)', () => {
     expect(autoAttachSkills.mock.calls[1]).toEqual([AGENT_ID])
     await new Promise((r) => setTimeout(r, 10))
     expect(autoAttachSkills).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('after a team library Get', () => {
+  it('fills the skill slots once, after every fetch settled, and names each deliverable skill', async () => {
+    const { localAgentService } = await import('./localAgents/localAgentService')
+    const get = vi.spyOn(localAgentService, 'get').mockReturnValue({ rootId: 'root-1', path: located.dir, skills: [
+      { name: 'mail-digest', deliverable: true }, { name: 'held-back', deliverable: false }, { name: 'erp-lookup', deliverable: true }
+    ] } as never)
+    autoAttachSkills.mockClear()
+    publishEvent.mockClear()
+    let finish!: () => void
+    const marketplace = new Promise<void>((resolve) => { finish = resolve })
+    try {
+      // The catalog fetch refused, the marketplace one still running: no fill yet.
+      const done = skillCredentialsAfterGet(USER, AGENT_ID, [Promise.reject(new Error('refused')), marketplace])
+      await new Promise((r) => setTimeout(r, 10))
+      expect(autoAttachSkills).not.toHaveBeenCalled()
+      finish()
+      await done
+      expect(autoAttachSkills).toHaveBeenCalledTimes(1)
+      expect(publishEvent.mock.calls.filter(([channel]) => channel === SERVICE_CREDENTIALS_CHANGED).map(([, payload]) => payload))
+        .toEqual([{ skillSlotsSettled: { agentId: AGENT_ID, skills: ['mail-digest', 'erp-lookup'] } }])
+      // Read the agent with the Get's own user, after the fill.
+      expect(get).toHaveBeenLastCalledWith(USER, AGENT_ID)
+    } finally { get.mockRestore() }
+  })
+
+  it('names the skills only after the real fill when a turn refused the first one', async () => {
+    const { localAgentService } = await import('./localAgents/localAgentService')
+    const get = vi.spyOn(localAgentService, 'get').mockReturnValue({ rootId: 'root-1', path: located.dir, skills: [{ name: 'mail-digest', deliverable: true }] } as never)
+    autoAttachSkills.mockClear()
+    publishEvent.mockClear()
+    autoAttachSkills.mockImplementationOnce(async (_id: string, options?: { onBusy?: () => void }) => { options?.onBusy?.(); return [] })
+    const settles = () => publishEvent.mock.calls.filter(([channel]) => channel === SERVICE_CREDENTIALS_CHANGED).map(([, payload]) => payload)
+    const turn = turnLock.acquireShared(AGENT_ID, 'turn')
+    try {
+      await skillCredentialsAfterGet(USER, AGENT_ID, [])
+      expect(settles()).toEqual([])
+    } finally { turn.release() }
+    try {
+      await vi.waitFor(() => expect(autoAttachSkills).toHaveBeenCalledTimes(2))
+      await vi.waitFor(() => expect(settles()).toEqual([{ skillSlotsSettled: { agentId: AGENT_ID, skills: ['mail-digest'] } }]))
+    } finally { get.mockRestore() }
+  })
+
+  it('fills anyway once a fetch has not settled in time', async () => {
+    afterGetTiming.fetchWaitMs = 20
+    autoAttachSkills.mockClear()
+    try {
+      await skillCredentialsAfterGet(USER, AGENT_ID, [new Promise(() => undefined)])
+      expect(autoAttachSkills).toHaveBeenCalledTimes(1)
+    } finally { afterGetTiming.fetchWaitMs = 60_000 }
+  })
+
+  it('names nothing for an agent without deliverable skills', async () => {
+    publishEvent.mockClear()
+    await skillCredentialsAfterGet(USER, AGENT_ID, [])
+    expect(publishEvent).not.toHaveBeenCalledWith(SERVICE_CREDENTIALS_CHANGED, expect.anything(), 'all')
   })
 })
 

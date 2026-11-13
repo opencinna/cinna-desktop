@@ -38,7 +38,7 @@ function renderModal(onAttach: (group: string, ref: string) => Promise<void>, on
 const order = () => screen.getAllByTestId(/^credential-card-/).map(el => el.dataset.testid)
 
 const flow = (over: Partial<OAuthConnectFlow>): OAuthConnectFlow => ({ id: 'flow-1', agentId: 'folder:a', group: 'acct-work', type: 'gmail_oauth', credentialId: null,
-  reconnect: false, state: 'waiting', error: null, expiresAt: Date.now() + 600_000, ...over })
+  reconnect: false, slot: null, state: 'waiting', error: null, expiresAt: Date.now() + 600_000, ...over })
 const ok = <T,>(value: T) => ({ ok: true, value })
 
 beforeEach(() => {

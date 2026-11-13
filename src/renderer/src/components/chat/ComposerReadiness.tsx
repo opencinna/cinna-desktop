@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowUpRight, Check, Copy, Cpu, Download, FileWarning, FolderOpen, KeyRound, Loader2, LogIn, Plus, RefreshCw, WifiOff, X } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Check, Copy, Cpu, Download, ExternalLink, FileWarning, FolderOpen, KeyRound, Loader2, LogIn, Plus, RefreshCw, WifiOff, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { FindingText, NoticeButton, StableLabel } from './ComposerNoticePanel'
 import type { ComposerNotice } from './ComposerNoticePanel'
@@ -10,6 +10,10 @@ import { useLocalAgents, useOpenAgentPath } from '../../hooks/useLocalAgents'
 import { isSkillFinding } from '../../../../shared/kit/findings'
 import { folderReadinessBlocksTurn, missingCredentialsReason, type LocalAgentDto, type LocalAgentSkill, type LocalAgentSkillCredential } from '../../../../shared/localAgents'
 import { useFinishSetup } from '../agents/local/FinishSetupDialog'
+import { useSlotAuthorize, type SlotAuthorizeState } from '../../hooks/useSlotAuthorize'
+import { credentialTypeName } from '../settings/LocalCredentialForm'
+import { isGoogleOAuthType, type CredentialSetupDto, type SlotOAuthAction } from '../../../../shared/serviceCredentials'
+import { useCredentialSetup } from '../../hooks/useServiceCredentials'
 import { useAgentAiCredentialIssue, type AiCredentialIssue } from '../../hooks/useAgentAiCredential'
 import { useUIStore } from '../../stores/ui.store'
 import { skillsLackingCredentials, useSkillCredentialPromptStore } from '../../stores/skillCredentialPrompt.store'
@@ -368,15 +372,116 @@ export function useFolderFindingsNotice(folder: LocalAgentDto | null): ComposerN
   }
 }
 
+/** The one Google OAuth slot a credential row could authorize directly: `slotKey` as `authorizeSlot` takes it. */
+export interface GoogleSlot { slotKey: string; type: string }
+
+/** The folder's missing slot when it is exactly one, and a Google OAuth one; null otherwise. */
+export function folderGoogleSlot(folder: LocalAgentDto | null): GoogleSlot | null {
+  const missing = folder?.credentials.filter((slot) => !slot.satisfied) ?? []
+  return missing.length === 1 && isGoogleOAuthType(missing[0].type) ? { slotKey: missing[0].name, type: missing[0].type } : null
+}
+
+/** The prompted skills' missing slot when it is exactly one, and a Google OAuth one (`skill:<slot>`); null otherwise. */
+export function skillGoogleSlot(folder: LocalAgentDto | null, prompted: readonly string[] | undefined): GoogleSlot | null {
+  if (!folder || !prompted?.length) return null
+  const slots = new Map<string, string>()
+  for (const { missing } of skillsLackingCredentials(folder, prompted)) for (const slot of missing) slots.set(`${slot.type}\n${slot.slot}`, slot.slot)
+  if (slots.size !== 1) return null
+  const [[key, slot]] = [...slots]
+  const type = key.slice(0, key.indexOf('\n'))
+  return isGoogleOAuthType(type) ? { slotKey: `skill:${slot}`, type } : null
+}
+
+/**
+ * Main's Authorize verdict for a slot key (`setupState`): null until it has answered, without an
+ * account to authorize in, or when main does not offer it for that slot.
+ */
+export function slotOAuthAction(setup: CredentialSetupDto | undefined, slotKey: string): SlotOAuthAction | null {
+  if (!setup?.oauthAccount) return null
+  if (slotKey.startsWith('skill:')) {
+    const name = slotKey.slice('skill:'.length)
+    return setup.skillSlots.find((slot) => slot.slot === name && slot.oauth)?.oauth ?? null
+  }
+  return setup.slots.find((slot) => slot.name === slotKey)?.oauth ?? null
+}
+
+/** A credential row's Authorize, as `useComposerNotices` wires it: the slot's sign-in state and its two moves. */
+export interface ComposerAuthorize {
+  slot: GoogleSlot
+  /** Main's verdict on the slot (`setupState`): Reconnect for an owned record whose access expired. */
+  action: SlotOAuthAction
+  state: SlotAuthorizeState
+  onAuthorize: () => void
+  onReopen: () => void
+}
+
+const BLOCKED = 'Finish the other Google sign-in first.'
+
+/**
+ * The row's Authorize (or Reconnect), Reopen or Try again. All four labels share one cell, so the button
+ * keeps its width as the sign-in moves on and the sentence before it never re-wraps (ux_rules rule 1).
+ * While another sign-in of the agent waits it is dimmed and refuses the click.
+ */
+function AuthorizeNoticeButton({ authorize }: { authorize: ComposerAuthorize }): React.JSX.Element {
+  const { phase, error } = authorize.state
+  const shown = phase === 'waiting' ? 'reopen' : error ? 'retry' : authorize.action
+  const blocked = phase === 'blocked', busy = phase === 'starting' || blocked
+  const cell = (which: string, content: ReactNode) =>
+    <span key={which} aria-hidden={shown !== which} className={`col-start-1 row-start-1 flex items-center gap-1 ${shown === which ? '' : 'invisible'}`}>{content}</span>
+  const start = phase === 'starting' ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <KeyRound size={12} aria-hidden="true" />
+  return <NoticeButton aria-disabled={busy || undefined} aria-busy={phase === 'starting'}
+    className={blocked ? '!opacity-50 cursor-not-allowed' : ''}
+    title={blocked ? BLOCKED : undefined}
+    onClick={() => {
+      if (busy) return
+      if (shown === 'reopen') authorize.onReopen()
+      else authorize.onAuthorize()
+    }}>
+    <span className="grid">
+      {cell('authorize', <>{start}Authorize</>)}
+      {cell('reconnect', <>{start}Reconnect</>)}
+      {cell('retry', <><RefreshCw size={12} aria-hidden="true" />Try again</>)}
+      {cell('reopen', <><ExternalLink size={12} aria-hidden="true" />Reopen</>)}
+    </span>
+  </NoticeButton>
+}
+
+/**
+ * What a credential row says while it authorizes its one Google slot: the service by its friendly name
+ * ("Gmail (read-only)"), then the wait for the browser, then a failure's reason. Short, so it fits one
+ * line beside the button at the narrowest window (ux_rules rule 7).
+ */
+/** The composer's shorter words for a failure the dialog spells out (the full sentence stays in the row's title). */
+const SHORT_ERRORS: Record<string, string> = { timeout: 'Sign-in timed out.', oauth_not_configured: 'Not set up on this server.' }
+const SHORT_BLOCKED = 'Finish the other sign-in first.'
+
+function authorizeSentence(skill: string | null, authorize: ComposerAuthorize, short: boolean): string {
+  if (authorize.state.phase === 'waiting') return 'Finish in your browser.'
+  if (authorize.state.phase === 'blocked') return short ? SHORT_BLOCKED : BLOCKED
+  if (authorize.state.error) return (short && authorize.state.errorCode && SHORT_ERRORS[authorize.state.errorCode]) || authorize.state.error
+  const service = credentialTypeName(authorize.slot.type)
+  return skill === null ? `${service} isn’t connected.` : `${skill} needs ${service}.`
+}
+
+/** A credential row that authorizes its one Google slot directly instead of opening Finish setup. */
+function authorizeNotice(key: string, skill: string | null, authorize: ComposerAuthorize): Pick<ComposerNotice, 'key' | 'tone' | 'icon' | 'text' | 'title' | 'singleLine' | 'action'> {
+  // The slot beside the button is about 200 px at the narrowest window: the line takes the short words, the title the full ones.
+  const text = authorizeSentence(skill, authorize, true)
+  return { key, tone: 'warning', icon: KeyRound, text, title: authorizeSentence(skill, authorize, false), singleLine: true, action: <AuthorizeNoticeButton authorize={authorize} /> }
+}
+
 /**
  * The folder's required credential slots that nothing fills, as a row whose
  * one action is Finish setup. Read from the slots themselves rather than from
  * readiness: a folder that is `invalid` *and* missing a credential says
- * `invalid`, which would hide this row behind the findings one.
+ * `invalid`, which would hide this row behind the findings one. When the one
+ * missing slot is a Google OAuth one (`authorize`), the action is Authorize
+ * instead, with no dialog.
  */
-export function folderCredentialsNotice(folder: LocalAgentDto | null, onFinishSetup: () => void): ComposerNotice | null {
+export function folderCredentialsNotice(folder: LocalAgentDto | null, onFinishSetup: () => void, authorize: ComposerAuthorize | null = null): ComposerNotice | null {
   const missing = folder?.credentials.filter((slot) => !slot.satisfied) ?? []
   if (!folder || missing.length === 0) return null
+  if (authorize && authorize.slot.slotKey === folderGoogleSlot(folder)?.slotKey) return authorizeNotice('folder-credentials', null, authorize)
   const text = folder.readiness === 'credentials_needed' && folder.readinessReason
     ? folder.readinessReason
     : missingCredentialsReason(missing)
@@ -411,12 +516,16 @@ export function skillCredentialsNotice(
   folder: LocalAgentDto | null,
   prompted: readonly string[] | undefined,
   onFinishSetup: () => void,
-  onDismiss: () => void
+  onDismiss: () => void,
+  authorize: ComposerAuthorize | null = null
 ): ComposerNotice | null {
   if (!folder || !prompted?.length) return null
   const lacking = skillsLackingCredentials(folder, prompted)
   if (lacking.length === 0) return null
   const [first] = lacking
+  if (authorize && authorize.slot.slotKey === skillGoogleSlot(folder, prompted)?.slotKey) {
+    return { ...authorizeNotice('skill-credentials', first.skill.name, authorize), onDismiss, dismissLabel: 'Dismiss skill credential prompt' }
+  }
   return {
     key: 'skill-credentials',
     tone: 'warning',
@@ -581,10 +690,28 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
   const folderId = folder?.id ?? null
   const prompted = useSkillCredentialPromptStore((s) => (folderId ? s.prompts[folderId] : undefined))
   useDropSettledPrompts(folder, prompted)
+  // One missing Google slot is authorized from the row itself, as main judges it (`setupState`): only
+  // with an account to authorize in, and Reconnect where the dialog says Reconnect. Until main has
+  // answered, and without an account, the row stays Finish setup, whose dialog says to sign in.
+  const folderCandidate = folderGoogleSlot(folder)
+  const skillCandidate = skillGoogleSlot(folder, prompted)
+  const setup = useCredentialSetup(folderId ?? '', folderId !== null && (folderCandidate !== null || skillCandidate !== null))
+  // Followed for any agent with a Google slot, not only while one is missing: the flow that just
+  // filled it is dismissed by this hook once it attached, after the row has already gone.
+  const hasGoogleSlot = !!folder && (folder.credentials.some((slot) => isGoogleOAuthType(slot.type))
+    || (folder.skills ?? []).some((skill) => skill.credentials.some((slot) => isGoogleOAuthType(slot.type))))
+  const google = useSlotAuthorize(hasGoogleSlot ? folderId : null)
+  const authorizeOf = (slot: GoogleSlot | null): ComposerAuthorize | null => {
+    const action = slot ? slotOAuthAction(setup.data, slot.slotKey) : null
+    return slot && action && {
+      slot, action, state: google.stateOf(slot.slotKey), onAuthorize: () => google.authorize(slot.slotKey), onReopen: () => google.reopen(slot.slotKey)
+    }
+  }
+  const folderGoogle = folderCandidate, skillGoogle = skillCandidate
   const skillPrompt = folderId
-    ? skillCredentialsNotice(folder, prompted, finishSetup.open, () => useSkillCredentialPromptStore.getState().dismiss(folderId))
+    ? skillCredentialsNotice(folder, prompted, finishSetup.open, () => useSkillCredentialPromptStore.getState().dismiss(folderId), authorizeOf(skillGoogle))
     : null
-  const { credentials, skillCredentials } = credentialRows(folderCredentialsNotice(folder, finishSetup.open), skillPrompt)
+  const { credentials, skillCredentials } = credentialRows(folderCredentialsNotice(folder, finishSetup.open, authorizeOf(folderGoogle)), skillPrompt)
   const readinessItem = readinessNoticeItem(readiness, reasonId)
   const state = readiness.notice?.state
   const replacedBy = credentials && state === 'credentials_needed' ? credentials

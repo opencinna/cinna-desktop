@@ -31,6 +31,8 @@ export function registerServiceCredentialHandlers(): void {
   // Google OAuth connect: the flow lives in main; refusals come back as `{ok: false, code}`.
   ipcHandle('service-credentials:create-oauth', (_, id: string, group: string, type: string) => outcome(() => service.createOAuth(id, group, type)))
   ipcHandle('service-credentials:reconnect-oauth', (_, id: string, group: string, ref: string) => outcome(() => service.reconnectOAuth(id, group, ref)))
+  // Authorize one missing Google slot (Finish setup, the composer): main reads its type and Service URI from its own scan.
+  ipcHandle('service-credentials:authorize-slot', (_, id: string, slotKey: string) => outcome(() => service.authorizeSlot(id, slotKey)))
   ipcHandle('service-credentials:oauth-flow', (_, id: string) => outcome(() => service.oauthFlow(id)))
   ipcHandle('service-credentials:reopen-oauth', (_, id: string, flowId: string) => outcome(() => service.reopenOAuth(id, flowId)))
   ipcHandle('service-credentials:cancel-oauth', (_, id: string, flowId: string) => outcome(() => service.cancelOAuth(id, flowId)))

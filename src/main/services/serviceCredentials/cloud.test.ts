@@ -59,3 +59,10 @@ it('keeps the generic error text for a 4xx carrying a body, on both calls, and l
   expect(world.logs.length).toBeGreaterThan(0)
   expect(JSON.stringify(world.logs)).not.toContain('server-detail-fixture')
 })
+it('sends a Google create’s Service URI only when one is given', async () => {
+  world.fetch.mockImplementation(async () => new Response(JSON.stringify({ credential_id: 'x' }), { headers: { 'content-type': 'application/json' } }))
+  await serviceCredentialCloud.createOAuth('local-core', 'gmail_oauth_readonly', undefined, 'gmail')
+  await serviceCredentialCloud.createOAuth('local-core', 'gdrive_oauth')
+  expect(world.fetch.mock.calls.map(([url]) => url)).toEqual(Array(2).fill('https://local-core.example.test/api/v1/external/credentials/oauth'))
+  expect(world.fetch.mock.calls.map(([, options]) => JSON.parse(options.body))).toEqual([{ type: 'gmail_oauth_readonly', service_uri: 'gmail' }, { type: 'gdrive_oauth' }])
+})

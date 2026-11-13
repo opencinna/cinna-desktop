@@ -82,8 +82,13 @@ export interface OAuthConnectFlow {
   type: GoogleOAuthType
   /** Core's record id once known (at once for a reconnect, after Core answers for a New). */
   credentialId: string | null
-  /** True for a Reconnect of an attached record. */
+  /** True for a Reconnect of an existing record (attached, or the slot's not-ready owned record). */
   reconnect: boolean
+  /**
+   * The slot an Authorize from Finish setup or the composer started it for: an agent slot's name, or
+   * `skill:<slot>` for a skill slot. Null for a flow started from the Credentials tab.
+   */
+  slot: string | null
   state: 'waiting' | 'failed' | 'attached'
   error: { code: string; message: string } | null
   /** Epoch ms: when polling gives up (Core's state expiry, at most 10 minutes). */
@@ -141,7 +146,15 @@ export interface CredentialSetupSlot {
    * (values missing, a Google grant to redo, a refused key delivery), so the dialog can say why.
    */
   notReady: ServiceCredentialDto | null
+  /**
+   * A missing Google OAuth slot: what `authorizeSlot` would do for it — `reconnect` an owned record that
+   * fits it but whose grant is not ready (attached, or `notReady`), else `authorize` (create one with the
+   * slot's Service URI). Null for any other slot, or one that is not missing.
+   */
+  oauth: SlotOAuthAction | null
 }
+/** What Authorize does for a missing Google OAuth slot (see `CredentialSetupSlot.oauth`). */
+export type SlotOAuthAction = 'authorize' | 'reconnect'
 /**
  * Per slot answer of Core's `POST /skills/packages/{uuid}/revisions/{n}/provision-local`.
  * `shared` / `already_shared`: the publisher's credential is now listed for this account;
@@ -184,6 +197,8 @@ export interface CredentialSetupSkillSlot {
   options: CredentialSetupOption[]
   /** What the last `provision-local` call this app session answered for this slot, if any. */
   provision: SkillProvisionOutcome | null
+  /** As `CredentialSetupSlot.oauth`, for this skill slot (`authorizeSlot` takes it as `skill:<slot>`). */
+  oauth: SlotOAuthAction | null
 }
 export interface CredentialSetupDto {
   slots: CredentialSetupSlot[]
@@ -191,6 +206,8 @@ export interface CredentialSetupDto {
   skillSlots: CredentialSetupSkillSlot[]
   /** A required slot is still unsatisfied (the agent reads `credentials_needed`). */
   setupNeeded: boolean
+  /** The active profile has an eligible Cinna account, so a Google OAuth slot can be authorized from here. */
+  oauthAccount: boolean
 }
 /**
  * A credential attached without asking after a Get, Update or Use the team's version.

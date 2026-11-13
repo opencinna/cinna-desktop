@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Circle, Loader2 } from 'lucide-react'
-import type { CredentialSetupOption, CredentialSetupSkillSlot, CredentialSetupSlot, ServiceCredentialDto } from '../../../../../shared/serviceCredentials'
+import type { CredentialSetupOption, CredentialSetupSkillSlot, CredentialSetupSlot, ServiceCredentialDto, SlotOAuthAction } from '../../../../../shared/serviceCredentials'
 import { unwrapLocalAgentOutcome } from '../../../../../shared/localAgents'
 import { credentialResult, useCredentialSetup } from '../../../hooks/useServiceCredentials'
+import { useSlotAuthorize, type SlotAuthorizeState } from '../../../hooks/useSlotAuthorize'
 import { LOCAL_AGENTS_KEY, localAgentKey } from '../../../hooks/useLocalAgents'
 import { autoAttachedKey, useFinishSetupStore } from '../../../stores/finishSetup.store'
 import { unwrapIpcError } from '../../../utils/ipcError'
@@ -38,6 +39,13 @@ import { CANCEL, DIALOG_TEXT, DialogFooter, DialogShell, FIELD_BASE, PRIMARY, SE
  * footer reserves the line a refusal takes, so neither moves the buttons;
  * every `.env` name keeps its row (a saved one reads Set); and while anything
  * typed is unsaved, only the footer's buttons close it.
+ *
+ * A missing Google OAuth slot (agent or skill) ends in an authorize line of
+ * its own, one height in every state: Authorize (or Reconnect) starts main's
+ * `authorizeSlot`, the line then waits for the browser with Reopen browser and
+ * Cancel, and a failure's reason goes under it, last in the card. The slot
+ * turns Connected through the scan once main attached the record; the dialog
+ * stays open.
  */
 
 export type FinishSetupStatus = 'Connected automatically' | 'Connected' | 'Set on this computer' | 'Missing' | 'Optional'
@@ -56,7 +64,17 @@ export function skillSlotStatus(slot: CredentialSetupSkillSlot, autoAttached: re
 
 /** A skill slot drawn by the agent slot's row: records only, no `.env` names. */
 function asSlotRow(slot: CredentialSetupSkillSlot): CredentialSetupSlot {
-  return { name: slot.slot, type: slot.type, optional: false, envPrefix: null, state: slot.state, attached: slot.attached, expectedKeys: [], presentKeys: [], options: slot.options, notReady: slot.notReady }
+  return { name: slot.slot, type: slot.type, optional: false, envPrefix: null, state: slot.state, attached: slot.attached, expectedKeys: [], presentKeys: [], options: slot.options, notReady: slot.notReady, oauth: slot.oauth }
+}
+
+/** A not-ready record that fits a Google slot and that only its owner can reconnect: its note stays beside Authorize. */
+function sharedNotReadyNote(dto: ServiceCredentialDto | null): string | null {
+  return dto && dto.relation === 'shared' ? notReadyNote(dto) : null
+}
+
+/** What an agent slot's row says when nothing usable is offered; null when Authorize says it instead. */
+function agentSlotNote(slot: CredentialSetupSlot): string | null | undefined {
+  return slot.oauth ? sharedNotReadyNote(slot.notReady) : notReadyNote(slot.notReady) ?? undefined
 }
 
 /** Who needs a skill slot, in one line. */
@@ -78,8 +96,12 @@ export function notReadyNote(dto: ServiceCredentialDto | null): string | null {
     : `${dto.name} fits it, but some of its values are missing. Fill them in on Cinna.`
 }
 
-/** Why nothing is offered for a missing skill slot, in one line. */
-function skillSlotNote(slot: CredentialSetupSkillSlot): string {
+/**
+ * Why nothing is offered for a missing skill slot, in one line. Beside Authorize only what it does not
+ * answer: a record of another type, what the publisher said, a record kept off this computer, a shared
+ * record whose owner must reconnect it; null otherwise.
+ */
+function skillSlotNote(slot: CredentialSetupSkillSlot): string | null {
   if (slot.typeMismatch) return `${slot.typeMismatch.name} has this Service URI but is a ${slot.typeMismatch.type} credential, not ${slot.type}.`
   if (slot.provision === 'not_allowed_locally') return 'The publisher provides it, but not for use on this computer.'
   if (slot.provision === 'not_shareable') return 'The publisher provides it, but cannot share it with you.'
@@ -89,6 +111,7 @@ function skillSlotNote(slot: CredentialSetupSkillSlot): string {
       ? `${slot.notLocal.name} is shared with you, but not for use on this computer. ${owner} can turn on Allow local use.`
       : `${slot.notLocal.name} is shared with you, but not for use on this computer.`
   }
+  if (slot.oauth) return sharedNotReadyNote(slot.notReady)
   return notReadyNote(slot.notReady) ?? `None of your credentials fits it: it needs a credential of type ${slot.type} whose Service URI is ${slot.slot}.`
 }
 
@@ -345,6 +368,8 @@ export function FinishSetupDialog({
 }): React.JSX.Element {
   const laterRef = useRef<HTMLButtonElement>(null)
   const setup = useCredentialSetup(agentId)
+  const google = useSlotAuthorize(agentId)
+  const oauthAccount = setup.data?.oauthAccount ?? false
   const slots = setup.data?.slots ?? []
   const skillSlots = setup.data?.skillSlots ?? []
   const allKeys = slots.flatMap(keysOf)
@@ -373,7 +398,9 @@ export function FinishSetupDialog({
           <SlotRow
             key={slot.name}
             slot={slot}
-            emptyNote={notReadyNote(slot.notReady) ?? undefined}
+            emptyNote={agentSlotNote(slot)}
+            authorize={slot.oauth ? { action: slot.oauth, account: oauthAccount, state: google.stateOf(slot.name),
+              onAuthorize: () => google.authorize(slot.name), onReopen: () => google.reopen(slot.name), onCancel: () => google.cancel(slot.name) } : null}
             status={finishSetupStatus(slot, autoAttached)}
             drafts={drafts}
             onDraft={onDraft}
@@ -398,6 +425,8 @@ export function FinishSetupDialog({
                 detail={neededBy(skillSlot)}
                 emptyNote={skillSlotNote(skillSlot)}
                 slot={asSlotRow(skillSlot)}
+                authorize={skillSlot.oauth ? { action: skillSlot.oauth, account: oauthAccount, state: google.stateOf(`skill:${skillSlot.slot}`),
+                  onAuthorize: () => google.authorize(`skill:${skillSlot.slot}`), onReopen: () => google.reopen(`skill:${skillSlot.slot}`), onCancel: () => google.cancel(`skill:${skillSlot.slot}`) } : null}
                 status={skillSlotStatus(skillSlot, autoAttached)}
                 drafts={drafts}
                 onDraft={onDraft}
@@ -447,11 +476,80 @@ function KeyName({ name, prefix }: { name: string; prefix: string | null }): Rea
   )
 }
 
+/** A missing Google OAuth slot's authorize line, as the dialog wires it. */
+interface AuthorizeProps {
+  action: SlotOAuthAction
+  /** The active profile has a Cinna account to create the record in. */
+  account: boolean
+  state: SlotAuthorizeState
+  onAuthorize: () => void
+  onReopen: () => void
+  onCancel: () => void
+}
+
+/**
+ * The authorize line's height: a `CredentialRow`'s, which is what replaces it when the slot turns
+ * Connected in place — its `py-2.5`, one 14px line at the body's 1.5 leading, and its 1px borders —
+ * so the card keeps its height through the change (rule 1). Set at 14px so `1.5em` is that line.
+ */
+const AUTHORIZE_LINE = 'flex h-[calc(1.25rem+1.5em+2px)] items-center gap-2 text-[14px]'
+const BLOCKED = 'Finish the other Google sign-in first.'
+
+/**
+ * One line, one height in every state, so the row never changes height while the sign-in runs (rule 1):
+ * Authorize (Reconnect for an expired grant), then the wait for the browser, then Authorize again. Always
+ * secondary: Done is the dialog's one primary. While waiting, Cancel sits left of Reopen browser, so the
+ * Authorize that follows a Cancel lands where Reopen browser was and a double click on Cancel restarts nothing.
+ */
+function AuthorizeLine({ authorize, offered }: { authorize: AuthorizeProps; offered: boolean }): React.JSX.Element {
+  const { action, account, state } = authorize
+  const label = action === 'reconnect' ? 'Reconnect' : 'Authorize'
+  if (!account) {
+    return (
+      <div data-testid="authorize-line" className={`${AUTHORIZE_LINE} text-[var(--color-text-muted)]`}>
+        <span className="text-[13px]">Sign in to Cinna to authorize it.</span>
+      </div>
+    )
+  }
+  if (state.phase === 'waiting') {
+    return (
+      <div data-testid="authorize-line" className={AUTHORIZE_LINE}>
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-[var(--color-text-secondary)]">
+          <Loader2 size={13} className="shrink-0 animate-spin" aria-hidden="true" />
+          <span className="truncate">Finish in your browser…</span>
+        </span>
+        <button type="button" className={`${CANCEL} !py-1`} onClick={authorize.onCancel}>Cancel</button>
+        <button type="button" className={`${SECONDARY} !py-1`} onClick={authorize.onReopen}>Reopen browser</button>
+      </div>
+    )
+  }
+  const blocked = state.phase === 'blocked'
+  const sentence = blocked ? BLOCKED : offered ? 'or connect another Google account'
+    : action === 'reconnect' ? 'Its Google access expired. Sign in again to reconnect it.' : 'Sign in with Google to connect it.'
+  return (
+    <div data-testid="authorize-line" className={AUTHORIZE_LINE}>
+      <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-text-muted)]" title={sentence}>{sentence}</span>
+      <button
+        type="button"
+        className={`${SECONDARY} min-w-[5.5rem] !py-1 ${blocked ? 'cursor-not-allowed opacity-50' : ''}`}
+        aria-disabled={blocked || state.phase === 'starting' || undefined}
+        title={blocked ? BLOCKED : undefined}
+        onClick={() => {
+          if (!blocked && state.phase !== 'starting') authorize.onAuthorize()
+        }}
+      >
+        {state.phase === 'starting' ? <Loader2 size={13} className="animate-spin" aria-label="Opening the browser" /> : label}
+      </button>
+    </div>
+  )
+}
+
 function SlotRow({
   slot,
   testId,
   detail,
   emptyNote,
+  authorize = null,
   status,
   drafts,
   onDraft,
@@ -468,8 +566,10 @@ function SlotRow({
   testId?: string
   /** One line under the name (a skill slot's "Needed by …"). */
   detail?: string
-  /** What a missing slot with nothing to offer says; defaults to the agent slot's sentence. */
-  emptyNote?: string
+  /** What a missing slot with nothing to offer says; defaults to the agent slot's sentence, and null says nothing. */
+  emptyNote?: string | null
+  /** A missing Google OAuth slot's authorize line; null for any other slot. */
+  authorize?: AuthorizeProps | null
   status: FinishSetupStatus
   drafts: Record<string, string>
   onDraft: (key: string, value: string) => void
@@ -674,10 +774,16 @@ function SlotRow({
         </div>
       )}
 
-      {slot.state === 'missing' && !slot.attached && slot.options.length === 0 && keys.length === 0 && !fieldless && (
+      {slot.state === 'missing' && !slot.attached && slot.options.length === 0 && keys.length === 0 && !fieldless && emptyNote !== null && (
         <div className="h-5 truncate text-[13px] leading-5 text-[var(--color-text-muted)]" title={emptyNote}>
           {emptyNote ?? 'None of your credentials fits it. Attach one on the Credentials tab.'}
         </div>
+      )}
+
+      {authorize && slot.state === 'missing' && <AuthorizeLine authorize={authorize} offered={slot.options.length > 0} />}
+      {/* Only when there is one, last in the card: it lengthens the card and moves nothing above it (rule 1). */}
+      {authorize && slot.state === 'missing' && authorize.account && authorize.state.error && (
+        <p role="alert" className="text-[13px] text-[var(--color-danger)]">{authorize.state.error}</p>
       )}
     </div>
   )

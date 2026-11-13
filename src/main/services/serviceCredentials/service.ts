@@ -19,7 +19,7 @@ import type { CinnaSendResult } from '../cinna-http'
 import { localBundle, validateLocal } from './transforms'
 import { autoMatch, isDeadKey, slotCandidates, type SlotSpec } from './slotMatch'
 import { collectSkillSlots, judgeSkillSlot, skillSlotSpec, slotClaimed, type SkillSlot } from './skillSlots'
-import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, isGoogleOAuthType, type OAuthConnectFlow, type OAuthCredentialStatus, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupOption, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, isGoogleOAuthType, type OAuthConnectFlow, type OAuthCredentialStatus, type SlotOAuthAction, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupOption, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
 import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
@@ -861,14 +861,19 @@ function refusalOf(answer: CinnaSendResult): { code: string; message: string } {
   if (answer.status === 403) return { code: 'permission_denied', message: 'Cinna refused the request for this app.' }
   return { code: 'request_failed', message: `Cinna answered ${answer.status}.` }
 }
-/** Core's `{credential_id, authorization_url, expires_at}`; the URL must be https (http only to this computer). */
-function authorizationOf(body: unknown): { credentialId: string; url: string; expiresAt: number } | null {
+/**
+ * Core's `{credential_id, authorization_url, expires_at, service_uri}`; the URL must be https (http only to
+ * this computer). `serviceUri` is the record's, `undefined` when Core sent none (a Core older than slot-targeted
+ * Authorize).
+ */
+function authorizationOf(body: unknown): { credentialId: string; url: string; expiresAt: number; serviceUri: string | null | undefined } | null {
   const b = body as Record<string, unknown> | null
   if (!b || typeof b.credential_id !== 'string' || !ID.test(b.credential_id) || typeof b.authorization_url !== 'string' || typeof b.expires_at !== 'number' || !Number.isFinite(b.expires_at)) return null
   let url: URL
   try { url = new URL(b.authorization_url) } catch { return null }
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK.has(url.hostname))) return null
-  return { credentialId: b.credential_id, url: url.toString(), expiresAt: b.expires_at * 1000 }
+  const serviceUri = typeof b.service_uri === 'string' || b.service_uri === null ? b.service_uri : undefined
+  return { credentialId: b.credential_id, url: url.toString(), expiresAt: b.expires_at * 1000, serviceUri }
 }
 function flowCurrent(flow: Flow): boolean { return flows.get(flow.dto.agentId) === flow && flow.dto.state === 'waiting' }
 function flowAccountLive(flow: Flow): boolean { return accounts.get(flow.account.key) === flow.account && flow.account.epoch === flow.accountEpoch }
@@ -925,8 +930,14 @@ async function finishFlow(flow: Flow): Promise<void> {
   }
   settleFlow(flow, 'attached', null)
 }
+/**
+ * Where a flow came from beyond its record: `slot`, the slot an Authorize was clicked for (Finish setup, the
+ * composer); `serviceUri`, the Service URI a New gives the record; `unattached`, a reconnect of an owned record
+ * that is not attached yet (a slot's not-ready record), which the flow appends once ready, as for a New.
+ */
+interface FlowOrigin { slot?: string | null; serviceUri?: string; unattached?: boolean }
 /** Create (ref null) or reconnect (ref = Core id): ask Core for the consent URL, open it, start polling. */
-async function startFlow(agentId: string, group: string, type: unknown, ref: string | null): Promise<OAuthConnectFlow> {
+async function startFlow(agentId: string, group: string, type: unknown, ref: string | null, origin: FlowOrigin = {}): Promise<OAuthConnectFlow> {
   const a = agent(agentId)
   if (typeof group !== 'string' || group === 'local') throw coded('invalid_group', 'Google credentials live in a Cinna account, not on this computer.')
   const account = accounts.get(group)
@@ -937,7 +948,7 @@ async function startFlow(agentId: string, group: string, type: unknown, ref: str
     if (typeof type !== 'string' || !isGoogleOAuthType(type)) throw coded('unsupported_type', 'That is not a Google credential type.')
     kind = type
   } else {
-    if (typeof ref !== 'string' || !ID.test(ref) || !(state(a).accounts[group] ?? []).some(v => v.ref === ref)) throw coded('not_attached', 'That credential is not attached to this agent.')
+    if (typeof ref !== 'string' || !ID.test(ref) || (!origin.unattached && !(state(a).accounts[group] ?? []).some(v => v.ref === ref))) throw coded('not_attached', 'That credential is not attached to this agent.')
     const row = repo.list(account.userId).find(r => r.origin === 'cloud' && r.cloud_id === ref)
     if (!row || !isOAuth(stored(row))) throw coded('unsupported_type', 'Only a Google credential can be reconnected.')
     kind = stored(row).type
@@ -947,14 +958,14 @@ async function startFlow(agentId: string, group: string, type: unknown, ref: str
   // below announces it, so the renderer never keeps showing a flow main has dropped.
   const previous = flows.get(agentId)
   if (previous) { stopFlow(previous); flows.delete(agentId) }
-  try { return await requestFlow(agentId, group, account, kind, ref, start) }
+  try { return await requestFlow(agentId, group, account, kind, ref, start, origin) }
   catch (error) { if (previous) changed(); throw error }
 }
-async function requestFlow(agentId: string, group: string, account: Account, kind: string, ref: string | null, start: Flow['start']): Promise<OAuthConnectFlow> {
+async function requestFlow(agentId: string, group: string, account: Account, kind: string, ref: string | null, start: Flow['start'], origin: FlowOrigin): Promise<OAuthConnectFlow> {
   const seq = ++flowSeq, accountEpoch = account.epoch
   flowStarts.set(agentId, seq)
   let answer: CinnaSendResult
-  try { answer = ref === null ? await serviceCredentialCloud.createOAuth(account.userId, kind, signal(account)) : await serviceCredentialCloud.authorizeOAuth(account.userId, ref, signal(account)) }
+  try { answer = ref === null ? await serviceCredentialCloud.createOAuth(account.userId, kind, signal(account), origin.serviceUri) : await serviceCredentialCloud.authorizeOAuth(account.userId, ref, signal(account)) }
   catch (error) {
     const code = (error as { code?: unknown }).code
     throw coded(typeof code === 'string' ? code : 'request_failed', typeof code === 'string' && error instanceof Error ? error.message : 'Cinna could not be reached. Try again.')
@@ -964,20 +975,57 @@ async function requestFlow(agentId: string, group: string, account: Account, kin
   if (!answer.ok) { const r = refusalOf(answer); throw coded(r.code, r.message) }
   const auth = authorizationOf(answer.body)
   if (!auth || (ref !== null && auth.credentialId !== ref)) throw coded('invalid_response', 'Cinna sent an answer this app cannot use.')
+  if (ref === null && origin.serviceUri && auth.serviceUri !== origin.serviceUri) {
+    // An older Core ignores the Service URI: the record then fills no strict slot, but the connect still goes on.
+    logger.warn(auth.serviceUri === undefined ? 'Cinna did not say which Service URI the Google credential got; it may not fill the slot'
+      : 'Cinna gave the Google credential another Service URI than the slot’s', { agentId, type: kind })
+  }
   if (ref === null) {
     // Core may hand back the caller's pending record of this type; judge success against what is cached now.
     const row = repo.list(account.userId).find(r => r.origin === 'cloud' && r.cloud_id === auth.credentialId)
     if (row) start = { status: stored(row).oauthStatus, revision: stored(row).revision }
   }
-  const flow: Flow = { dto: { id: randomUUID(), agentId, group, type: kind as OAuthConnectFlow['type'], credentialId: auth.credentialId, reconnect: ref !== null, state: 'waiting', error: null,
+  const flow: Flow = { dto: { id: randomUUID(), agentId, group, type: kind as OAuthConnectFlow['type'], credentialId: auth.credentialId, reconnect: ref !== null, slot: origin.slot ?? null, state: 'waiting', error: null,
     expiresAt: Math.min(auth.expiresAt, Date.now() + oauthFlowTiming.windowMs) }, account, accountEpoch, url: auth.url, timer: null, start }
   flows.set(agentId, flow)
-  logger.info('Google connect started', { agentId, reconnect: ref !== null, type: kind })
+  logger.info('Google connect started', { agentId, reconnect: ref !== null, type: kind, slot: origin.slot ?? null })
   try { await runtimeHost.shell.openExternal(auth.url) }
   catch (error) { logger.warn('Could not open the browser for a Google connect', { agentId, error: error instanceof Error ? error.message : String(error) }) }
   if (flowCurrent(flow)) schedulePoll(flow)
   changed()
   return { ...flow.dto }
+}
+
+/**
+ * The record an Authorize for one slot renews rather than creating another: an owned Google record of the
+ * active account whose grant is not ready and that the slot is judged by (attached) or would take (its
+ * `notReady`), first found in `candidates`. A shared one is its owner's to reconnect, so it is never picked.
+ */
+function renewable(account: Account | undefined, candidates: (ServiceCredentialDto | null | undefined)[]): ServiceCredentialDto | null {
+  if (!account) return null
+  const cached = repo.list(account.userId)
+  return candidates.find((m): m is ServiceCredentialDto => !!m && m.origin === 'cloud' && !!m.cloudId && m.relation === 'owned' && isOAuth(m) && oauthUnavailable(m)
+    && cached.some(r => r.origin === 'cloud' && r.cloud_id === m.cloudId)) ?? null
+}
+/** A missing Google OAuth slot's button: Reconnect when it would renew a record whose Google access expired, else Authorize. */
+function slotOAuth(type: string, missing: boolean, renew: ServiceCredentialDto | null): SlotOAuthAction | null {
+  if (!missing || !isGoogleOAuthType(type)) return null
+  return renew?.oauthStatus === 'reauth_required' ? 'reconnect' : 'authorize'
+}
+/** The Authorize target `slotKey` names (an agent slot's name, or `skill:<slot>`), as Finish setup shows it; null when no slot has that key. */
+function slotTarget(a: LocalAgentDto, setup: CredentialSetupDto, slotKey: string): { type: string; serviceUri: string; missing: boolean; judged: (ServiceCredentialDto | null)[] } | null {
+  if (slotKey.startsWith('skill:')) {
+    const name = slotKey.slice('skill:'.length)
+    const declared = setup.skillSlots.filter(slot => slot.slot === name)
+    // One Service URI two skills declare with different types: the missing Google one is the one to authorize.
+    const slot = declared.find(v => isGoogleOAuthType(v.type) && v.state === 'missing') ?? declared.find(v => isGoogleOAuthType(v.type)) ?? declared.find(v => v.state === 'missing') ?? declared[0]
+    return slot ? { type: slot.type, serviceUri: slot.slot, missing: slot.state === 'missing', judged: [slot.attached?.credential ?? null, slot.notReady] } : null
+  }
+  const slot = setup.slots.find(v => v.name === slotKey)
+  if (!slot) return null
+  // The scanner's tiers: the declared Service URI, else the slot's name (records named like it, then Service URI = name).
+  const serviceUri = a.credentials.find(c => c.name === slotKey)?.serviceUri || slot.name
+  return { type: slot.type, serviceUri, missing: slot.state === 'missing', judged: [slot.attached?.credential ?? null, slot.notReady] }
 }
 
 /** The loopback token endpoint (D4). Bearers are per agent and app session; a turn holding the agent makes one usable. */
@@ -1297,13 +1345,16 @@ export const serviceCredentialService = {
       const judged = slot.attachment ? rows.find(v => credentialDto(v.row!).id === slot.attachment!.credentialId) : undefined
       const verdict = slotState(slot)
       const options = verdict === 'connected' ? [] : offered(spec(slot))
+      const attachedDto = judged ? credentialDto(judged.row!) : null
+      const notReady = verdict === 'connected' || options.length > 0 ? null : notReadyFor(spec(slot))
       return {
         name: slot.name, type: slot.type, optional: slot.optional, envPrefix: slot.envPrefix,
         state: verdict,
-        attached: judged ? { credential: credentialDto(judged.row!), state: attachmentState(judged.row) } : null,
+        attached: judged ? { credential: attachedDto!, state: attachmentState(judged.row) } : null,
         expectedKeys: slot.expectedKeys, presentKeys: slot.presentKeys,
         options,
-        notReady: verdict === 'connected' || options.length > 0 ? null : notReadyFor(spec(slot))
+        notReady,
+        oauth: slotOAuth(slot.type, verdict === 'missing', renewable(account, [attachedDto, notReady]))
       }
     })
     const attached = attachedMetadata(a)
@@ -1311,19 +1362,21 @@ export const serviceCredentialService = {
       const { attachment, filled, typeMismatch } = judgeSkillSlot(slot, attached)
       const options = filled ? [] : offered(skillSlotSpec(slot))
       const notLocal = filled || options.length > 0 ? null : pool.find(m => m.relation !== 'owned' && m.type === slot.type && m.serviceUri === slot.slot && !m.localUseAllowed) ?? null
+      const notReady = filled || options.length > 0 ? null : notReadyFor(skillSlotSpec(slot))
       return {
         slot: slot.slot, type: slot.type, skills: slot.skills, description: slot.description,
         state: filled ? 'connected' : 'missing',
         attached: attachment ? { credential: withoutState(attachment), state: attachment.state } : null,
         typeMismatch: typeMismatch ? withoutState(typeMismatch) : null,
         notLocal,
-        notReady: filled || options.length > 0 ? null : notReadyFor(skillSlotSpec(slot)),
+        notReady,
         options,
-        provision: provisionOf(account, slot)
+        provision: provisionOf(account, slot),
+        oauth: slotOAuth(slot.type, !filled, renewable(account, [attachment ? withoutState(attachment) : null, notReady]))
       }
     })
     // Skill slots never decide setupNeeded: they warn, as in Core, and never open the dialog.
-    return { slots, skillSlots, setupNeeded: a.credentials.some(c => !c.satisfied) }
+    return { slots, skillSlots, setupNeeded: a.credentials.some(c => !c.satisfied), oauthAccount: account !== undefined }
   },
   /**
    * A turn's or command's credentials: the files written (or removed), and whether the folder carries
@@ -1337,6 +1390,46 @@ export const serviceCredentialService = {
   createOAuth(id: string, group: string, type: string): Promise<OAuthConnectFlow> { return startFlow(id, group, type, null) },
   /** Reconnect an attached Google record (`ref` = Core id) of the group. */
   reconnectOAuth(id: string, group: string, ref: string): Promise<OAuthConnectFlow> { return startFlow(id, group, null, typeof ref === 'string' ? ref : '') },
+  /**
+   * Authorize one missing Google OAuth slot from Finish setup or the composer (`slotKey`: an agent slot's
+   * name, or `skill:<slot>`). The type and Service URI are read from this agent's own scan, never taken from
+   * the caller. In the active profile's account: an owned record that fits the slot but whose grant is not
+   * ready is reconnected (and appended once ready when it is not attached); otherwise a record is created with
+   * the slot's Service URI (a skill slot's slot, the agent slot's declared Service URI, else its name). The
+   * attachment it makes counts as made by hand. Same flow, one per agent, as New and Reconnect.
+   */
+  async authorizeSlot(id: string, slotKey: string): Promise<OAuthConnectFlow> {
+    if (typeof slotKey !== 'string' || !slotKey) throw coded('unknown_slot', 'This agent declares no such credential.')
+    const a = agent(id)
+    const target = slotTarget(a, this.setupState(id), slotKey)
+    if (!target) throw coded('unknown_slot', 'This agent declares no such credential.')
+    if (!target.missing) throw coded('already_connected', 'This credential is connected already.')
+    if (!isGoogleOAuthType(target.type)) throw coded('unsupported_type', 'Only a Google credential can be authorized here.')
+    const account = activeAccount()
+    if (!account) throw coded('account_unavailable', 'Sign in to Cinna to authorize it.')
+    const renew = renewable(account, target.judged)
+    return renew
+      ? startFlow(id, account.key, null, renew.cloudId!, { slot: slotKey, unattached: true })
+      : startFlow(id, account.key, target.type, null, { slot: slotKey, serviceUri: target.serviceUri })
+  },
+  /**
+   * `cinna://oauth-done` came back from Core's end page: poll each waiting flow now (only the one for
+   * `credentialId` when given) instead of at its next tick. A nudge, never a result: what the poll reads
+   * from Core decides, as on any tick. A flow whose poll is running already is left to it. Answers how many
+   * flows it polled.
+   */
+  nudgeOAuthFlows(credentialId: string | null): number {
+    const wanted = typeof credentialId === 'string' ? credentialId.toLowerCase() : null
+    let polled = 0
+    for (const flow of [...flows.values()]) {
+      if (!flowCurrent(flow) || !flow.timer) continue
+      if (wanted !== null && flow.dto.credentialId?.toLowerCase() !== wanted) continue
+      stopFlow(flow); polled++
+      void pollFlow(flow)
+    }
+    if (polled) logger.info('Polled Google connects now: the browser came back', { count: polled })
+    return polled
+  },
   oauthFlow(id: string): OAuthConnectFlow | null { const flow = flows.get(id); return flow ? { ...flow.dto } : null },
   async reopenOAuth(id: string, flowId: string): Promise<void> {
     const flow = flows.get(id)
