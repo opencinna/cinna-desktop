@@ -103,7 +103,8 @@ export interface FakeTeamAgent {
 
 const person = (name: string): { user_id: string; display_name: string } => ({ user_id: `user-${name.toLowerCase().replace(/\W+/g, '-')}`, display_name: name })
 
-function skillItem(skill: FakeSkill): Record<string, unknown> {
+/** One skill as `GET /api/v1/catalog/items` lists it. */
+export function skillItem(skill: FakeSkill): Record<string, unknown> {
   const latest = skill.revisions[skill.revisions.length - 1]
   return {
     kind: 'skill',

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { answerAgentsFolder, expect, test, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
+import { fakeSkill, sha256, skillArchive, skillItem, type FakeSkill } from '../fixtures/fakeCatalogSkills'
 
 /**
  * Authorize a missing Google OAuth slot where the gap is shown — the composer's
@@ -18,6 +19,16 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  *
  * `shell.openExternal` is replaced in main before any click, so the consent
  * URL is recorded and no browser opens.
+ *
+ * For a skill slot the same fake also serves the catalog listing and a skill's
+ * revision archive, so a real `catalogSkills.add` pins the skill and raises the
+ * composer's skill prompt the way Add to agent does. Reconnect is
+ * `POST /external/credentials/<id>/oauth/authorize`, recorded per id.
+ *
+ * Not covered: the skill prompt after a team library Get (D5). A Get clones the
+ * agent over git from Core, and no scripted spec has a git smart-HTTP remote fake;
+ * the settle after a Get is unit-tested (`catalogSkillService.test.ts`,
+ * `sharingService.test.ts`) and the clone is exercised only by the live specs.
  */
 
 const GOOGLE_NAMES: Record<string, string> = {
@@ -28,14 +39,15 @@ const GOOGLE_NAMES: Record<string, string> = {
 /** A Google OAuth record on the fake Core: `pending_authorization` until the test plays the consent. */
 interface FakeGoogle {
   id: string; type: string; name: string; serviceUri: string | null
-  oauthStatus: 'pending_authorization' | 'ready'; revision: string; grantedUserEmail: string | null; accessToken: string
+  oauthStatus: 'pending_authorization' | 'reauth_required' | 'ready'; revision: string; grantedUserEmail: string | null; accessToken: string
 }
 
 /** Lists, materializes and creates Google OAuth records the way Core's `/external/credentials` does. */
-async function startFakeGoogleCore() {
+async function startFakeGoogleCore(options: { records?: FakeGoogle[]; skills?: FakeSkill[] } = {}) {
   const { createServer } = await import('node:http')
-  const google: FakeGoogle[] = []
-  const seen = { list: 0, oauthCreate: [] as unknown[] }
+  const google: FakeGoogle[] = [...(options.records ?? [])]
+  const skills = options.skills ?? []
+  const seen = { list: 0, oauthCreate: [] as unknown[], reauthorize: [] as string[] }
   let base = ''
   let seq = 0
   const server = createServer((req, res) => {
@@ -68,6 +80,28 @@ async function startFakeGoogleCore() {
         }
         json(201, { credential_id: g.id, authorization_url: `${base}/fake-google/consent?credential=${g.id}`, expires_at: Math.floor(Date.now() / 1000) + 600, service_uri: g.serviceUri })
       })
+    }
+    const reauthorize = /^\/api\/v1\/external\/credentials\/([0-9a-f-]{36})\/oauth\/authorize$/.exec(url.pathname)
+    if (req.method === 'POST' && reauthorize) {
+      return readBody(() => {
+        seen.reauthorize.push(reauthorize[1])
+        const g = google.find((x) => x.id === reauthorize[1])
+        if (!g) return json(404, { detail: { code: 'not_found', message: 'No such credential.' } })
+        json(200, { credential_id: g.id, authorization_url: `${base}/fake-google/consent?credential=${g.id}`, expires_at: Math.floor(Date.now() / 1000) + 600, service_uri: g.serviceUri })
+      })
+    }
+    if (req.method === 'GET' && url.pathname === '/.well-known/cinna-desktop') {
+      return json(200, { authorization_endpoint: `${base}/oauth/authorize`, token_endpoint: `${base}/oauth/token`, userinfo_endpoint: `${base}/oauth/userinfo`, instance_name: 'Slot fixture' })
+    }
+    if (req.method === 'GET' && url.pathname === '/api/v1/catalog/items') {
+      return json(200, { data: skills.map(skillItem), count: skills.length })
+    }
+    const download = /^\/api\/v1\/skills\/packages\/([0-9a-f-]{36})\/revisions\/(\d+)\/download$/.exec(url.pathname)
+    if (req.method === 'GET' && download) {
+      const revision = skills.find((k) => k.uuid === download[1])?.revisions.find((r) => r.number === Number(download[2]))
+      if (!revision) return json(404, { detail: 'Not found' })
+      res.writeHead(200, { 'content-type': 'application/gzip', 'x-content-sha256': sha256(revision.bytes) })
+      return res.end(revision.bytes)
     }
     if (req.method === 'POST' && url.pathname === '/api/v1/external/credentials/materialize') {
       return readBody((body) => {
@@ -288,6 +322,129 @@ test('Finish setup with two Google slots: Authorize on one blocks the other unti
         await expect(line.getByRole('button', { name: 'Authorize', exact: true })).not.toHaveAttribute('aria-disabled')
       }
       await expect(dialog).toBeVisible()
+    })
+  } finally { await core.close() }
+})
+
+/** A catalog skill whose SKILL.md declares one Google Calendar slot. */
+function calendarSkill(): FakeSkill {
+  const skill = fakeSkill({ packageId: 'com.acme.calendar-reader', name: 'calendar-reader', title: 'Calendar Reader', description: 'Reads the day’s meetings.', publisher: 'Dana Fox' })
+  const md = ['---', 'name: calendar-reader', 'description: Reads the day’s meetings.', 'credentials:', '  - slot: google-calendar', '    type: gcalendar_oauth_readonly', '---', '', '# Calendar Reader', ''].join('\n')
+  skill.revisions[0].bytes = skillArchive('calendar-reader', { 'SKILL.md': md })
+  return skill
+}
+
+test('a pinned skill’s Google slot: the composer’s skill row authorizes it with the slot as Service URI', async ({ cinna }) => {
+  const skill = calendarSkill()
+  const core = await startFakeGoogleCore({ skills: [skill] })
+  try {
+    const name = 'Day planner'
+    const { agent, opened } = await arrange(cinna, core.url, name, [])
+    const page = cinna.page
+    const panel = page.getByRole('status', { name: 'Agent status' })
+    const row = panel.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Dismiss skill credential prompt', exact: true }) })
+
+    await test.step('Add to agent pins the skill and the composer prompts for its slot with Authorize', async () => {
+      const added = await page.evaluate(({ id, uuid }) => window.api.catalogSkills.add(id, uuid), { id: agent.id, uuid: skill.uuid })
+      expect(added).toEqual({ ok: true, name: 'calendar-reader', revisionNumber: 1 })
+      await expect(row).toHaveCount(1)
+      await expect(row.getByRole('paragraph')).toHaveText('calendar-reader needs Google Calendar (read-only).')
+      await expect(row.getByRole('button', { name: 'Authorize', exact: true })).toBeVisible()
+    })
+
+    await test.step('Authorize creates the record with the skill slot as its Service URI', async () => {
+      await row.getByRole('button', { name: 'Authorize', exact: true }).click()
+      await expect(row.getByRole('paragraph')).toHaveText('Finish in your browser.')
+      expect(core.seen.oauthCreate).toEqual([{ type: 'gcalendar_oauth_readonly', service_uri: 'google-calendar' }])
+      expect(core.google.map((g) => [g.type, g.serviceUri, g.oauthStatus])).toEqual([['gcalendar_oauth_readonly', 'google-calendar', 'pending_authorization']])
+      await expect.poll(opened).toEqual([`${core.url}/fake-google/consent?credential=${core.google[0].id}`])
+    })
+
+    const dialog = page.getByRole('dialog', { name: `Finish setting up ${name}` })
+    const slot = dialog.getByTestId('finish-setup-skill-slot-google-calendar')
+    await test.step('Finish setup, opened from the skill’s row, shows the same sign-in waiting', async () => {
+      await page.getByRole('button', { name: 'Settings', exact: true }).click()
+      await page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab', { name: /^Addons/ }).click()
+      await page.getByRole('tabpanel').getByRole('button', { name: 'Finish setup', exact: true }).click()
+      await expect(dialog).toBeVisible()
+      await expect(slot.getByTestId('authorize-line').getByText('Finish in your browser…', { exact: true })).toBeVisible()
+    })
+
+    await test.step('consent, then cinna://oauth-done: the skill slot reads Connected and the record is attached', async () => {
+      Object.assign(core.google[0], { oauthStatus: 'ready', revision: 'g-rev-2', grantedUserEmail: 'owner@gmail.example' })
+      await deliverLink(cinna, `cinna://oauth-done?credential_id=${core.google[0].id}`)
+      await expect(slot.getByText('Connected', { exact: true })).toBeVisible({ timeout: 10_000 })
+      await expect(slot.getByTestId('authorize-line')).toHaveCount(0)
+      expect(await attachedOf(cinna, agent.id)).toEqual([{ ref: core.google[0].id, state: 'ready' }])
+    })
+
+    await test.step('back in the composer, the skill row is gone', async () => {
+      await dialog.getByRole('button', { name: 'Done', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+      await page.getByRole('button', { name: 'Start chat', exact: true }).click()
+      await expect(page.getByRole('combobox', { name: 'Type a message...', exact: true })).toBeVisible()
+      await expect(row).toHaveCount(0)
+      await expect(page.getByText('calendar-reader needs Google Calendar (read-only).', { exact: true })).toHaveCount(0)
+    })
+  } finally { await core.close() }
+})
+
+test('an owned, attached Google record whose access expired: Finish setup reads Reconnect and renews that record', async ({ cinna }) => {
+  const expiredId = '9e0f1a2b-0000-4000-8000-0000000000aa'
+  const core = await startFakeGoogleCore({ records: [{
+    id: expiredId, type: 'gmail_oauth_readonly', name: 'Gmail (read-only)', serviceUri: 'gmail', oauthStatus: 'reauth_required',
+    revision: 'g-rev-1', grantedUserEmail: 'owner@gmail.example', accessToken: 'ya29.fake-reconnected-token'
+  }] })
+  try {
+    const name = 'Mail and drive'
+    const { agent, opened, userId } = await arrange(cinna, core.url, name, [
+      { name: 'Gmail', type: 'gmail_oauth_readonly', service_uri: 'gmail' },
+      { name: 'Drive', type: 'gdrive_oauth_readonly', service_uri: 'gdrive' }
+    ])
+    const page = cinna.page
+
+    await test.step('arrange: the expired record is attached to the agent', async () => {
+      const attached = await page.evaluate(async ({ id, ref, userId, url }) => {
+        await window.api.serviceCredentials.list(userId, url)
+        const options = await window.api.serviceCredentials.attachOptions(id)
+        if (!options.ok) return options.message
+        const group = options.value.groups.find((g) => g.items.some((item) => item.cloudId === ref))
+        if (!group) return 'the expired record is not offered'
+        const result = await window.api.serviceCredentials.attach(id, group.key, ref)
+        return result.ok ? 'ok' : result.message
+      }, { id: agent.id, ref: expiredId, userId, url: core.url })
+      expect(attached).toBe('ok')
+      expect((await attachedOf(cinna, agent.id) as { ref: string }[]).map((a) => a.ref)).toEqual([expiredId])
+    })
+
+    const dialog = page.getByRole('dialog', { name: `Finish setting up ${name}` })
+    const gmail = dialog.getByTestId('finish-setup-slot-Gmail').getByTestId('authorize-line')
+    await test.step('Finish setup offers Reconnect on the expired slot', async () => {
+      await page.getByRole('status', { name: 'Agent status' }).getByRole('button', { name: 'Finish setup', exact: true }).click()
+      await expect(dialog).toBeVisible()
+      await expect(gmail.getByText('Its Google access expired. Sign in again to reconnect it.', { exact: true })).toBeVisible()
+      await expect(gmail.getByRole('button', { name: 'Reconnect', exact: true })).toBeVisible()
+      await expect(gmail.getByRole('button', { name: 'Authorize', exact: true })).toHaveCount(0)
+    })
+
+    await test.step('Reconnect renews that record on Core and creates none', async () => {
+      await gmail.getByRole('button', { name: 'Reconnect', exact: true }).click()
+      await expect(gmail.getByText('Finish in your browser…', { exact: true })).toBeVisible()
+      expect(core.seen.reauthorize).toEqual([expiredId])
+      expect(core.seen.oauthCreate).toEqual([])
+      expect(core.google.map((g) => g.id)).toEqual([expiredId])
+      await expect.poll(opened).toEqual([`${core.url}/fake-google/consent?credential=${expiredId}`])
+      const flow = await page.evaluate((id) => window.api.serviceCredentials.oauthFlow(id), agent.id)
+      expect(flow.ok && flow.value && { reconnect: flow.value.reconnect, slot: flow.value.slot, credentialId: flow.value.credentialId })
+        .toEqual({ reconnect: true, slot: 'Gmail', credentialId: expiredId })
+    })
+
+    await test.step('consent, then cinna://oauth-done: Gmail reads Connected on the same record', async () => {
+      Object.assign(core.google[0], { oauthStatus: 'ready', revision: 'g-rev-2' })
+      await deliverLink(cinna, `cinna://oauth-done?credential_id=${expiredId}`)
+      await expect(dialog.getByTestId('finish-setup-slot-Gmail').getByText('Connected', { exact: true })).toBeVisible({ timeout: 10_000 })
+      expect(await attachedOf(cinna, agent.id)).toEqual([{ ref: expiredId, state: 'ready' }])
+      expect(core.seen.oauthCreate).toEqual([])
     })
   } finally { await core.close() }
 })
