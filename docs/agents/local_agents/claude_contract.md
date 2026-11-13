@@ -636,7 +636,8 @@ Set alongside the env, not in it: `strictMcpConfig: true`, `mcpServers: {}` (§2
    certificate, `--options runtime`, and **this app's own `build/entitlements.mac.plist`**, which
    grants `allow-jit`, `allow-unsigned-executable-memory`, `allow-dyld-environment-variables` and
    `apple-events` and **nothing Keychain-related** (`codesign -d` confirms `flags=0x10000(runtime)`
-   and exactly those four keys). From it, `claude auth status` was spawned under the constructed
+   and exactly those four keys; `allow-dyld-environment-variables` was dropped on 2026-11-13, and
+   the result does not depend on it). From it, `claude auth status` was spawned under the constructed
    child environment, twice:
 
    | Parent | `~/.claude/.credentials.json` | exit | `loggedIn` | consent prompt |

@@ -180,6 +180,33 @@ Composer [voice input](../../chat/voice_input/voice_input.md) runs a native prog
 
 `mac.extendInfo` in `electron-builder.yml` must be a YAML **map**. It used to be a list, which electron-builder wrote into `Info.plist` under numbered keys (`"0"`, `"1"`, …); macOS never saw `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`, `NSDocumentsFolderUsageDescription`, `NSDownloadsFolderUsageDescription` or `NSAppleEventsUsageDescription`, and every one of those prompts showed the system's generic wording instead of Cinna's. To check a build: `plutil -p "<app>/Contents/Info.plist" | grep UsageDescription` must list the keys by name.
 
+### Hardening: Electron fuses and what the asar may hold
+
+**Electron fuses.** `electronFuses` in `electron-builder.yml` flips the fuses right before signing:
+
+| Fuse | Value | Why |
+|---|---|---|
+| `enableNodeCliInspectArguments` | off | Otherwise any process running as the user can start the app with `--inspect-brk`, run code in its main process and use `safeStorage`. The keychain hands `safeStorage` to Cinna's signature without a prompt, so that means every stored API key and OAuth token. This was verified against 0.11.3 on 2026-11-13. |
+| `enableNodeOptionsEnvironmentVariable` | off | `NODE_OPTIONS=--require …` is the same door. The same fuse also makes Electron delete `NODE_EXTRA_CA_CERTS` from `process.env`, in the main process and in run-as-node children; [see below](#node_extra_ca_certs-in-the-packaged-app) for how it is restored. |
+| `enableEmbeddedAsarIntegrityValidation`, `onlyLoadAppFromAsar` | on | The app runs only the `app.asar` whose hash electron-builder stamped into the build: the signed Info.plist (`ElectronAsarIntegrity`) on macOS, a resource on Windows. Electron enforces the hash on macOS and Windows only; on Linux this fuse does nothing. A copy with a changed byte exits with "ASAR Integrity Violation". Files in `app.asar.unpacked` are outside the check. |
+| `runAsNode` | **on** | The ACP adapters, the `node` shim, dashboard endpoints and the PDF extractor run as `process.execPath` with `ELECTRON_RUN_AS_NODE=1`. That mode has no Electron APIs and loads only team-signed native libraries, but it still runs code under Cinna's signature, and `--inspect` still works in it. Retiring it means giving those children a runtime of their own. |
+
+`com.apple.security.cs.allow-dyld-environment-variables` is gone from `build/entitlements.mac.plist`, so `DYLD_*` variables don't reach the hardened app. `resetAdHocDarwinSignature` re-signs Electron Framework ad hoc after the flip: `build:mac:unsigned` never signs, and an app with the broken signature is killed at launch. `src/shared/packagingSecurity.test.ts` fails if any of this is undone.
+
+**What `app.asar` may hold.** `files` in `electron-builder.yml` only removes things from the whole repo, so any local folder it doesn't list gets packed. The macOS assets of 0.11.3, built on a developer Mac, shipped `drafts/`, `plans/`, `.claude/` (including an agent worktree and `settings.local.json`), `docs/` and `cinna.log`. Linux assets are built by CI from a clean checkout and don't have those folders. `verifyAppContents`, at the end of `afterPack`, now fails the build unless the asar's top level is exactly `out/`, `node_modules/`, `package.json`, `resources/` and `LICENSE`. If the app ever needs a new top-level name, add it to `APP_TOP_LEVEL` in `scripts/packaged-dependencies.cjs` together with the code that reads it.
+
+### NODE_EXTRA_CA_CERTS in the packaged app
+
+With the NodeOptions fuse off, Electron deletes `NODE_EXTRA_CA_CERTS` from `process.env`. Left alone, every Node fetch (the LLM SDKs, the adapters) fails behind a TLS-inspecting proxy on the proxy's certificate. Three pieces put it back:
+
+- **Recovery (main, packaged only).** `recoverExtraCaCertsEnv` in `src/main/host/desktop/extraCaRecovery.ts` re-reads the value from the OS: Linux `/proc/self/environ`, macOS `/bin/launchctl getenv`, Windows `reg.exe` (by absolute path) on `HKCU\Environment`, then `HKLM`. A value already present is kept. Dev and E2E builds skip it, so a sandbox never picks up the developer's value. Each lookup is bounded to 1.5 s and never throws. Once back in `process.env`, `envMerge` forwards it to non-Electron children unchanged.
+- **Main.** `installExtraCaCertificates` adds the file's certificates with `tls.setDefaultCACertificates` before any connection opens.
+- **Run-as-node children.** Only when a file is set, `runtimeHost.nodeRuntime` adds `--require resources/node-extra-ca/preload.cjs` and passes the path as `CINNA_EXTRA_CA_CERTS`, a name Electron leaves alone. The preload applies it and restores `NODE_EXTRA_CA_CERTS` for the child's own children (the Claude and Codex CLIs, MCP servers). With no file set, children start exactly as before, so a missing preload cannot stop them. The `cinna-node` shim forwards the caller's `NODE_EXTRA_CA_CERTS` as `CINNA_EXTRA_CA_CERTS` and leaves the host's own value out of its content, so launch keys do not depend on it.
+
+The preload must be a real file, so `resources/**` stays in `asarUnpack`; `afterPack` fails the build if `preload.cjs` or `extra-ca.cjs` is missing there, and `check-packaged-acp` spawns the adapter with the same `--require`.
+
+**Known misses.** macOS: a value exported only in the shell that started the binary directly (set it with `launchctl setenv`; a `.zshrc` export cannot introduce it). Windows: a value set only in a parent shell, and a non-ASCII `REG_SZ` path, because `reg.exe` output is decoded as UTF-8. Verified on a packaged arm64 build with the fuses: the full bare-Mac suite (12 specs, including a real OpenCode turn) and a real Claude turn through the packaged ACP adapter passed, with and without an extra CA set through `launchctl`.
+
 ## Verifying the result
 
 After the build, run the [packaged runtime checks](packaged_runtime.md#commands-and-coverage) against the artifact on a compatible host before publishing. `afterPack` automatically validates the required ACP manifest tree and target Canvas payload (and, for a macOS package, the [voice input helper](#voice-input-helper)) before signing, including cross-builds; it does not execute either smoke check. The ACP check uses packaged Electron, while the main check uses project Electron by default, or an explicitly supplied matching target Electron, against copied packaged files. A cross-built artifact needs a runtime matching its architecture and Electron/native ABI. Record the tested platform/architecture and keep untested targets explicit; measured runtime coverage includes signed macOS arm64 and x64 under Rosetta, with explicit Canvas drawing passing on both. Linux CI passed the packaging tests and build guards; Linux runtime remains unverified. See the guide's [evidence table](packaged_runtime.md#evidence-and-limits) before extending that claim to another artifact.
@@ -189,6 +216,12 @@ Cross-build native validation is separate from the manifest guard: `npmRebuild: 
 Then sanity-check signing and notarization:
 
 ```bash
+# Fuses as configured: RunAsNode Enabled, NodeOptions and NodeCliInspect Disabled,
+# EmbeddedAsarIntegrityValidation and OnlyLoadAppFromAsar Enabled
+npx @electron/fuses read --app "dist/mac-arm64/Cinna Desktop.app"
+
+# The build log has: Verified app.asar top level: LICENSE, node_modules, out, package.json, resources
+
 # Signature is valid and chains to Apple root
 codesign --verify --deep --strict --verbose=2 "dist/mac-arm64/Cinna Desktop.app"
 
