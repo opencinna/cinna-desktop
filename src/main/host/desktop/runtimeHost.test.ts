@@ -10,8 +10,9 @@ const safe = vi.hoisted(() => ({
   encryptString: vi.fn(() => { throw new Error('sync safeStorage.encryptString called') }),
   decryptString: vi.fn(() => { throw new Error('sync safeStorage.decryptString called') })
 }))
-vi.mock('electron', () => ({ safeStorage: safe, app: { get isPackaged() { return platform.packaged } }, BrowserWindow: { getAllWindows: () => windows } }))
+vi.mock('electron', () => ({ safeStorage: safe, app: { get isPackaged() { return platform.packaged }, getAppPath: () => '/repo' }, BrowserWindow: { getAllWindows: () => windows } }))
 import type { BrowserWindow } from 'electron'
+import { join } from 'node:path'
 import { createDesktopHost, desktopEventPublisher } from './runtimeHost'
 import { getLogEntries } from '../../logger/logger'
 const windows: BrowserWindow[] = []
@@ -42,13 +43,23 @@ describe('desktop event adapter', () => {
 afterEach(() => { vi.unstubAllGlobals(); platform.packaged = false; platform.backend = 'basic_text'; platform.encryption = true; platform.reEncrypt = false })
 it('resolves real-disk packaged adapters and selects Electron as a Node child only in the desktop host', () => {
   const executable = process.execPath
-  vi.stubGlobal('process', { ...process, resourcesPath: '/application/Resources' })
+  vi.stubGlobal('process', { ...process, resourcesPath: '/application/Resources', env: { ...process.env, NODE_EXTRA_CA_CERTS: undefined } })
   const host = createDesktopHost()
   const entry = '@agentclientprotocol/claude-agent-acp/dist/index.js'
   expect(host.resolvePackageFile(entry)).toContain('/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js')
   platform.packaged = true
   expect(host.resolvePackageFile(entry)).toBe('/application/Resources/app.asar.unpacked/node_modules/' + entry)
+  // No extra CA file: the child starts exactly as before, with no preload to miss.
   expect(host.nodeRuntime()).toEqual({ command: executable, args: [], env: { ELECTRON_RUN_AS_NODE: '1' } })
+  // With one, the preload is required and the file travels as CINNA_EXTRA_CA_CERTS, read per call.
+  vi.stubGlobal('process', { ...process, resourcesPath: '/application/Resources', env: { ...process.env, NODE_EXTRA_CA_CERTS: '/corp/ca.pem' } })
+  expect(host.nodeRuntime()).toEqual({
+    command: executable,
+    args: ['--require', '/application/Resources/app.asar.unpacked/resources/node-extra-ca/preload.cjs'],
+    env: { CINNA_EXTRA_CA_CERTS: '/corp/ca.pem', ELECTRON_RUN_AS_NODE: '1' }
+  })
+  platform.packaged = false
+  expect(host.nodeRuntime().args).toEqual(['--require', join('/repo', 'resources', 'node-extra-ca', 'preload.cjs')])
 })
 
 it('retains provider and OAuth encryption on Linux basic_text while refusing service credentials', async () => {

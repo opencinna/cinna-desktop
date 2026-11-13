@@ -3,6 +3,17 @@ productName: Cinna Desktop
 directories:
   buildResources: build
 files:
+  # This list only takes things away from the whole repo, so a local folder that
+  # is gitignored but not listed here is packed and published. 0.11.3 shipped
+  # drafts/, plans/, .claude/ and cinna.log this way. afterPack
+  # (verifyAppContents in scripts/packaged-dependencies.cjs) now fails the build
+  # if app.asar holds anything but out/, node_modules/, package.json, resources/
+  # and LICENSE.
+  - '!{drafts,plans,docs,native,.claude,.cinna-core-kit}/**'
+  - '!*.{log,md,tsbuildinfo}'
+  - '!*.log.*'
+  - '!{Makefile,postcss.config.js,vitest.config.ts,vitest.contract.config.ts}'
+  - '!{test-results,coverage,playwright-report}/**'
   # Test output is transient and may be rewritten during local validation.
   - '!e2e/**'
   # Keep prior installers out when validating with a different output directory.
@@ -59,6 +70,35 @@ files:
   - '!node_modules/**/node_modules/@openai/codex*/**'
 beforePack: ./scripts/packaged-dependencies.cjs
 afterPack: ./scripts/packaged-dependencies.cjs
+# Electron fuses, flipped in the binary right before signing. Without them any
+# process running as the user could start the installed app with `--inspect`
+# (or `NODE_OPTIONS=--require …`), run code inside Cinna's signed binary and
+# use safeStorage, which the keychain hands to that signature without a prompt:
+# every stored API key and OAuth token. Verified 2026-11-13 against the
+# installed build, which had no fuses set.
+#
+# runAsNode stays on: the ACP adapters, the `node` shim for stdio MCP servers,
+# dashboard endpoints and the PDF extractor all run as `process.execPath` with
+# ELECTRON_RUN_AS_NODE=1 (runtimeHost.nodeRuntime). That mode has no Electron
+# APIs, so no safeStorage, and the hardened runtime refuses it any library not
+# signed by our team. Retiring it is separate work.
+#
+# The asar pair means the app only runs the app.asar whose hash electron-builder
+# stamped into the signed Info.plist (ElectronAsarIntegrity). Files in
+# app.asar.unpacked are outside that check.
+#
+# Guarded by src/shared/packagingSecurity.test.ts.
+# resetAdHocDarwinSignature: flipping fuses rewrites Electron Framework and
+# breaks its ad-hoc signature; `build:mac:unsigned` (identity null) never
+# re-signs, so without this the unsigned app is killed at launch. Signed builds
+# replace the ad-hoc signature with the real one anyway.
+electronFuses:
+  resetAdHocDarwinSignature: true
+  runAsNode: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
 asarUnpack:
   # For the icon PNGs, which are imported with electron-vite's `?asset`.
   # The kit contract is excluded from `files` above, so this never matches it.

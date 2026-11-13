@@ -23,7 +23,7 @@ function deps(over: Partial<CodexLauncherDeps> = {}): CodexLauncherDeps {
     binaryKnown: async () => ({ state: 'ready' }),
     auth: async () => ({ state: 'logged_in' }),
     adapterEntry: () => '/app/codex-acp/dist/index.js',
-    nodeRuntime: () => ({ command: '/app/Electron', args: [], env: { ELECTRON_RUN_AS_NODE: '1' } }),
+    nodeRuntime: () => ({ command: '/app/Electron', args: ['--require', '/app/preload.cjs'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
     env: async () => ({ HOME: '/home/test', PATH: '/usr/bin' }),
     systemPrompt: () => 'You are the folder agent.',
     settings: () => ({ model: null, effort: 'medium', approval: 'ask' }), ...over
@@ -39,7 +39,7 @@ describe('Codex ACP launcher', () => {
     const plan = await createCodexLauncher(deps()).plan(context)
     if (isRefusal(plan)) throw new Error(plan.error)
     expect(plan.spec.command).toBe('/app/Electron')
-    expect(plan.spec.args).toEqual(['/app/codex-acp/dist/index.js'])
+    expect(plan.spec.args).toEqual(['--require', '/app/preload.cjs', '/app/codex-acp/dist/index.js'])
     expect(plan.spec.env).toMatchObject({ CODEX_PATH: '/usr/local/bin/codex', INITIAL_AGENT_MODE: 'workspace-write', ELECTRON_RUN_AS_NODE: '1' })
     expect(JSON.parse(plan.spec.env.CODEX_CONFIG)).toEqual({ developer_instructions: 'You are the folder agent.', model_reasoning_effort: 'medium' })
     // No collaboration mode on an ordinary turn: a user's own `/plan` stays.

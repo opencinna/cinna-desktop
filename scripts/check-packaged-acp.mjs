@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -34,7 +34,11 @@ try {
     const entry = join(unpacked, 'node_modules/@agentclientprotocol', adapter, 'dist/index.js')
     // A clean environment and cwd prevent developer dependencies or credentials
     // from masking a broken package. Initialize makes no model request.
-    const child = spawn(executable, [entry], {
+    // The same leading args as runtimeHost.nodeRuntime: the extra-CA preload
+    // the NodeOptions fuse makes necessary, from the shipped unpacked tree.
+    const preload = join(unpacked, 'resources', 'node-extra-ca', 'preload.cjs')
+    await access(preload)
+    const child = spawn(executable, ['--require', preload, entry], {
       cwd: scratch,
       env: {
         PATH: process.env.PATH,

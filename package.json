@@ -73,6 +73,7 @@
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
+    "@electron/asar": "3.4.1",
     "@playwright/test": "^1.65.0",
     "@tailwindcss/postcss": "^4.3.4",
     "@tailwindcss/vite": "^4.3.4",

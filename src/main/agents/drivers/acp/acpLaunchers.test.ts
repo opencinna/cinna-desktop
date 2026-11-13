@@ -472,7 +472,7 @@ describe('the Claude launcher', () => {
     adapterEntry: () => '/app/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js',
     nodeRuntime: () => ({
       command: '/Applications/Cinna.app/Contents/MacOS/Cinna',
-      args: [],
+      args: ['--require', '/app/preload.cjs'],
       env: { ELECTRON_RUN_AS_NODE: '1' }
     }),
     claudeEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x' }),
@@ -531,6 +531,7 @@ describe('the Claude launcher', () => {
     const p = plan(await createClaudeLauncher(deps).plan(CTX))
     expect(p.spec.command).toBe('/Applications/Cinna.app/Contents/MacOS/Cinna')
     expect(p.spec.args).toEqual([
+      '--require', '/app/preload.cjs',
       '/app/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js'
     ])
     expect(p.spec.env.ELECTRON_RUN_AS_NODE).toBe('1')

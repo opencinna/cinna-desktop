@@ -86,7 +86,7 @@ test('excludes bundled Claude and Codex CLIs even when installed', (t) => {
   assert.deepEqual(runtimePackages(root, ['agent']), ['node_modules/agent'])
 })
 
-test('build hooks preserve resource patterns and reject a broken shipped tree', (t) => {
+test('build hooks preserve resource patterns and reject a broken shipped tree', async (t) => {
   const { root, pkg } = fixture(t)
   const agent = pkg('@agentclientprotocol/claude-agent-acp', { dependencies: { shared: '*' } })
   copyClaudeAdapter(agent)
@@ -129,7 +129,22 @@ test('build hooks preserve resource patterns and reject a broken shipped tree', 
   writeFileSync(join(root, 'speech', 'cinna-speech'), 'helper fixture', { mode: 0o644 })
   assert.throws(() => afterPack(context), /Missing executable speech helper/)
   chmodSync(join(root, 'speech', 'cinna-speech'), 0o755)
+  // The packed app itself: only what the app reads may sit at its top level.
+  const appSource = join(root, '.app-source')
+  mkdirSync(join(appSource, 'out'), { recursive: true })
+  writeFileSync(join(appSource, 'out', 'index.js'), '')
+  writeFileSync(join(appSource, 'package.json'), '{}')
+  await require('@electron/asar').createPackage(appSource, join(root, 'app.asar'))
+  // The extra-CA preload every run-as-node child requires.
+  assert.throws(() => afterPack(context), /Missing unpacked extra-CA preload/)
+  const extraCa = join(unpacked, 'resources', 'node-extra-ca')
+  mkdirSync(extraCa, { recursive: true })
+  for (const file of ['preload.cjs', 'extra-ca.cjs']) writeFileSync(join(extraCa, file), '')
   assert.doesNotThrow(() => afterPack(context))
+  mkdirSync(join(appSource, 'drafts'))
+  writeFileSync(join(appSource, 'drafts', 'notes.md'), '')
+  await require('@electron/asar').createPackage(appSource, join(root, 'app.asar'))
+  assert.throws(() => afterPack(context), /never reads: drafts\./)
 })
 
 function canvasFixture(t, options = {}) {
@@ -251,4 +266,31 @@ test('main check waits longer for an executable of another architecture, or as l
   assert.equal(checkDeadline('x64', 'arm64', {}), 120_000)
   assert.equal(checkDeadline('arm64', 'arm64', { CINNA_PACKAGED_MAIN_TIMEOUT_MS: '200000' }), 200_000)
   assert.equal(checkDeadline('x64', 'arm64', { CINNA_PACKAGED_MAIN_TIMEOUT_MS: 'soon' }), 120_000)
+})
+
+test('refuses an app.asar that holds anything but the app', (t) => {
+  const { verifyAppContents } = require('./packaged-dependencies.cjs')
+  const resources = mkdtempSync(join(tmpdir(), 'cinna-app-contents-'))
+  t.after(() => rmSync(resources, { recursive: true, force: true }))
+  const shipped = ['/out/main/index.js', '/node_modules/x/index.js', '/package.json', '/resources/icon.png', '/LICENSE']
+  verifyAppContents(resources, () => shipped)
+  assert.throws(
+    () => verifyAppContents(resources, () => [...shipped, '/drafts/notes.md', '/.claude/settings.local.json', '/cinna.log']),
+    /never reads: \.claude, cinna\.log, drafts\./
+  )
+  mkdirSync(join(resources, 'app.asar.unpacked', 'plans'), { recursive: true })
+  assert.throws(() => verifyAppContents(resources, () => shipped), /never reads: plans\./)
+})
+
+test('afterPack requires the extra-CA preload as real files in app.asar.unpacked', (t) => {
+  const { verifyExtraCaPreload } = require('./packaged-dependencies.cjs')
+  const resources = mkdtempSync(join(tmpdir(), 'cinna-extra-ca-'))
+  t.after(() => rmSync(resources, { recursive: true, force: true }))
+  assert.throws(() => verifyExtraCaPreload(resources), /preload\.cjs, resources\/node-extra-ca\/extra-ca\.cjs/)
+  const dir = join(resources, 'app.asar.unpacked', 'resources', 'node-extra-ca')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'preload.cjs'), '')
+  assert.throws(() => verifyExtraCaPreload(resources), /Missing unpacked extra-CA preload: resources\/node-extra-ca\/extra-ca\.cjs\./)
+  writeFileSync(join(dir, 'extra-ca.cjs'), '')
+  verifyExtraCaPreload(resources)
 })

@@ -9,6 +9,8 @@ import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopment
 import { installRuntimeHost } from './host/runtimeHost'
 import { installEventPublisher } from './host/events'
 import { createDesktopHost, desktopEventPublisher } from './host/desktop/runtimeHost'
+import { installExtraCaCertificates } from './host/desktop/extraCaCertificates'
+import { recoverExtraCaCertsEnv } from './host/desktop/extraCaRecovery'
 import { taskRuntimeService } from './services/taskRuntimeService'
 import { app, shell, BrowserWindow, Menu, dialog, powerMonitor, clipboard } from 'electron'
 import { join } from 'path'
@@ -62,6 +64,15 @@ if (overrideUserData) {
   app.setPath('userData', overrideUserData)
   app.setPath('sessionData', join(overrideUserData, 'session-data'))
 }
+
+// NODE_EXTRA_CA_CERTS, which the packaged NodeOptions fuse makes Electron
+// ignore and delete from process.env. Recovered from the OS first (packaged
+// only: unfused dev and E2E builds keep the variable, and an E2E sandbox must
+// not pick up the developer's value), so the children envMerge builds get it
+// back; then applied before anything opens a connection, since Node fetch (the
+// LLM SDKs) uses the default CA set.
+if (app.isPackaged) recoverExtraCaCertsEnv()
+installExtraCaCertificates()
 
 // The install handoff reads the clipboard once on first run, on Linux only.
 // macOS is left out because a program reading the pasteboard without a user

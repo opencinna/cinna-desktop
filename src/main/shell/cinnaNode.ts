@@ -50,15 +50,25 @@ function cmdQuote(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
 
+/**
+ * Taken from the environment the shim is run with, never written into it: the
+ * extra CA file. Electron deletes `NODE_EXTRA_CA_CERTS` from a run-as-node
+ * child (the NodeOptions fuse), so the shim hands the engine's value on as
+ * `CINNA_EXTRA_CA_CERTS`, which the runtime's preload reads. The host's own
+ * value of it in `runtime.env` is left out, so the shim's content (and the
+ * launch keys built on its path) does not depend on it.
+ */
+const EXTRA_CA_ENV = 'CINNA_EXTRA_CA_CERTS'
+
 /** The shim's file name and content on `platform`. */
 export function cinnaNodeShim(platform: NodeJS.Platform, runtime: { command: string; args: string[]; env: Record<string, string> }): { name: string; content: string } {
-  const names = Object.keys(runtime.env).sort()
+  const names = Object.keys(runtime.env).filter((name) => name !== EXTRA_CA_ENV).sort()
   if (platform === 'win32') {
-    const lines = ['@echo off', 'setlocal', ...names.map((name) => `set "${name}=${runtime.env[name]}"`), `${[runtime.command, ...runtime.args].map(cmdQuote).join(' ')} %*`]
+    const lines = ['@echo off', 'setlocal', `if defined NODE_EXTRA_CA_CERTS set "${EXTRA_CA_ENV}=%NODE_EXTRA_CA_CERTS%"`, ...names.map((name) => `set "${name}=${runtime.env[name]}"`), `${[runtime.command, ...runtime.args].map(cmdQuote).join(' ')} %*`]
     return { name: `${CINNA_NODE_SHIM_NAME}.cmd`, content: `${lines.join('\r\n')}\r\n` }
   }
   // Env names come from the host (`ELECTRON_RUN_AS_NODE`), never from user input.
-  const assignments = names.map((name) => `${name}=${shellQuote(runtime.env[name])} `).join('')
+  const assignments = `${EXTRA_CA_ENV}="\${NODE_EXTRA_CA_CERTS-}" ` + names.map((name) => `${name}=${shellQuote(runtime.env[name])} `).join('')
   const command = [runtime.command, ...runtime.args].map(shellQuote).join(' ')
   return { name: CINNA_NODE_SHIM_NAME, content: `#!/bin/sh\n${assignments}exec ${command} "$@"\n` }
 }

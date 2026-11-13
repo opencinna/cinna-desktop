@@ -5,6 +5,7 @@ import type { RuntimeHost } from '../runtimeHost'
 import { nativeImageThumbnail } from './imageThumbnails'
 import type { EventPublisher } from '../events'
 import { createLogger } from '../../logger/logger'
+import { extraCaChildEnv, extraCaPreloadPath } from './extraCaCertificates'
 
 const keystoreLogger = createLogger('keystore')
 
@@ -59,7 +60,20 @@ export function createDesktopHost(): RuntimeHost {
     resolvePackageFile: (specifier) => app.isPackaged
       ? join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', specifier)
       : createRequire(import.meta.url).resolve(specifier),
-    nodeRuntime: () => ({ command: process.execPath, args: [], env: { ELECTRON_RUN_AS_NODE: '1' } }),
+    // With an extra CA file set, `--require` the extra-CA preload and pass the
+    // file as CINNA_EXTRA_CA_CERTS: the packaged NodeOptions fuse makes
+    // Electron ignore and delete NODE_EXTRA_CA_CERTS in run-as-node children
+    // too. Without one, children start exactly as before, so a missing preload
+    // can never stop them. Read per call.
+    nodeRuntime: () => {
+      const caEnv = extraCaChildEnv()
+      const withCa = Object.keys(caEnv).length > 0
+      return {
+        command: process.execPath,
+        args: withCa ? ['--require', extraCaPreloadPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })] : [],
+        env: { ...caEnv, ELECTRON_RUN_AS_NODE: '1' }
+      }
+    },
     onShutdown: (listener) => { app.on('will-quit', listener) },
     images: { thumbnail: (bytes, maxSide) => nativeImageThumbnail(bytes, maxSide) },
     shell: {

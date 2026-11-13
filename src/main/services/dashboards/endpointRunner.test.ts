@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ScheduleCommandOutcome } from '../../../shared/localSchedules'
@@ -96,11 +96,15 @@ describe('an endpoint over the real execute', () => {
     mkdirSync(odd, { recursive: true })
     const binary = join(odd, 'Cinna Desktop')
     symlinkSync(process.execPath, binary)
-    const rel = script('env.mjs', `console.log(JSON.stringify({ flag: process.env.ELECTRON_RUN_AS_NODE ?? null }))`)
+    // The leading args are the extra-CA preload, under the same odd path.
+    const preloadDir = join(base, "Cinna Desktop's.app", 'Resources', 'node-extra-ca')
+    cpSync(join(__dirname, '..', '..', '..', '..', 'resources', 'node-extra-ca'), preloadDir, { recursive: true })
+    const preload = join(preloadDir, 'preload.cjs')
+    const rel = script('env.mjs', `console.log(JSON.stringify({ flag: process.env.ELECTRON_RUN_AS_NODE ?? null, execArgv: process.execArgv }))`)
     const execute = vi.fn(executeLocalCommand)
-    const runner = createEndpointRunner(deps({ execute, resolveNode: async () => null, nodeRuntime: () => ({ command: binary, args: [], env: {} }) }))
-    expect(await runner.run(call(rel))).toMatchObject({ ok: true, value: { flag: '1' } })
-    expect(execute.mock.calls[0][0]).toBe(`${shellQuote(binary)} ${shellQuote(rel)}`)
+    const runner = createEndpointRunner(deps({ execute, resolveNode: async () => null, nodeRuntime: () => ({ command: binary, args: ['--require', preload], env: {} }) }))
+    expect(await runner.run(call(rel))).toMatchObject({ ok: true, value: { flag: '1', execArgv: ['--require', preload] } })
+    expect(execute.mock.calls[0][0]).toBe(`${shellQuote(binary)} ${shellQuote('--require')} ${shellQuote(preload)} ${shellQuote(rel)}`)
   })
 
   it('names a native addon on the fallback, and only there', async () => {

@@ -1,4 +1,4 @@
-const { existsSync, readFileSync, mkdtempSync, mkdirSync, renameSync, rmSync, statSync } = require('node:fs')
+const { existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, renameSync, rmSync, statSync } = require('node:fs')
 const { basename, dirname, join, relative, resolve, sep } = require('node:path')
 const { tmpdir } = require('node:os')
 const { verifyCodexAcpPatch } = require('./patch-codex-acp.cjs')
@@ -173,6 +173,51 @@ function verifySpeechHelper(resourcesDir) {
   console.log('Verified speech helper')
 }
 
+// What app.asar may hold at its top level. `files` in electron-builder.yml is a
+// deny-list over the whole repo, so a local folder nobody excluded is packed and
+// published: 0.11.3's macOS assets carried drafts/, plans/, .claude/ (with an
+// agent worktree), docs/ and cinna.log. The app reads only out/, its
+// node_modules, package.json and resources/ through the app path, so anything
+// else fails the build instead of shipping.
+const APP_TOP_LEVEL = new Set(['out', 'node_modules', 'package.json', 'resources', 'LICENSE'])
+
+// @electron/asar caches an archive's header by path for the life of the
+// process; read it fresh, since the archive may have been rewritten since.
+function listAsarFresh(archive) {
+  require('@electron/asar/lib/disk').uncacheFilesystem(archive)
+  return require('@electron/asar').listPackage(archive, { isPack: false })
+}
+
+function verifyAppContents(resourcesDir, listAsar = listAsarFresh) {
+  const top = new Set()
+  for (const entry of listAsar(join(resourcesDir, 'app.asar'))) {
+    const name = entry.split(/[\\/]/).filter(Boolean)[0]
+    if (name) top.add(name)
+  }
+  const unpacked = join(resourcesDir, 'app.asar.unpacked')
+  if (existsSync(unpacked)) for (const name of readdirSync(unpacked)) top.add(name)
+  const stray = [...top].filter((name) => !APP_TOP_LEVEL.has(name)).sort()
+  if (stray.length > 0) {
+    throw new Error(`app.asar holds files the app never reads: ${stray.join(', ')}. Exclude them under files in electron-builder.yml, or add a name the app really loads to APP_TOP_LEVEL in scripts/packaged-dependencies.cjs.`)
+  }
+  console.log(`Verified app.asar top level: ${[...top].sort().join(', ')}`)
+}
+
+// The `--require` preload every ELECTRON_RUN_AS_NODE child starts with
+// (runtimeHost.nodeRuntime). The NodeOptions fuse makes Electron ignore
+// NODE_EXTRA_CA_CERTS, and this is what puts it back; a child cannot read it
+// from inside app.asar, so it must be a real file (asarUnpack resources/**).
+const EXTRA_CA_FILES = ['resources/node-extra-ca/preload.cjs', 'resources/node-extra-ca/extra-ca.cjs']
+
+function verifyExtraCaPreload(resourcesDir) {
+  const unpacked = join(resourcesDir, 'app.asar.unpacked')
+  const missing = EXTRA_CA_FILES.filter((file) => !existsSync(join(unpacked, file)))
+  if (missing.length > 0) {
+    throw new Error(`Missing unpacked extra-CA preload: ${missing.join(', ')}. Every run-as-node child requires it; keep resources/** in asarUnpack.`)
+  }
+  console.log('Verified unpacked extra-CA preload')
+}
+
 function afterPack({ packager, appOutDir, electronPlatformName, arch }) {
   // Runs for every target, including cross-builds, before signing/publishing.
   // Fail the build if file filtering or dependency collection lost a package.
@@ -191,6 +236,8 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch }) {
   if (electronPlatformName === 'darwin') verifySpeechHelper(packager.getResourcesDir(appOutDir))
   // electron-builder drops the kit's `.gitkeep` files; see packaged-kit.cjs.
   completePackagedKit(packager.info.projectDir, packager.getResourcesDir(appOutDir))
+  verifyExtraCaPreload(packager.getResourcesDir(appOutDir))
+  verifyAppContents(packager.getResourcesDir(appOutDir))
 }
 
-module.exports = { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, beforePack, afterPack }
+module.exports = { verifyAppContents, verifyExtraCaPreload, runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, beforePack, afterPack }
