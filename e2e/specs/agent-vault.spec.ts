@@ -5,6 +5,7 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
 import { createFolderAgent } from '../fixtures/seed'
 import { writeFakeClaudeCli } from '../fixtures/fakeClaudeCli'
 import type { LocalAgentDto } from '../../src/shared/localAgents'
+import { RUNTIME_PINS } from '../../src/shared/runtimePins'
 
 /**
  * **Agent Vault** on the fake backend (`CINNA_VAULT_FAKE=1`): the real
@@ -230,7 +231,8 @@ test('V3 a locked vault unlocks from the composer, answers, and keeps its chat o
   await expect(lockAfter.locator('option')).toHaveText(['30 seconds', '5 minutes', 'Until Cinna quits'])
 
   await page.getByRole('button', { name: 'Lock now' }).click()
-  await expect(page.getByRole('button', { name: 'Unlock', exact: true })).toBeVisible()
+  // The Security tab's own Unlock; the Runs-with line above the tabs offers another (V8).
+  await expect(page.getByRole('tabpanel').getByRole('button', { name: 'Unlock', exact: true })).toBeVisible()
   await expect(page.locator('[data-vault-state="locked"]')).toHaveText('Locked')
 
   await page.getByRole('button', { name: 'Start chat', exact: true }).click()
@@ -399,4 +401,106 @@ test('V7 a file the vault agent names links, previews from inside the vault, and
   await expect(menu).toHaveCount(0, { timeout: 30_000 })
   await expect.poll(() => (existsSync(savedTo) ? readFileSync(savedTo, 'utf8') : null), { timeout: 30_000 }).toBe('# Vault report\n\nWritten inside the vault.\n')
   await expect(preview.getByRole('alert')).toHaveCount(0)
+})
+
+/**
+ * The scripted Codex app-server (`fakeCodexAppServer.mjs`, as `codex-engine.spec.ts`
+ * runs it) saved as `localAgentsCodexPath`: the fake backend's runtime source
+ * streams that file into the vault as the vault's `codex`. It answers any
+ * plain prompt with a constant that is not the scripted Claude's.
+ */
+async function arrangeFakeCodex(cinna: CinnaApp): Promise<string> {
+  const bin = join(cinna.sandbox.home, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const executable = join(bin, 'codex')
+  writeFileSync(executable, `#!${process.execPath}\n${readFileSync(join(process.cwd(), 'src/main/agents/drivers/acp/testSupport/fakeCodexAppServer.mjs'), 'utf8')}`, { mode: 0o755 })
+  await cinna.page.evaluate((path) => window.api.settings.set('localAgentsCodexPath', path), executable)
+  // Until the binary service has taken up the path just saved, Codex does not resolve to it.
+  await expect
+    .poll(async () => {
+      const resolved = await cinna.page.evaluate(() => window.api.engine.resolveCodex())
+      return resolved.state === 'ready' ? resolved.path : resolved.state
+    }, { timeout: 30_000 })
+    .toBe(executable)
+  return executable
+}
+
+const CODEX_REPLY = 'Hello from Codex.'
+const CLAUDE_HOSTS = ['api.anthropic.com', 'claude.ai', 'console.anthropic.com', 'platform.claude.com', 'statsig.anthropic.com']
+const CODEX_HOSTS = ['api.openai.com', 'auth.openai.com', 'chatgpt.com']
+
+test('V8 a vault agent switches to Codex through setup, answers on it, switches back at once, and a locked vault offers Unlock', async ({ cinna }) => {
+  test.setTimeout(MOVE_TIMEOUT + 180_000)
+  const agent = await arrangeClaudeAgent(cinna)
+  await arrangeFakeCodex(cinna)
+  await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+  await moveOverIpc(cinna, agent.id)
+  const page = cinna.page
+  await openAgent(cinna)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+
+  const panel = page.getByRole('region', { name: 'Runs with' })
+  const runsOn = panel.getByLabel('Runs on', { exact: true })
+  await expect(runsOn).toHaveValue('claude')
+  await expect(runsOn.locator('option')).toHaveText(['Claude Agent', 'Codex — needs setup', 'OpenCode — needs setup', 'Antigravity — needs setup'])
+  await expect(runsOn).toBeEnabled()
+
+  // Codex is not in the vault yet: choosing it opens its setup.
+  await runsOn.selectOption('codex')
+  const dialog = page.getByRole('dialog', { name: 'Set up Codex in the vault' })
+  await expect(dialog).toBeVisible()
+  const steps = dialog.getByRole('list', { name: 'Steps' })
+  await expect(steps.getByRole('listitem')).toHaveText([
+    'Downloads the pinned Codex runtime into the vault',
+    `Allows ${CODEX_HOSTS.join(', ')}`,
+    'Stores the key (if given)',
+    'Switches the agent to Codex'
+  ])
+  await expect(dialog.getByText('Each of the first two asks for Touch ID or your password.', { exact: true })).toBeVisible()
+  // Until the switch is done the select keeps naming the engine the agent runs on.
+  await expect(runsOn).toHaveValue('claude')
+  await dialog.getByLabel('API key for Codex inside the vault').fill('sk-proj-e2e-not-a-real-key')
+  await dialog.getByRole('button', { name: 'Set up', exact: true }).click()
+
+  await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+  await expect(runsOn).toHaveValue('codex')
+  await expect(runsOn.locator('option')).toHaveText(['Claude Agent', 'Codex', 'OpenCode — needs setup', 'Antigravity — needs setup'])
+  await expect(panel.getByText(/^Runs inside the vault on /)).toHaveText(`Runs inside the vault on Codex ${RUNTIME_PINS.codex.cli}-host · the CLI’s default model.`)
+
+  // A turn on Codex, inside the vault: the scripted Codex's words, not the scripted Claude's.
+  await page.getByRole('button', { name: 'Start chat', exact: true }).click()
+  const box = page.getByRole('combobox', { name: 'Type a message...' })
+  await box.fill('Which engine are you?')
+  await box.press('Enter')
+  await expect(page.getByText(CODEX_REPLY, { exact: true })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText(REPLY, { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+  const chat = (await page.evaluate(() => window.api.chat.list())).find((c) => c.agentId === agent.id)
+  if (!chat) throw new Error('no chat with the vault agent')
+  const stored = await sqliteMessageCount(cinna, chat.id)
+  expect(stored.vaultId, 'the Codex chat is bound to the vault').not.toBeNull()
+  expect(stored.messages, 'no message of the Codex chat is in SQLite').toBe(0)
+
+  // Back to Claude Agent: set up already, so it switches at once, with no dialog.
+  await openAgent(cinna)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await expect(runsOn).toHaveValue('codex')
+  await runsOn.selectOption('claude')
+  await expect(runsOn).toHaveValue('claude', { timeout: 30_000 })
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(runsOn.locator('option')).toHaveText(['Claude Agent', 'Codex', 'OpenCode — needs setup', 'Antigravity — needs setup'])
+  await expect(panel.getByText(/^Runs inside the vault on /)).toHaveText(`Runs inside the vault on Claude Agent ${RUNTIME_PINS.claude.cli}-host · the CLI’s default model.`)
+
+  // Network access: both set-up engines' hosts.
+  await page.getByRole('tab', { name: /^Security/ }).click()
+  const hosts = [...CLAUDE_HOSTS, ...CODEX_HOSTS]
+  await expect(page.getByText(/^\d+ hosts?: /)).toHaveText(`${hosts.length} hosts: ${hosts.join(', ')}`)
+
+  // Locked: which engines are set up is known only to the vault.
+  await page.getByRole('button', { name: 'Lock now' }).click()
+  await expect(page.locator('[data-vault-state="locked"]')).toHaveText('Locked')
+  await expect(runsOn).toBeDisabled()
+  await expect(panel.getByText('Unlock the vault to change the engine.', { exact: true })).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Unlock', exact: true })).toBeEnabled()
+  await expect(runsOn).toHaveValue('claude')
 })
