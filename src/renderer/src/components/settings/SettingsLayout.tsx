@@ -421,15 +421,22 @@ export function SettingsIconButton({
 /** A small non-interactive tag beside a title (Home, Added folder). */
 export function SettingsBadge({
   children,
-  title
+  title,
+  tone = 'neutral'
 }: {
   children: ReactNode
   title?: string
+  /** `danger` for a tag that warns (the vault's Test helper). */
+  tone?: 'neutral' | 'danger'
 }): React.JSX.Element {
   return (
     <span
       title={title}
-      className="shrink-0 rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px text-[11px] text-[var(--color-text-secondary)]"
+      className={`shrink-0 rounded px-1.5 py-px text-[11px] ${
+        tone === 'danger'
+          ? 'bg-[var(--color-danger)]/15 font-medium text-[var(--color-danger)]'
+          : 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]'
+      }`}
     >
       {children}
     </span>

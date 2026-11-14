@@ -886,7 +886,8 @@ function StartTaskControls({ task, lead }: { task: TaskDto; lead?: React.ReactNo
   const { start, isPending } = useStartTask()
   const [selected, setSelected] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const available = (agents ?? []).filter((agent) => agent.enabled &&
+  // An agent in an Agent Vault takes no tasks (main refuses it too).
+  const available = (agents ?? []).filter((agent) => agent.enabled && agent.source !== 'vault' &&
     !readinessBlocksTurn(agent.readiness, agent.capabilities))
   const onStart = async (): Promise<void> => {
     setError(null)

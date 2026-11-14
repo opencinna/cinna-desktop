@@ -7,7 +7,7 @@ async function openPermissions(cinna: CinnaApp, name: string): Promise<void> {
   await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
   await cinna.page.getByRole('button', { name, exact: true }).click()
   await cinna.page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await cinna.page.getByRole('tab', { name: 'Permissions', exact: true }).click()
+  await cinna.page.getByRole('tab', { name: 'Security', exact: true }).click()
 }
 
 /** Real UI → preload → IPC → per-agent desktop state. No model or dispatch is involved. */

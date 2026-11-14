@@ -147,6 +147,7 @@ vi.mock('./ReadOnlyCards', () => ({
 vi.mock('./FolderTab', () => ({ FolderTab: marker('folder-tab') }))
 vi.mock('./ServiceCredentialsTab', () => ({ ServiceCredentialsTab: marker('credentials-tab') }))
 vi.mock('./PermissionsCard', () => ({ PermissionsCard: marker('permissions-card') }))
+vi.mock('./security/AgentVaultSection', () => ({ AgentVaultSection: marker('agent-vault-section') }))
 const addonsBadge: { count: number; problems: number; skills?: number } = { count: 0, problems: 0 }
 vi.mock('./AgentAddonsTab', () => ({
   AgentAddonsTab: marker('addons-tab'),
@@ -182,6 +183,52 @@ function renderPage(a: LocalAgentDto = agent()): ReturnType<typeof render> {
   const client = new QueryClient()
   return render(createElement(QueryClientProvider, { client }, createElement(LocalAgentPage)))
 }
+
+describe('LocalAgentPage — an agent in a vault', () => {
+  const vaulted = (): LocalAgentDto =>
+    agent({ path: '', vault: { vaultId: 'v1', state: 'locked', engine: 'claude' } })
+
+  it('shows a lock in the title and offers none of the folder actions', () => {
+    renderPage(vaulted())
+    const title = screen.getByRole('heading', { level: 1 })
+    expect(within(title).getByRole('img', { name: 'In a vault' })).toBeTruthy()
+    // Open in…, the ⋯ menu (reveal, terminal, rename, trash) and the path's
+    // Reveal all act on a folder that is inside the vault, not on this Mac.
+    expect(screen.queryByText('open-in')).toBeNull()
+    expect(screen.queryByText('actions')).toBeNull()
+    expect(screen.queryByRole('button', { name: /reveal/i })).toBeNull()
+  })
+
+  it('shows no runtime panel in settings, whose manifest is inside the vault', () => {
+    renderPage(vaulted())
+    expect(screen.queryByText('runtime')).toBeNull()
+    cleanupPage()
+    renderPage(agent())
+    expect(screen.getByText('runtime')).toBeTruthy()
+  })
+
+  it('shows no runtime chips in chat mode either: the vault’s engine is not this Mac’s choice', () => {
+    pageMode = 'chat'
+    renderPage(vaulted())
+    expect(screen.getByRole('textbox', { name: 'Chat with folder:alpha' })).toBeTruthy()
+    expect(screen.queryByText('runtime')).toBeNull()
+  })
+
+  it('keeps Security and drops the tabs that read the folder on disk', () => {
+    renderPage(vaulted())
+    // The text without the count badges ('Security2' carries the grants).
+    const names = screen.getAllByRole('tab').map((tab) => (tab.textContent ?? '').replace(/\d+$/, ''))
+    expect(names).toContain('Security')
+    for (const gone of ['Commands', 'Schedules', 'Dashboards', 'Folder']) expect(names).not.toContain(gone)
+  })
+
+  it('draws a host agent without the lock and with its folder actions', () => {
+    renderPage(agent())
+    expect(screen.queryByRole('img', { name: 'In a vault' })).toBeNull()
+    expect(screen.getByText('open-in')).toBeTruthy()
+    expect(screen.getByText('actions')).toBeTruthy()
+  })
+})
 
 describe('LocalAgentPage — chat and settings modes', () => {
   it('opens the preselected composer below the header and runtime in chat mode', () => {
@@ -331,9 +378,11 @@ describe('LocalAgentPage — layout', () => {
     // Permissions is a tab rather than a card on Overview: in the common case
     // it is a fixed paragraph plus "nothing remembered yet", which is knowledge
     // and not a control (`ux_rules.md` §2). Mutation: render
-    // `<PermissionsCard>` under `tab === 'overview'` fails this.
+    // `<PermissionsCard>` under `tab === 'overview'` fails this. Since Agent
+    // Vault the tab is Security (D9): the vault section first, then the card.
     expect(screen.queryByText('permissions-card')).toBeNull()
-    fireEvent.click(screen.getByRole('tab', { name: /permissions/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /security/i }))
+    expect(screen.getByText('agent-vault-section')).toBeTruthy()
     expect(screen.getByText('permissions-card')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('tab', { name: /folder/i }))
@@ -346,8 +395,8 @@ describe('LocalAgentPage — layout', () => {
     // follow. Mutation: drop the badge and a standing rule is invisible until
     // someone goes looking for it.
     renderPage(agent())
-    const tab = screen.getByRole('tab', { name: /permissions/i })
-    expect(tab.textContent).toBe('Permissions2')
+    const tab = screen.getByRole('tab', { name: /security/i })
+    expect(tab.textContent).toBe('Security2')
   })
 
   it('counts validation findings on the Folder tab, where a ready folder now keeps them', () => {

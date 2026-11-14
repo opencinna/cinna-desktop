@@ -1,6 +1,6 @@
 import { ServiceCredentialsTab } from './ServiceCredentialsTab'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { MessageSquare, Settings } from 'lucide-react'
+import { Lock, MessageSquare, Settings } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import {
   useDraftLocalAgent,
@@ -24,7 +24,7 @@ import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
 import { BareNameCard, BareReadmeCard } from './BareAgentCards'
 import { PromptDocCard } from './PromptDocCard'
 import { CommandsCard, StatusCard } from './ReadOnlyCards'
-import { PermissionsCard } from './PermissionsCard'
+import { SecurityTab } from './security/SecurityTab'
 import { FolderTab } from './FolderTab'
 import { SchedulesTab } from './SchedulesTab'
 import { AgentInterfaceTab } from '../AgentInterfaceTab'
@@ -57,13 +57,14 @@ const TABS: { id: AgentPageTab; label: string }[] = [
   // The components this agent built in `dashboards/`, and where each is placed.
   // Kit agents only: a bare folder has no `dashboards/` convention.
   { id: 'dashboards', label: 'Dashboards' },
-  // Permissions is a tab and not a card on Overview: in the common case it is a
-  // fixed paragraph identical for every folder agent plus "nothing remembered
-  // yet" — knowledge, not a control (rule 2) — and the count badge is what
-  // makes a standing grant discoverable without opening it. A tab body also
+  // Security (D9; Permissions before Agent Vault): the vault first, then the
+  // permissions. Permissions is a tab and not a card on Overview: in the common
+  // case it is a fixed paragraph identical for every folder agent plus "nothing
+  // remembered yet" — knowledge, not a control (rule 2) — and the count badge is
+  // what makes a standing grant discoverable without opening it. A tab body also
   // mounts on selection, so its query cannot render an empty state for an agent
   // that has grants.
-  { id: 'permissions', label: 'Permissions' },
+  { id: 'security', label: 'Security' },
   { id: 'folder', label: 'Folder' },
   { id: 'interface', label: 'Interface' },
   // Only for a shared agent: where it is shared, who has access, its
@@ -288,9 +289,13 @@ export function LocalAgentPage(): React.JSX.Element {
   // folder was never asked to have. Every other tab still has something true to
   // show: Overview its name and `AGENT.md`, Addons its connectors, Permissions the
   // profile it runs under, Folder the findings that explain what it is.
+  // An agent in a vault has no folder on this Mac (D6): no commands to run,
+  // no schedules, no dashboards folder, no files to show.
+  const inVault = agent.vault != null
   const tabs = TABS.filter(
     (entry) =>
       !(agent.kind === 'bare' && ['commands', 'schedules', 'dashboards'].includes(entry.id)) &&
+      !(inVault && ['commands', 'schedules', 'dashboards', 'folder'].includes(entry.id)) &&
       (entry.id !== 'sharing' || listedShare != null)
   )
   // The selected tab persists across agents, so someone on Commands who clicks
@@ -309,6 +314,11 @@ export function LocalAgentPage(): React.JSX.Element {
             <h1 className="flex items-center gap-2 text-xl font-semibold text-[var(--color-text)]">
               <AgentTypeIcon agent={{ source: 'folder' }} agentId={agent.id} size={18} />
               <span className="truncate">{agent.name}</span>
+              {inVault && (
+                <span role="img" aria-label="In a vault" title="In a vault" className="shrink-0 text-[var(--color-text-muted)]">
+                  <Lock size={15} aria-hidden="true" />
+                </span>
+              )}
             </h1>
             {hasDescription ? (
               <p className="mt-0.5 line-clamp-2 text-xs text-[var(--color-text-secondary)]">
@@ -329,16 +339,23 @@ export function LocalAgentPage(): React.JSX.Element {
                 </button>
               )
             )}
-            <button
-              type="button"
-              onClick={() => openPath.mutate({ agentId: agent.id })}
-              title="Reveal this folder"
-              className="mt-1 block max-w-full truncate font-mono text-[10px] text-[var(--color-text-muted)]
-                hover:text-[var(--color-text-secondary)] transition-colors"
-            >
-              {agent.path}
-            </button>
-            {mode === 'chat' && (
+            {/* A vault agent's folder is inside its vault; there is nothing here to reveal. */}
+            {!inVault && (
+              <button
+                type="button"
+                onClick={() => openPath.mutate({ agentId: agent.id })}
+                title="Reveal this folder"
+                className="mt-1 block max-w-full truncate font-mono text-[10px] text-[var(--color-text-muted)]
+                  hover:text-[var(--color-text-secondary)] transition-colors"
+              >
+                {agent.path}
+              </button>
+            )}
+            {/*
+              Not for a vault agent, as in settings mode: its runtime is the
+              vault's engine, and these chips would name this Mac's choice.
+            */}
+            {mode === 'chat' && !inVault && (
               <RuntimePanel
                 agent={agent}
                 compact
@@ -365,7 +382,7 @@ export function LocalAgentPage(): React.JSX.Element {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <OpenInMenu agent={agent} onError={reportError} onNote={reportNote} />
+            {!inVault && <OpenInMenu agent={agent} onError={reportError} onNote={reportNote} />}
             <button
               type="button"
               onClick={() => {
@@ -381,7 +398,9 @@ export function LocalAgentPage(): React.JSX.Element {
               {mode === 'settings' ? <MessageSquare size={12} /> : <Settings size={12} />}
               {mode === 'settings' ? 'Start chat' : 'Settings'}
             </button>
-            <AgentActionsMenu agent={agent} onError={reportError} />
+            {/* Every item acts on the folder on disk (rescan, reveal, terminal, rename,
+                trash); a vault agent leaves the vault from its Security tab. */}
+            {!inVault && <AgentActionsMenu agent={agent} onError={reportError} />}
           </div>
         </header>
         {/*
@@ -425,7 +444,9 @@ export function LocalAgentPage(): React.JSX.Element {
           like any other; what differs is only where the answer is kept — its own
           state under `userData`, never a file in the adopted folder.
         */}
-        {mode === 'settings' && <RuntimePanel agent={agent} />}
+        {/* A vault agent's runtime is the vault's engine, and its manifest is inside the
+            vault: the panel could only say it cannot read cinna-agent.json. */}
+        {mode === 'settings' && !inVault && <RuntimePanel agent={agent} />}
 
         <div hidden={mode === 'settings'} className={mode === 'settings' ? undefined : 'flex flex-1 flex-col'}>
           {/*
@@ -464,7 +485,7 @@ export function LocalAgentPage(): React.JSX.Element {
                 }`}
               >
                 {entry.label}
-                {entry.id === 'permissions' && grantCount > 0 && (
+                {entry.id === 'security' && grantCount > 0 && (
                   <span
                     className="ml-1.5 rounded bg-[var(--color-bg-tertiary)] px-1 text-[10px] text-[var(--color-text-muted)]"
                     title={`${grantCount} standing permission${grantCount === 1 ? '' : 's'}`}
@@ -599,7 +620,7 @@ export function LocalAgentPage(): React.JSX.Element {
               </>
             ))}
           {activeTab === 'commands' && <CommandsCard agent={agent} />}
-          {activeTab === 'permissions' && <PermissionsCard agent={agent} />}
+          {activeTab === 'security' && <SecurityTab key={agent.id} agent={agent} />}
           {activeTab === 'folder' && <FolderTab agent={agent} />}
           {activeTab === 'interface' && <AgentInterfaceTab key={agent.id} agent={agent} />}
           {activeTab === 'sharing' && (

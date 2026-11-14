@@ -598,6 +598,58 @@ describe('composer readiness refusal', () => {
  * one-shot draft is writing its prompts. It blocks the way a refusal does —
  * Send disabled, Enter a no-op, the text kept — and lifts by itself.
  */
+describe('an old chat of an agent that has since moved into its vault', () => {
+  const TEXT = 'This chat started before Alpha moved into its vault. Start a new chat to talk to it.'
+  function mountOld(vaultId: string | null, onNewChatLike = vi.fn()): () => void {
+    const target = catalogAgent(null)
+    agentList.current = [target]
+    localAgentList.current = [{
+      id: 'folder:alpha',
+      name: 'Alpha',
+      kind: 'kit',
+      readiness: 'ok',
+      readinessReason: null,
+      identity: 'manifest',
+      validation: { errors: [], warnings: [], infos: [] },
+      credentials: [],
+      runtime: { engine: 'claude' },
+      vault: { vaultId: 'v1', state: 'unlocked', engine: 'claude' }
+    }]
+    chatDetail.current = {
+      id: 'chat-1', agentId: 'folder:alpha', router: 'direct', modeId: null, providerId: null, modelId: null, vaultId, messages: [],
+      // What `chat:get` answers for a chat that is not in the agent's vault.
+      vaultReadiness: vaultId === 'v1' ? null : { state: 'vault_other_chat', reason: TEXT }
+    }
+    const client = clientWith(chatDetail.current as Record<string, unknown>)
+    const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
+      createElement(QueryClientProvider, { client }, children)
+    render(createElement(ChatInput, { chatId: 'chat-1', onNewChatLike }), { wrapper })
+    return onNewChatLike
+  }
+
+  it('says why, blocks Send and Enter, keeps the text, and offers Start new chat', async () => {
+    const onNewChatLike = mountOld(null)
+    const line = await screen.findByText(TEXT)
+    typeAndEnter('hello')
+    expect(send().disabled).toBe(true)
+    expect(send().getAttribute('aria-describedby')).toBe(line.getAttribute('id'))
+    await tick()
+    expect(spies.agentSend).not.toHaveBeenCalled()
+    expect((screen.getByRole('combobox') as HTMLTextAreaElement).value).toBe('hello')
+    fireEvent.click(screen.getByRole('button', { name: 'Start new chat' }))
+    expect(onNewChatLike).toHaveBeenCalledTimes(1)
+  })
+
+  it('says nothing in the vault’s own chat', async () => {
+    mountOld('v1')
+    await tick()
+    await tick()
+    expect(screen.queryByText(TEXT)).toBeNull()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } })
+    expect(send().disabled).toBe(false)
+  })
+})
+
 describe('composer send hold', () => {
   const HOLD = "Drafting this agent's prompts — send when it finishes."
 

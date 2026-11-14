@@ -1,6 +1,6 @@
 import type { ComponentFinding, ComponentInfo, ComponentPlacement, DashboardsErrorCode } from '../../../../shared/dashboards'
 import { isFolderAgentId } from '../../../../shared/localAgents'
-import { useUIStore, type AgentPageTab } from '../../stores/ui.store'
+import { useUIStore, type AgentPageTabRequest } from '../../stores/ui.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { useCapabilities } from '../../hooks/useCapabilities'
 
@@ -29,7 +29,7 @@ export function openDashboard(dashboardId: string): void {
  * external page, which takes the tabs it has (Dashboards) and shows Overview
  * for the rest.
  */
-export function openAgentTab(agentId: string, tab: AgentPageTab): void {
+export function openAgentTab(agentId: string, tab: AgentPageTabRequest): void {
   const ui = useUIStore.getState()
   const folder = isFolderAgentId(agentId)
   if (folder) ui.setActiveLocalAgentId(agentId)

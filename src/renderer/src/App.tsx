@@ -28,6 +28,7 @@ import { useStartup } from './hooks/useAuth'
 import { useTrayIcon } from './hooks/useTrayIcon'
 import { useNotificationOpenChat } from './hooks/useNotificationOpenChat'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
+import { useVaultWatch } from './hooks/useVault'
 import { useDashboardsWatch } from './hooks/useDashboards'
 import { useAppSettingsWatch } from './hooks/useAppSettings'
 import { useSharingWatch } from './hooks/useSharing'
@@ -141,6 +142,8 @@ function Shell(): React.JSX.Element {
   // once, means an assistant's change to a folder refreshes the Agents tab and
   // the open agent page wherever the user happens to be.
   useLocalAgentWatch()
+  // Agent Vault state pushes: the Security tab, the sidebar lock and the composer's Unlock row.
+  useVaultWatch()
   // Tile data that main recomputed, and components that changed with their agent's folder.
   useDashboardsWatch()
   // App settings saved by someone other than this window (Notes and Dashboards

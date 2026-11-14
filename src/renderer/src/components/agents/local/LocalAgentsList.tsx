@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MessageSquare, Plus } from 'lucide-react'
+import { Lock, MessageSquare, Plus } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
 import {
@@ -137,6 +137,8 @@ function AgentRow({ agent, color, menuOpen, onMenu }: {
       onClick={openPage}
       onContextMenu={(event) => {
         event.preventDefault()
+        // Every item acts on the folder on disk; a vault agent has none here (D6).
+        if (agent.vault) return
         onMenu({ x: event.clientX, y: event.clientY, anchor: event.currentTarget, agent })
       }}
       className={`group flex items-start rounded-md cursor-pointer transition-colors ${
@@ -151,6 +153,11 @@ function AgentRow({ agent, color, menuOpen, onMenu }: {
       >
         <AgentTypeIcon agent={{ source: 'folder' }} color={color} className="mt-0.5" />
         <span className="min-w-0 flex-1 truncate text-xs">{agent.name}</span>
+        {agent.vault && (
+          <span role="img" aria-label="In a vault" title="In a vault" className="mt-0.5 shrink-0 text-[var(--color-text-muted)]">
+            <Lock size={11} aria-hidden="true" />
+          </span>
+        )}
       </button>
       {/*
         A trailing 16x16 slot the row always has, so the name truncates at the

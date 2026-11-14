@@ -80,7 +80,9 @@ async function sessionsChanged(sessions: AgentActiveSession[]): Promise<void> {
   agents: {
     list: async () => [
       { id: 'a1', name: 'Invoice Checker', enabled: true },
-      { id: 'folder:m1', name: 'Ledger Folder', enabled: true, source: 'folder' }
+      { id: 'folder:m1', name: 'Ledger Folder', enabled: true, source: 'folder' },
+      // An Agent Vault agent: never offered to continue a task.
+      { id: 'folder:v1', name: 'Vaulted Payroll', enabled: true, source: 'vault' }
     ],
     onRemoteSyncComplete: () => () => {},
     onReadinessChanged: () => () => {},
@@ -428,6 +430,12 @@ describe('a failed task', () => {
 })
 
 describe('a task whose conversation is gone', () => {
+  it('does not offer an agent in an Agent Vault', async () => {
+    await renderTask({ chatId: null })
+    await screen.findByRole('option', { name: 'Ledger Folder' })
+    expect(screen.queryByRole('option', { name: 'Vaulted Payroll' })).toBeNull()
+  })
+
   it('starts through main once and navigates only after acceptance', async () => {
     await renderTask({ chatId: null })
     await screen.findByRole('option', { name: 'Invoice Checker' })

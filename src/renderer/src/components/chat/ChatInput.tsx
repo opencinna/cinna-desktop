@@ -64,6 +64,7 @@ import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
 import { useActiveSessionNotices, useComposerNotices, useComposerReadiness } from './ComposerReadiness'
+import { vaultOtherChatNotice } from './VaultOtherChatNotice'
 import { ComposerNoticePanel, useNoticePanelPresence } from './ComposerNoticePanel'
 import { useSkillLinkNotice } from './SkillLinkNotice'
 import { useGuidedBuildNotice } from './GuidedBuildNotice'
@@ -1213,9 +1214,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // A hold (the agent is still being drafted) blocks exactly like a refusal,
   // and lifts by itself — the typed text is left where it was.
   const held = !!sendHold
-  const blocksSend = readiness.blocksSend || held
+  // An old chat of an agent that has since moved into its vault: its turns are
+  // refused (main's `vault_other_chat`), and the row offers a new chat instead.
+  const vaultOtherChatId = useId()
+  const vaultOtherChat = vaultOtherChatNotice(chatId ? chatData?.vaultReadiness : null, onNewChatLike, vaultOtherChatId)
+  const blocksSend = readiness.blocksSend || held || vaultOtherChat !== null
   const blocksSendRef = useRef(blocksSend)
   blocksSendRef.current = blocksSend
+  // Sending to an agent in a locked vault asks to unlock it: the row's own
+  // Unlock, so the helper's prompt is the one the button raises. The draft is
+  // left where it is, like any refusal.
+  const vaultUnlockRef = useRef<(() => void) | null>(null)
+  vaultUnlockRef.current =
+    readiness.refusal?.state === 'vault_locked' && readiness.action && !readiness.action.pending ? readiness.action.run : null
   const readinessReasonId = useId()
   // The readiness answer, and what the folder agent's own state adds to it —
   // findings, missing credentials, its AI credential — with Finish setup
@@ -1235,7 +1246,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const notices = [
     ...(guidedBuildNotice ? [guidedBuildNotice] : []),
     ...(skillLinkNotice ? [skillLinkNotice] : []),
-    ...readinessNotices,
+    // Unlocking or logging in would not let this chat send: the row that does is the only one.
+    ...(vaultOtherChat ? [vaultOtherChat] : readinessNotices),
     ...sessionNotices
   ]
   // An open chat whose prompt cache has gone cold over a large context. In the
@@ -1822,7 +1834,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // is cleared, so the message is still there when the agent is. Below the
     // note paste above on purpose: that sends nothing, so a refusal must not
     // stop it.
-    if (blocksSendRef.current) return
+    if (blocksSendRef.current) {
+      vaultUnlockRef.current?.()
+      return
+    }
 
     // A turn running here changes nothing below: main takes the message into
     // the turn, or holds it — files and all — until the turn ends.
@@ -2744,8 +2759,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 else void handleSend()
               }}
               aria-label={editingId ? 'Save' : 'Send'}
-              aria-describedby={!editingId && readiness.text ? readinessReasonId : undefined}
-              title={editingId ? 'Save queued message' : (held ? sendHold : null) ?? (readiness.refusal ? readiness.title : null) ?? (isStreaming ? 'Send a follow-up · Esc Esc to stop' : undefined)}
+              aria-describedby={!editingId ? (vaultOtherChat ? vaultOtherChatId : readiness.text ? readinessReasonId : undefined) : undefined}
+              title={editingId ? 'Save queued message' : (held ? sendHold : null) ?? (vaultOtherChat ? vaultOtherChat.title : null) ?? (readiness.refusal ? readiness.title : null) ?? (isStreaming ? 'Send a follow-up · Esc Esc to stop' : undefined)}
               disabled={sendDisabled}
               className={`p-1.5 rounded-lg ${isStreaming ? 'bg-[var(--color-send-queued)]' : 'bg-[var(--color-success)]'} hover:opacity-80 text-white
                 disabled:opacity-20 disabled:cursor-not-allowed transition-opacity`}

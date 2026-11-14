@@ -386,6 +386,16 @@ export function useLocalAgentWatch(): void {
       if (payload.agentId) {
         void queryClient.invalidateQueries({ queryKey: localAgentKey(payload.agentId) })
         void queryClient.invalidateQueries({ queryKey: ['local-agent-doc', payload.agentId] })
+        // A move into or out of a vault changes what an open chat with the
+        // agent may do (its `vaultReadiness`, read with the chat's detail):
+        // refetch that agent's chats, or the one on screen learns of the move
+        // only on a reload. Its readiness is the `['agents']` list above.
+        if (payload.reason === 'vault') {
+          const agentId = payload.agentId
+          void queryClient.invalidateQueries({
+            predicate: (query) => query.queryKey[0] === 'chat' && (query.state.data as { agentId?: string | null } | undefined)?.agentId === agentId
+          })
+        }
       } else {
         // A whole-root push names no agent, and an edit to a **bare** agent's
         // own files is always one of these: `classifyExternalEvent` returns

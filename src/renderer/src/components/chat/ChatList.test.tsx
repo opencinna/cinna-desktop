@@ -147,6 +147,16 @@ it('refreshes the summaries once when background turns end, and not on first loa
   expect(listSummaries).toHaveBeenCalledTimes(2)
 })
 
+it('marks a vault chat’s row with a lock, and no other row', async () => {
+  list.mockResolvedValue([{ ...chats[0], vaultId: 'v1' }, chats[1]])
+  render(view())
+  await waitFor(() => expect(screen.getByText('First chat')).toBeTruthy())
+  const locks = screen.getAllByRole('img', { name: 'In a vault' })
+  expect(locks).toHaveLength(1)
+  expect(screen.getByText('First chat').parentElement!.contains(locks[0])).toBe(true)
+  expect(screen.getByText('Second chat').parentElement!.querySelector('[data-vault-chat]')).toBeNull()
+})
+
 describe('grouping', () => {
   const day = 86_400_000
   const grouped = [

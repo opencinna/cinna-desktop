@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2, ShieldCheck, X } from 'lucide-react'
+import { FileText, Loader2, ShieldCheck, X } from 'lucide-react'
 import {
   useForgetAgentGrants,
   useHandoversCheck,
@@ -34,9 +34,26 @@ import {
 } from '../../../../../shared/handovers'
 import { handoverAutoOverriddenText, handoverIgnoreText } from '../../../utils/handoverText'
 import { useDefaultRuntime } from '../../../hooks/useEngine'
-import { SettingsInfoTip } from '../../settings/SettingsLayout'
-import { AgentCard } from './AgentCard'
-import { FIELD, LABEL } from './fieldClasses'
+import {
+  SettingsButton,
+  SettingsCard,
+  SettingsIconButton,
+  SettingsLabel,
+  SettingsRow,
+  SettingsRows,
+  settingsDropdownRowClass,
+  settingsInputClass
+} from '../../settings/SettingsLayout'
+
+/**
+ * The Security tab's scale (ux_rules rule 12): this card renders into a tab
+ * of settings sections, so it takes their 14/13/12, not the app chrome's.
+ */
+const PROSE = 'text-[13px] leading-relaxed text-[var(--color-text-secondary)]'
+const NOTE = 'text-[13px] text-[var(--color-text-muted)]'
+const FIELD = settingsInputClass
+/** A refusal under a control, one line, always there (see Approvals). */
+const ERROR_SLOT = 'mt-1 h-[1lh] truncate text-[13px] text-[var(--color-danger)]'
 
 /** The key `revoking` holds while "Forget all" is the button in flight. */
 const ALL = '\u0000all'
@@ -93,6 +110,12 @@ function sentenceCase(text: string): string {
 export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   const bare = agent.kind === 'bare'
   /**
+   * An agent in an Agent Vault: its engine is the vault's, and delegation,
+   * handovers and cloud delegation are off inside (D6), so their settings
+   * would describe grants that are not in force.
+   */
+  const vault = agent.vault ?? null
+  /**
    * This agent runs on the user's own Claude Code install. Its permission
    * story is a different one — the CLI's own classifier sits in front of the
    * desktop's — so the card says that story rather than the OpenCode
@@ -107,11 +130,10 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
    * disagree about whose permission system is running.
    */
   const { data: defaultRuntime } = useDefaultRuntime()
-  const onCodex = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'codex'
-  const onAntigravity =
-    effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'antigravity'
-  const onClaude =
-    effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'claude'
+  const engine = vault ? vault.engine : effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE)
+  const onCodex = engine === 'codex'
+  const onAntigravity = engine === 'antigravity'
+  const onClaude = engine === 'claude'
   /**
    * Nothing can answer "whose permission system" yet: the folder leaves the
    * engine to this machine, and this machine has not said.
@@ -127,6 +149,7 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
    * default, so it never waits.
    */
   const engineUnknown =
+    !vault &&
     defaultRuntime === undefined &&
     // Any named engine settles it: a known one as named, anything else on
     // OpenCode (`effectiveEngine`), neither waiting on the machine default.
@@ -175,150 +198,164 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
   }
 
   return (
-    <AgentCard
-      title="Permissions"
-      // A bare agent's grants are not in its folder — that is the point of
-      // adopting one, and `desktopStatePath` moves them under `userData` so a
-      // shared working tree stays clean. Naming `app-data/desktop.json` here
-      // pointed at a file that is not there and offered to reveal it.
-      file={bare ? undefined : DESKTOP_STATE_FILE}
-      actions={
-        rows.length > 0 && !forget.isPending ? (
-          <button
-            type="button"
-            disabled={forget.isPending}
-            onClick={() => revoke()}
-            className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]
-              disabled:opacity-50 transition-colors"
-          >
-            Forget all
-          </button>
-        ) : forget.isPending && revoking === ALL ? (
-          <span className="text-[10px] text-[var(--color-text-muted)]">Forgetting…</span>
-        ) : undefined
-      }
-    >
-      {engineUnknown ? (
-        /*
-          Neither claim, and no movement either: the two branches are different
-          heights anyway, so what is reserved here is the smaller of them — the
-          grants list below shifts once when the answer lands, which is a
-          different thing from a sentence being *retracted*. One line, so the
-          tab is never blank.
-        */
-        <div className="min-h-[3.25rem] text-[10px] italic text-[var(--color-text-muted)]">
-          Reading which runtime this agent uses…
-        </div>
-      ) : onCodex ? (
-        <CodexApprovals agent={agent} />
-      ) : onAntigravity ? (
-        <AntigravityApprovals agent={agent} />
-      ) : onClaude ? (
-        <ClaudeApprovals agent={agent} />
-      ) : (
-        <OpenCodeProfile
-          bare={bare}
-          instructionsFile={agent.instructionsFile ?? null}
-          overriddenNames={overriddenNames}
-        />
-      )}
+    <>
+      <SettingsCard>
+        {engineUnknown ? (
+          /*
+            Neither claim, and no movement either: the two branches are different
+            heights anyway, so what is reserved here is the smaller of them — the
+            grants list below shifts once when the answer lands, which is a
+            different thing from a sentence being *retracted*. One line, so the
+            tab is never blank.
+          */
+          <div className={`min-h-[3lh] italic ${NOTE}`}>Reading which runtime this agent uses…</div>
+        ) : onCodex ? (
+          <CodexApprovals agent={agent} />
+        ) : onAntigravity ? (
+          <AntigravityApprovals agent={agent} />
+        ) : onClaude ? (
+          <ClaudeApprovals agent={agent} />
+        ) : (
+          <OpenCodeProfile
+            bare={bare}
+            instructionsFile={agent.instructionsFile ?? null}
+            overriddenNames={overriddenNames}
+          />
+        )}
+      </SettingsCard>
 
-      {/* File intake belongs to bare folders; kit intake and outgoing cloud work have separate grants. */}
-      {bare ? <HandoversSetting agent={agent} /> : <DelegationPermissionSetting agent={agent} field="delegations" />}
-      <DelegationPermissionSetting agent={agent} field="cloudDelegations" />
-
-      <div className="mt-3 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
-        Always allowed
-      </div>
-      {loading ? (
-        <div className="mt-1 text-[10px] italic text-[var(--color-text-muted)]">Reading…</div>
-      ) : rows.length === 0 ? (
-        <div className="mt-1 text-[10px] italic text-[var(--color-text-muted)]">
-          Nothing yet. Choosing “Always allow” on a permission request in a chat remembers it here,
-          for this agent only.
-        </div>
-      ) : null}
       {/*
-        Where a bare agent's grants live, and what that costs. They are keyed on
-        the folder's real path, so moving or renaming the folder does not carry
-        them — the same fact the Folder tab's identity row states about the
-        agent itself, and worth repeating here because this is the card where
-        the user decided to trust it.
+        File intake belongs to bare folders; kit intake and outgoing cloud work
+        have separate grants. In a vault all three are off, which the section's
+        (?) says (SecurityTab) rather than a standing line here.
       */}
-      {bare && (
-        <div className="mt-1 text-[10px] italic text-[var(--color-text-muted)]">
-          Kept on this machine rather than in the folder, so nothing about a decision you make here
-          is written into your repository. They are tied to where the folder sits: moving or
-          renaming it starts a new agent{' '}
-          {/*
-            On Claude a new agent starts on the default setting — Automatic —
-            which the paragraph above says approves what it is shown. "Asked
-            again" would promise an ask that setting never makes.
-          */}
-          {onClaude ? 'on the default setting' : 'which is asked again'}.
-        </div>
+      {!vault && (
+        <SettingsRows>
+          <SettingsRow>
+            {bare ? <HandoversSetting agent={agent} /> : <DelegationPermissionSetting agent={agent} field="delegations" />}
+          </SettingsRow>
+          <SettingsRow>
+            <DelegationPermissionSetting agent={agent} field="cloudDelegations" />
+          </SettingsRow>
+        </SettingsRows>
       )}
-      {loading || rows.length === 0 ? null : (
-        <ul className="mt-1 space-y-1">
-          {rows.map((grant) => (
-            <li key={grant.key} className="flex items-start gap-2">
-              <ShieldCheck size={12} className="mt-0.5 shrink-0 text-[var(--color-success)]" />
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-[var(--color-text)]">
-                  {/*
-                    The phrase, not `grant.action`: `external_directory` and
-                    `webfetch` are the engine's vocabulary, and this card is
-                    read by whoever owns the agent, not by whoever wrote the
-                    binary.
-                  */}
-                  {sentenceCase(describePermissionAction(grant.action))}{' '}
-                  {/*
-                    A `*` grant covers the whole action — it comes from an ask
-                    that named no resource at all — and a bare asterisk in the
-                    pattern column reads as a filename. It is the broadest row
-                    on the card, so it says so in words instead.
-                  */}
-                  {grant.pattern === '*' ? (
-                    <span className="ml-1.5 text-[11px] text-[var(--color-text-secondary)]">
-                      anywhere, every time
-                    </span>
-                  ) : (
-                    <span className="ml-1.5 font-mono text-[11px] text-[var(--color-text-secondary)] break-all">
-                      {grant.pattern}
-                    </span>
+
+      <SettingsCard>
+        <div className="flex min-h-[30px] items-center gap-2">
+          <SettingsLabel>Always allowed</SettingsLabel>
+          {/*
+            A bare agent's grants are not in its folder — that is the point of
+            adopting one, and `desktopStatePath` moves them under `userData` so a
+            shared working tree stays clean. Naming `app-data/desktop.json` here
+            pointed at a file that is not there.
+          */}
+          {!bare && !vault && (
+            <span className="flex min-w-0 items-center gap-1 font-mono text-[12px] text-[var(--color-text-muted)]">
+              <FileText size={12} className="shrink-0" aria-hidden="true" />
+              <span className="truncate">{DESKTOP_STATE_FILE}</span>
+            </span>
+          )}
+          <div className="flex-1" />
+          {rows.length > 0 && (
+            <SettingsButton disabled={forget.isPending} onClick={() => revoke()}>
+              {forget.isPending && revoking === ALL ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                  Forgetting…
+                </>
+              ) : (
+                'Forget all'
+              )}
+            </SettingsButton>
+          )}
+        </div>
+        {loading ? (
+          <div className={`mt-1 italic ${NOTE}`}>Reading…</div>
+        ) : rows.length === 0 ? (
+          <div className={`mt-1 italic ${NOTE}`}>
+            Nothing yet. Choosing “Always allow” on a permission request in a chat remembers it here,
+            for this agent only.
+          </div>
+        ) : null}
+        {/*
+          Where a bare agent's grants live, and what that costs. They are keyed on
+          the folder's real path, so moving or renaming the folder does not carry
+          them — the same fact the Folder tab's identity row states about the
+          agent itself, and worth repeating here because this is the card where
+          the user decided to trust it.
+        */}
+        {bare && !vault && (
+          <div className={`mt-1 italic ${NOTE}`}>
+            Kept on this machine rather than in the folder, so nothing about a decision you make here
+            is written into your repository. They are tied to where the folder sits: moving or
+            renaming it starts a new agent{' '}
+            {/*
+              On Claude a new agent starts on the default setting — Automatic —
+              which the paragraph above says approves what it is shown. "Asked
+              again" would promise an ask that setting never makes.
+            */}
+            {onClaude ? 'on the default setting' : 'which is asked again'}.
+          </div>
+        )}
+        {loading || rows.length === 0 ? null : (
+          <ul className="mt-2 space-y-2">
+            {rows.map((grant) => (
+              <li key={grant.key} className="flex items-start gap-2">
+                <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[var(--color-success)]" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] text-[var(--color-text)]">
+                    {/*
+                      The phrase, not `grant.action`: `external_directory` and
+                      `webfetch` are the engine's vocabulary, and this card is
+                      read by whoever owns the agent, not by whoever wrote the
+                      binary.
+                    */}
+                    {sentenceCase(describePermissionAction(grant.action))}{' '}
+                    {/*
+                      A `*` grant covers the whole action — it comes from an ask
+                      that named no resource at all — and a bare asterisk in the
+                      pattern column reads as a filename. It is the broadest row
+                      on the card, so it says so in words instead.
+                    */}
+                    {grant.pattern === '*' ? (
+                      <span className="ml-1.5 text-[12px] text-[var(--color-text-secondary)]">
+                        anywhere, every time
+                      </span>
+                    ) : (
+                      <span className="ml-1.5 font-mono text-[12px] text-[var(--color-text-secondary)] break-all">
+                        {grant.pattern}
+                      </span>
+                    )}
+                  </div>
+                  {grant.decidedAt > 0 && (
+                    <div className="text-[12px] text-[var(--color-text-muted)]">
+                      Allowed {whenGranted(grant.decidedAt, now)}
+                    </div>
                   )}
                 </div>
-                {grant.decidedAt > 0 && (
-                  <div className="text-[10px] text-[var(--color-text-muted)]">
-                    Allowed {whenGranted(grant.decidedAt, now)}
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                disabled={forget.isPending}
-                onClick={() => revoke(grant.key)}
-                aria-label={`Forget permission to ${describePermissionAction(grant.action)}: ${
-                  grant.pattern === '*' ? 'anywhere' : grant.pattern
-                }`}
-                title="Ask again next time"
-                className="shrink-0 rounded p-1 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]
-                  hover:text-[var(--color-text)] disabled:opacity-50 transition-colors"
-              >
-                {revoking === grant.key ? (
-                  <Loader2 size={12} className="animate-spin" />
-                ) : (
-                  <X size={12} />
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+                <SettingsIconButton
+                  disabled={forget.isPending}
+                  onClick={() => revoke(grant.key)}
+                  aria-label={`Forget permission to ${describePermissionAction(grant.action)}: ${
+                    grant.pattern === '*' ? 'anywhere' : grant.pattern
+                  }`}
+                  title="Ask again next time"
+                >
+                  {revoking === grant.key ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <X size={14} />
+                  )}
+                </SettingsIconButton>
+              </li>
+            ))}
+          </ul>
+        )}
 
-      {/* Below the list, so a failure never moves the row whose button raised it. */}
-      {error && <div className="mt-2 text-[11px] text-[var(--color-danger)]">{error}</div>}
-    </AgentCard>
+        {/* Below the list, so a failure never moves the row whose button raised it. */}
+        {error && <div className="mt-2 text-[13px] text-[var(--color-danger)]">{error}</div>}
+      </SettingsCard>
+    </>
   )
 }
 
@@ -352,7 +389,7 @@ function OpenCodeProfile({
       discounts the third. The third is the one that matters: the paragraph
       below, about a command reaching anything they can.
     */}
-    <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+    <p className={PROSE}>
       This agent reads, writes and runs commands inside its own folder without asking. It asks
       first before opening a file outside the folder, fetching a URL, editing{' '}
       {bare ? (
@@ -383,7 +420,7 @@ function OpenCodeProfile({
       above would be a false sense of a boundary without this, and this card
       is the one place a user goes to find out what their agent may do.
     */}
-    <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+    <p className={`mt-2 ${PROSE}`}>
       A command is not fenced in the way those tools are. The check on key files reads the
       command, so it catches the obvious spelling and not a path built inside a script: like a
       terminal left open in this folder, a command can reach anything you can. Give an agent work
@@ -400,7 +437,7 @@ function OpenCodeProfile({
       late and move the list.
     */}
     {overriddenNames.length > 0 && (
-      <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+      <p className={`mt-2 ${PROSE}`}>
         This folder’s <span className="font-mono">cinna-agent.json</span> replaces the rules for{' '}
         <span className="font-mono">{overriddenNames.join(', ')}</span> in its{' '}
         <span className="font-mono">runtime.permissions</span> block.
@@ -459,11 +496,11 @@ function ClaudeApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element
 
   return (
     <>
-      <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+      <p className={PROSE}>
         This agent runs on Claude Code under your own login. Reading files and searching never ask.
         The setting below decides who approves a command, an edit or a fetch.
       </p>
-      <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+      <p className={`mt-2 ${PROSE}`}>
         <span className="font-medium text-[var(--color-text)]">Automatic</span> lets Claude Code’s
         own reviewer approve what it judges routine for what you asked, the way{' '}
         <span className="font-mono">claude</span> does in a terminal with auto mode on. In testing
@@ -477,9 +514,8 @@ function ClaudeApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element
       </p>
 
       <div className="mt-3">
-        <label htmlFor="claude-approval" className={LABEL}>
-          Approvals
-        </label>
+        <div className={settingsDropdownRowClass}>
+        <SettingsLabel htmlFor="claude-approval">Approvals</SettingsLabel>
         <select
           id="claude-approval"
           className={FIELD}
@@ -490,16 +526,14 @@ function ClaudeApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element
           <option value="auto">Automatic</option>
           <option value="ask">Ask every time</option>
         </select>
+        </div>
         {/*
           Always rendered, and one line whatever the message: the turn-lock
           refusal is 93 characters, which wrapped at the 800px minimum and
           moved the list below by a line. The page's own action-error slot
           truncates with the full text on hover, so this does the same.
         */}
-        <div
-          className="mt-1 h-[15px] truncate text-[11px] leading-[15px] text-[var(--color-danger)]"
-          title={error ?? undefined}
-        >
+        <div className={ERROR_SLOT} title={error ?? undefined}>
           {error}
         </div>
       </div>
@@ -512,13 +546,14 @@ function CodexApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element 
   const save = useSetCodexApproval()
   const [error, setError] = useState<string | null>(null)
   return <>
-    <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+    <p className={PROSE}>
       Codex can edit files in the agent folder. Access outside its sandbox and network access
       require approval. Ask for approval sends those requests to this chat; Automatic lets
       Codex’s reviewer decide. Both modes keep the workspace sandbox enabled.
     </p>
     <div className="mt-3">
-      <label htmlFor="codex-approval" className={LABEL}>Approvals</label>
+      <div className={settingsDropdownRowClass}>
+      <SettingsLabel htmlFor="codex-approval">Approvals</SettingsLabel>
       <select id="codex-approval" className={FIELD} value={agent.desktop.codexApproval ?? 'ask'}
         disabled={save.isPending} onChange={(event) => {
           const approval = event.target.value
@@ -529,7 +564,8 @@ function CodexApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element 
         <option value="ask">Ask for approval</option>
         <option value="auto">Automatic</option>
       </select>
-      <div role="alert" className="mt-1 h-[15px] truncate text-[11px] text-[var(--color-danger)]" title={error ?? undefined}>{error}</div>
+      </div>
+      <div role="alert" className={ERROR_SLOT} title={error ?? undefined}>{error}</div>
     </div>
   </>
 }
@@ -546,14 +582,15 @@ function AntigravityApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.El
   const save = useSetAntigravityApproval()
   const [error, setError] = useState<string | null>(null)
   return <>
-    <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+    <p className={PROSE}>
       Antigravity runs commands and edits files under your Google login, with no sandbox. Ask for
       approval runs this agent's own scripts, a few read-only commands and edits inside its folder
       without asking (hidden and credential files still ask), and sends anything else to this chat
       first. Automatic runs everything without asking.
     </p>
     <div className="mt-3">
-      <label htmlFor="antigravity-approval" className={LABEL}>Approvals</label>
+      <div className={settingsDropdownRowClass}>
+      <SettingsLabel htmlFor="antigravity-approval">Approvals</SettingsLabel>
       <select id="antigravity-approval" className={FIELD} value={agent.desktop.antigravityApproval ?? 'ask'}
         disabled={save.isPending} onChange={(event) => {
           const approval = event.target.value
@@ -564,7 +601,8 @@ function AntigravityApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.El
         <option value="ask">Ask for approval</option>
         <option value="auto">Automatic</option>
       </select>
-      <div role="alert" className="mt-1 h-[15px] truncate text-[11px] text-[var(--color-danger)]" title={error ?? undefined}>{error}</div>
+      </div>
+      <div role="alert" className={ERROR_SLOT} title={error ?? undefined}>{error}</div>
     </div>
   </>
 }
@@ -644,18 +682,19 @@ function HandoversSetting({ agent }: { agent: LocalAgentDto }): React.JSX.Elemen
     : handoverIgnoreText(check)
 
   return (
-    <div className="mt-3">
-      <label htmlFor="handovers-setting" className={LABEL}>
-        Handovers
-      </label>
+    <div>
+      <div className={settingsDropdownRowClass}>
+      <div className="min-w-0">
+      <SettingsLabel htmlFor="handovers-setting">Handovers</SettingsLabel>
       {/*
         One line, under the label and above the control it describes: this card
         has no (?) affordance to put standing explanation behind (§12), and a
         paragraph here would be read once and scrolled past for ever after.
       */}
-      <div className="mb-1 text-[10px] text-[var(--color-text-muted)]">
-        A brief left in <span className="font-mono">{HANDOVERS_DIR}/</span> becomes a task for this
+      <div className={NOTE}>
+        A brief left in <span className="font-mono text-[12px]">{HANDOVERS_DIR}/</span> becomes a task for this
         agent.
+      </div>
       </div>
       <select
         id="handovers-setting"
@@ -683,7 +722,8 @@ function HandoversSetting({ agent }: { agent: LocalAgentDto }): React.JSX.Elemen
           Run automatically
         </option>
       </select>
-      <div className="mt-1 flex items-baseline gap-2 text-[10px] leading-[15px]">
+      </div>
+      <div className="mt-1 flex items-baseline gap-2 text-[13px]">
         <span className="truncate text-[var(--color-text-muted)]" title={statusLine}>
           {statusLine}
         </span>
@@ -720,11 +760,7 @@ function HandoversSetting({ agent }: { agent: LocalAgentDto }): React.JSX.Elemen
         )}
       </div>
       {/* One line, always there — a refusal must not push the setting below it down (see Approvals). */}
-      <div
-        role={error ? 'alert' : undefined}
-        className="mt-1 h-[15px] truncate text-[11px] leading-[15px] text-[var(--color-danger)]"
-        title={error ?? undefined}
-      >
+      <div role={error ? 'alert' : undefined} className={ERROR_SLOT} title={error ?? undefined}>
         {error}
       </div>
     </div>
@@ -741,15 +777,16 @@ function DelegationPermissionSetting({ agent, field }: {
   const [error, setError] = useState<string | null>(null)
   const title = field === 'delegations' ? 'Delegations' : 'Cloud delegations'
   const current = pending ?? (agent.desktop[field] === 'auto' ? 'auto' : 'ask')
-  return <div className="mt-3">
-    <div className="mb-1 flex items-center gap-1">
-      <label htmlFor={`${field}-setting`} className={`${LABEL} !mb-0`}>{title}</label>
-      <SettingsInfoTip label={`About ${title}`}>
-        {field === 'delegations'
-          ? 'Let this agent run work requested by another local agent. Run automatically starts it without asking, unless the request itself asks for approval. This permission stays on this machine.'
-          : 'Let this agent send work to cloud agents. The brief leaves this machine and cloud execution may incur charges. Send without asking sends it unless the request itself asks for approval. This permission belongs to the requesting agent and stays on this machine.'}
-      </SettingsInfoTip>
-    </div>
+  return <div>
+    <div className={settingsDropdownRowClass}>
+    <SettingsLabel
+      htmlFor={`${field}-setting`}
+      info={field === 'delegations'
+        ? 'Let this agent run work requested by another local agent. Run automatically starts it without asking, unless the request itself asks for approval. This permission stays on this machine.'
+        : 'Let this agent send work to cloud agents. The brief leaves this machine and cloud execution may incur charges. Send without asking sends it unless the request itself asks for approval. This permission belongs to the requesting agent and stays on this machine.'}
+    >
+      {title}
+    </SettingsLabel>
     <select id={`${field}-setting`} className={FIELD} value={current} disabled={save.isPending}
       onChange={(event) => {
         const setting = event.target.value
@@ -764,12 +801,9 @@ function DelegationPermissionSetting({ agent, field }: {
       <option value="ask">{field === 'delegations' ? 'Ask before running' : 'Ask before sending'}</option>
       <option value="auto">{field === 'delegations' ? 'Run automatically' : 'Send without asking'}</option>
     </select>
+    </div>
     {/* One line, always there — a refusal must not push the setting below it down (see Approvals). */}
-    <div
-      role={error ? 'alert' : undefined}
-      className="mt-1 h-[15px] truncate text-[11px] leading-[15px] text-[var(--color-danger)]"
-      title={error ?? undefined}
-    >
+    <div role={error ? 'alert' : undefined} className={ERROR_SLOT} title={error ?? undefined}>
       {error}
     </div>
   </div>

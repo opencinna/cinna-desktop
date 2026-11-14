@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowUpRight, Check, Copy, Cpu, Download, ExternalLink, FileWarning, FolderOpen, KeyRound, Loader2, LogIn, Plus, RefreshCw, WifiOff, X } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Check, Copy, Cpu, Download, ExternalLink, FileWarning, FolderOpen, KeyRound, Loader2, Lock, LockOpen, LogIn, Plus, RefreshCw, WifiOff, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { FindingText, NoticeButton, StableLabel } from './ComposerNoticePanel'
 import type { ComposerNotice } from './ComposerNoticePanel'
@@ -20,6 +20,7 @@ import { skillsLackingCredentials, useSkillCredentialPromptStore } from '../../s
 import { useAgentActiveSessions } from '../../hooks/useAgentSessions'
 import { activeSessionSentence, openSessionTitle, runningSessionsOf, useOpenSession } from '../agents/AgentActiveSessionNotice'
 import { useCinnaReauth } from '../../hooks/useAuth'
+import { useVaultUnlock, vaultErrorText } from '../../hooks/useVault'
 import { useEngineLogin } from '../../hooks/useLocalTools'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { RUN_REFERENCE_PATTERN } from '../../../../shared/kit/manifest'
@@ -48,7 +49,11 @@ const SEVERITY: Record<Exclude<AgentReadinessState, 'ok'>, ReadinessSeverity> = 
   not_installed: 'warning',
   unreachable: 'danger',
   invalid: 'danger',
-  contract_too_new: 'danger'
+  contract_too_new: 'danger',
+  // The user's own vault, closed on purpose: Unlock opens it.
+  vault_locked: 'warning',
+  // Per chat (`chat:get`'s `vaultReadiness`), drawn by `vaultOtherChatNotice`.
+  vault_other_chat: 'warning'
 }
 
 const TONE: Record<ReadinessSeverity, string> = {
@@ -118,6 +123,8 @@ export interface ReadinessAction {
   run: () => void
   /** Offered beside the pending button — a login waiting on a browser can be stopped. */
   cancel?: () => void
+  /** The button's glyph; Log in's by default, Check again's when it checks. */
+  icon?: LucideIcon
   /**
    * After a login that did not finish: the terminal command to run instead,
    * offered as **Copy command** after the main button rather than spliced
@@ -160,17 +167,22 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   const loginEngine =
     notice?.state === 'not_logged_in' && target?.capabilities.auth !== 'cinna' ? (notice.login ?? null) : null
   const login = useEngineLogin(loginEngine)
+  // An agent in a locked vault (`vault_locked`): Unlock raises the vault
+  // helper's own prompt, and the readiness push that follows clears the row.
+  const unlock = useVaultUnlock()
 
   // An earlier failure belongs to the agent and the answer it was shown
   // against; a new target, or a new answer, starts clean.
   const resetCheck = check.reset
   const resetReauth = reauth.reset
   const resetLogin = login.reset
+  const resetUnlock = unlock.reset
   useEffect(() => {
     resetCheck()
     resetReauth()
     resetLogin()
-  }, [agentId, notice?.state, notice?.reason, resetCheck, resetReauth, resetLogin])
+    resetUnlock()
+  }, [agentId, notice?.state, notice?.reason, resetCheck, resetReauth, resetLogin, resetUnlock])
 
   if (!target || !notice) {
     return { notice: null, refusal: null, blocksSend: false, text: null, title: null, action: null }
@@ -179,7 +191,12 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   // An expired Cinna session is not fixed by asking again: it is fixed by
   // signing in again, the same flow the chat's error bubble offers.
   const reauthable = notice.state === 'not_logged_in' && target.capabilities.auth === 'cinna'
-  const failure = loginEngine
+  const vaultLocked = notice.state === 'vault_locked'
+  const failure = vaultLocked
+    ? unlock.error
+      ? vaultErrorText(unlock.error, 'cancelled at the prompt.')
+      : null
+    : loginEngine
     ? loginFailureLead(login.failure)
     : reauthable
     ? reauth.error
@@ -191,10 +208,18 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
       ? unwrapIpcError(check.error, 'the check could not run')
       : null
   const suffix = failure
-    ? ` Couldn't ${loginEngine ? 'log in' : reauthable ? 're-authenticate' : 'check again'} — ${failure}`
+    ? ` Couldn't ${vaultLocked ? 'unlock' : loginEngine ? 'log in' : reauthable ? 're-authenticate' : 'check again'} — ${failure}`
     : ''
 
-  const action: ReadinessAction = loginEngine
+  const action: ReadinessAction = vaultLocked
+    ? {
+        label: 'Unlock',
+        pendingLabel: 'Unlocking…',
+        pending: unlock.isPending,
+        icon: LockOpen,
+        run: () => unlock.mutate(target.id)
+      }
+    : loginEngine
     ? {
         label: 'Log in',
         pendingLabel: loginPendingText(loginEngine, login.phase),
@@ -241,7 +266,7 @@ function ReadinessActionButton({ action, tip }: {
   const pending = action.pending || feedback
   const isCheck = action.label === 'Check again'
   // Log in and Re-authenticate both sign in; Check again refreshes (its glyph spins while it runs).
-  const ActionIcon = isCheck ? RefreshCw : LogIn
+  const ActionIcon = action.icon ?? (isCheck ? RefreshCw : LogIn)
   const button = <NoticeButton aria-disabled={pending || undefined} aria-busy={pending}
     onClick={() => {
       if (action.pending || timer.current !== null) return
@@ -288,7 +313,9 @@ const ICON: Record<Exclude<AgentReadinessState, 'ok'>, LucideIcon> = {
   not_installed: Download,
   unreachable: WifiOff,
   invalid: AlertTriangle,
-  contract_too_new: AlertTriangle
+  contract_too_new: AlertTriangle,
+  vault_locked: Lock,
+  vault_other_chat: Lock
 }
 
 /** The readiness answer as a row of the composer's notice panel, or null when ready. */

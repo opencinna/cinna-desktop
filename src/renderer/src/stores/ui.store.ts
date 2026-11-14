@@ -150,7 +150,19 @@ function applyTheme(theme: Theme): void {
 }
 
 /** A local agent page's Settings tabs (`LocalAgentPage`). */
-export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'dashboards' | 'permissions' | 'folder' | 'credentials' | 'interface' | 'sharing'
+export type AgentPageTab = 'overview' | 'addons' | 'commands' | 'schedules' | 'tasks' | 'dashboards' | 'security' | 'folder' | 'credentials' | 'interface' | 'sharing'
+
+/**
+ * A tab another surface may ask for: every {@link AgentPageTab}, plus the
+ * name the Security tab had before it held Agent Vault (D9). An old deep link
+ * or a caller written before the rename still lands on the same tab.
+ */
+export type AgentPageTabRequest = AgentPageTab | 'permissions'
+
+/** The tab a request opens: `permissions` is the Security tab's old name. */
+export function normalizeAgentPageTab(tab: AgentPageTabRequest): AgentPageTab {
+  return tab === 'permissions' ? 'security' : tab
+}
 
 /** Where the Add an agent dialog opens — see `NewLocalAgentModal`'s steps. */
 export type AddAgentDialogStep = 'choose' | 'name' | 'advanced'
@@ -330,7 +342,7 @@ interface UIStore {
    */
   chatGroupCollapsed: Record<string, boolean>
   setAgentPageMode: (mode: 'chat' | 'settings') => void
-  setAgentPageTabRequest: (tab: AgentPageTab | null) => void
+  setAgentPageTabRequest: (tab: AgentPageTabRequest | null) => void
   setCatalogItemRequest: (uuid: string | null) => void
   setActiveView: (view: ActiveView) => void
   setSettingsMenu: (tab: SettingsMenu) => void
@@ -438,7 +450,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   chatShowActive: localStorage.getItem(CHAT_SHOW_ACTIVE_KEY) === '1',
   chatGroupCollapsed: readChatGroupCollapsed(),
   setAgentPageMode: (mode) => set({ agentPageMode: mode }),
-  setAgentPageTabRequest: (tab) => set({ agentPageTabRequest: tab }),
+  setAgentPageTabRequest: (tab) => set({ agentPageTabRequest: tab === null ? null : normalizeAgentPageTab(tab) }),
   setCatalogItemRequest: (uuid) => set({ catalogItemRequest: uuid }),
   // Minimal view belongs to the chat view: any other view (a deep link, Inbox,
   // Settings) ends it, so it is never waiting there on the way back.

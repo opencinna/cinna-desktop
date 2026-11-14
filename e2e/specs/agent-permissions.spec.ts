@@ -98,10 +98,12 @@ test('the Permissions tab counts standing grants, and revoking one takes it off 
 
   const page = cinna.page
   const tabs = page.getByRole('tablist', { name: 'Agent details' })
-  const permissionsTab = tabs.getByRole('tab', { name: /^Permissions/ })
+  const permissionsTab = tabs.getByRole('tab', { name: /^Security/ })
   const card = page
     .locator('section')
-    .filter({ has: page.getByRole('heading', { level: 2, name: 'Permissions' }) })
+    .filter({ has: page.getByRole('heading', { level: 2, name: 'Approvals' }) })
+    // The innermost: the Security tab's Permissions section holds the card's section.
+    .last()
   const rows = card.getByRole('listitem')
   const webRow = rows.filter({ hasText: 'Fetch from the web' })
   const bashRow = rows.filter({ hasText: 'Run a command' })
@@ -109,7 +111,7 @@ test('the Permissions tab counts standing grants, and revoking one takes it off 
   await test.step('the tab carries the count before it is opened', async () => {
     // The badge is what makes a standing grant discoverable without opening the
     // tab, so it is read here while the Overview tab is still the one selected.
-    await expect(permissionsTab).toHaveText('Permissions2')
+    await expect(permissionsTab).toHaveText('Security2')
     await expect(permissionsTab).toHaveAttribute('aria-selected', 'false')
   })
 
@@ -127,7 +129,7 @@ test('the Permissions tab counts standing grants, and revoking one takes it off 
     await expect(webRow).toHaveCount(0)
     await expect(bashRow).toHaveCount(1)
     await expect(bashRow).toContainText('make test')
-    await expect(permissionsTab).toHaveText('Permissions1')
+    await expect(permissionsTab).toHaveText('Security1')
 
     expect(grantKeysOnDisk(agent.path)).toEqual([BASH_KEY])
   })
@@ -139,7 +141,7 @@ test('the Permissions tab counts standing grants, and revoking one takes it off 
     // The action is gone with the last row: there is nothing left to forget.
     await expect(card.getByRole('button', { name: 'Forget all' })).toHaveCount(0)
     // No badge at all, not a zero.
-    await expect(permissionsTab).toHaveText('Permissions')
+    await expect(permissionsTab).toHaveText('Security')
 
     expect(grantKeysOnDisk(agent.path)).toEqual([])
   })

@@ -92,7 +92,7 @@ async function openPermissions(cinna: CinnaApp, name: string): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page
     .getByRole('tablist', { name: 'Agent details' })
-    .getByRole('tab', { name: /^Permissions/ })
+    .getByRole('tab', { name: /^Security/ })
     .click()
 }
 
@@ -101,7 +101,9 @@ function permissionsCard(cinna: CinnaApp): ReturnType<typeof cinna.page.locator>
   const page = cinna.page
   return page
     .locator('section')
-    .filter({ has: page.getByRole('heading', { level: 2, name: 'Permissions' }) })
+    .filter({ has: page.getByRole('heading', { level: 2, name: 'Approvals' }) })
+    // The innermost: the Security tab's Permissions section holds the card's section.
+    .last()
 }
 
 test('a Claude agent chooses who approves its actions, and the choice survives a restart', async ({

@@ -233,7 +233,8 @@ function AssigneeField({ id, value, onChange, disabled, reason, current }: {
   current?: { id: string; name: string } | null
 }): React.JSX.Element {
   const { data: agents } = useAgents()
-  const enabled = (agents ?? []).filter((agent) => agent.enabled)
+  // An agent in an Agent Vault takes no tasks (main refuses it too).
+  const enabled = (agents ?? []).filter((agent) => agent.enabled && agent.source !== 'vault')
   const showCurrent = current && !enabled.some((agent) => agent.id === current.id)
   return (
     <div className="space-y-1.5">

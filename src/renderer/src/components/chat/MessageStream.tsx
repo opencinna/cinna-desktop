@@ -659,8 +659,25 @@ const NO_ARTIFACT_CARDS: ArtifactCardDto[] = []
 
 export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = false, searchBottom, reserve = null }: MessageStreamProps): React.JSX.Element {
   const messageContextMenu = useMessageContextMenu(chatId)
-  const { data: chatData } = useChatDetail(chatId)
+  const chatQuery = useChatDetail(chatId)
+  const { data: chatData } = chatQuery
   const { data: agents } = useAgents()
+  // A vault chat (`vaultId` set) keeps its transcript inside the vault (D5):
+  // while the vault is locked — its agent's readiness says `vault_locked`, the
+  // same answer that puts Unlock in the composer — there is nothing to show
+  // but that row. A chat from before the agent moved in has no `vaultId`: its
+  // history stays on this computer and shows locked or not. The unlock that
+  // lands refetches the chat.
+  const vaultLocked =
+    !!chatData?.vaultId && !!chatData.agentId &&
+    agents?.find((agent) => agent.id === chatData.agentId)?.readiness?.state === 'vault_locked'
+  const wasVaultLocked = useRef(vaultLocked)
+  useEffect(() => {
+    if (wasVaultLocked.current && !vaultLocked) void chatQuery.refetch?.()
+    wasVaultLocked.current = vaultLocked
+    // `refetch` is stable for the query's life; only the flip matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vaultLocked])
   // Artifact cards, anchored after the message each was published from.
   // Read by `ArtifactCardsSource`, a sibling mounted only while supported.
   const artifactsSupport = useArtifactsSupport()
@@ -828,7 +845,7 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
   // A model can persist completed tool rounds while its turn is still live.
   // Replay represents those same rows until the terminal transcript refetch.
   const baselineIds = liveBaselineMessageIds && new Set(liveBaselineMessageIds)
-  const messages = (chatData?.messages ?? []).filter((message) =>
+  const messages = (vaultLocked ? [] : chatData?.messages ?? []).filter((message) =>
     !baselineIds || message.role === 'user' || message.role === 'system' || baselineIds.has(message.id))
   const hasStreamingContent = streamingBlocks.length > 0
   const queuedView = useQueuedMessages(
@@ -1038,7 +1055,8 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
       <div data-sidebar-band-limit ref={contentRef} className="max-w-3xl mx-auto space-y-3">
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
           <div className="text-center text-[var(--color-text-muted)] py-16">
-            <p className="text-sm">Start a conversation</p>
+            {/* Locked, the transcript is not on this Mac: "Start a conversation" would say the chat is empty. */}
+            <p className="text-sm">{vaultLocked ? 'This chat is kept in the vault. Unlock it to see the conversation.' : 'Start a conversation'}</p>
           </div>
         )}
 

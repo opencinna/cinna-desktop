@@ -102,7 +102,7 @@ async function openPermissions(cinna: CinnaApp, name: string): Promise<void> {
   await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
   await cinna.page.getByRole('button', { name, exact: true }).click()
   await cinna.page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await cinna.page.getByRole('tab', { name: 'Permissions', exact: true }).click()
+  await cinna.page.getByRole('tab', { name: 'Security', exact: true }).click()
 }
 
 /** Handovers → Run automatically, through the agent page; then main is asked what it stored. */

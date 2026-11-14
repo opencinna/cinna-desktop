@@ -129,6 +129,12 @@ describe('Jobs agent picker', () => {
     expect(screen.getByText('Nothing to add')).toBeTruthy()
   })
 
+  it('does not offer an agent in an Agent Vault, which runs no jobs', () => {
+    openPicker([{ ...folderAgent, id: 'folder:vaulted', name: 'Ledger', source: 'vault', localPath: '' }, folderAgent])
+    expect(screen.queryByText('Ledger')).toBeNull()
+    expect(screen.getByText('Invoice Checker')).toBeTruthy()
+  })
+
   it('still withholds a disabled agent of every other source', () => {
     openPicker([
       { ...folderAgent, enabled: false },

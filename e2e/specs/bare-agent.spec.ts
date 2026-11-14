@@ -108,7 +108,7 @@ async function openAdvanced(cinna: CinnaApp): Promise<Locator> {
 }
 
 /** A bare agent's Settings tabs, in order. */
-const BARE_TABS = ['Overview', 'Addons', 'Credentials', 'Tasks', 'Permissions', 'Folder', 'Interface']
+const BARE_TABS = ['Overview', 'Addons', 'Credentials', 'Tasks', 'Security', 'Folder', 'Interface']
 
 const FOUND = [
   ['accounting_meta_agent', 'Accounting Meta Agent'],
