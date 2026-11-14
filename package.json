@@ -30,6 +30,7 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:e2e",
+    "vault:pin-adapter": "CINNA_PRINT_ADAPTER_PIN=1 vitest run src/main/vault/runtimeInstall.test.ts -t \"pins the whole adapter closure\"",
     "test:hub": "node scripts/check-hub-boundary.mjs && node scripts/check-hub-core.mjs"
   },
   "dependencies": {

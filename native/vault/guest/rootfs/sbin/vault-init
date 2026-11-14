@@ -1,0 +1,101 @@
+#!/bin/bash
+# Agent Vault PID 1 on the read-only rootfs. The guest has no NIC: the only ways out are the
+# vsock ports the helper listens on (1080 egress proxy, 1090 boot secrets).
+#
+# 1. tmpfs /run /tmp, lo up.
+# 2. One JSON line from vsock 1090 -> /usr/lib/cinna/boot.js: the disk key goes to cryptsetup
+#    on stdin only (never argv, env or a file), the approval key to /run/vault/approval.key;
+#    LUKS2 format or open of /dev/vdb as `vault`, optional grow, mount /vault.
+# 3. socat 127.0.0.1:3128 -> vsock 1080, cinna-vaultd, socat vsock 5000/5001 -> its sockets.
+# 4. `VAULT ready` on the console, then reap children forever (PID 1 never exits).
+# A fatal step prints `VAULT FAILED <step>` and powers the VM off.
+#
+# The console (hvc0) ends up in a host-side log, so it only ever gets fixed status words and
+# uptimes (D36): no paths, ids, names or tool output. vaultd logs to /run/vault/vaultd.log
+# (root-only tmpfs; vaultd rotates it at 1 MiB and keeps one vaultd.log.1, so RAM stays bounded). Children of vaultd run as uid 1000 agent / 1001 build; the console, the
+# key files and vaultd's sockets stay root's.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root LANG=C.UTF-8
+export HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://127.0.0.1:3128 NO_PROXY=localhost,127.0.0.1
+export https_proxy=$HTTPS_PROXY http_proxy=$HTTP_PROXY no_proxy=$NO_PROXY
+
+mount -t proc -o nosuid,nodev,noexec proc /proc
+mount -t sysfs -o nosuid,nodev,noexec sys /sys
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /tmp
+mkdir -p /dev/pts /dev/shm
+mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts
+mount -t tmpfs -o mode=1777,nosuid,nodev shm /dev/shm
+# devtmpfs has no /dev/fd or /dev/std* (udev would add them); bash process substitution needs /dev/fd.
+ln -sfn /proc/self/fd /dev/fd
+ln -sf /proc/self/fd/0 /dev/stdin; ln -sf /proc/self/fd/1 /dev/stdout; ln -sf /proc/self/fd/2 /dev/stderr
+exec </dev/console >/dev/console 2>&1
+chown 0:0 /dev/console /dev/hvc0 2>/dev/null
+chmod 0600 /dev/console /dev/hvc0 2>/dev/null
+
+up() { cut -d' ' -f1 /proc/uptime; }
+fail() {
+  echo "VAULT FAILED $* (uptime $(up))"
+  sync
+  echo o >/proc/sysrq-trigger
+  while :; do sleep 3600; done
+}
+
+echo vault >/proc/sys/kernel/hostname
+# Unprivileged children: no kernel log, no kernel pointers, no link tricks in shared dirs.
+for kv in kernel/dmesg_restrict=1 kernel/kptr_restrict=2 fs/protected_hardlinks=1 fs/protected_symlinks=1 \
+  fs/protected_regular=2 fs/protected_fifos=2 fs/suid_dumpable=0; do
+  echo "${kv#*=}" >"/proc/sys/${kv%%=*}" 2>/dev/null || fail "sysctl"
+done
+ip link set lo up || fail "lo up"
+echo "VAULT root uptime=$(up)"
+
+# Boot secrets: piped from the vsock straight into boot.js, never stored.
+mkdir -p -m 0700 /run/vault
+socat -u -t 30 VSOCK-CONNECT:2:1090 STDOUT 2>/dev/null | node /usr/lib/cinna/boot.js 2>/dev/null || fail "boot (disk unlock)"
+mountpoint -q /vault || fail "boot (not mounted)"
+echo "VAULT disk uptime=$(up)"
+
+# Egress: the guest's only HTTP(S) path, forwarded to the helper's allowlisting CONNECT proxy.
+socat -t 3600 TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr VSOCK-CONNECT:2:1080 2>/dev/null &
+
+# cinna-vaultd, restarted if it dies so the vault stays reachable.
+(
+  while :; do
+    node /usr/lib/cinna/vaultd.mjs </dev/null >>/run/vault/vaultd.log 2>&1
+    echo "VAULT vaultd restarted (uptime $(up))"
+    sleep 1
+  done
+) &
+
+i=0
+until [ -S /run/vaultd.sock ] && [ -S /run/vaultd-helper.sock ]; do
+  i=$((i + 1)); [ $i -gt 1000 ] && fail "vaultd sockets never appeared"
+  sleep 0.01
+done
+
+# Long half-close timeout: socat's default 0.5 s cut off streams whose other side was still writing.
+socat -t 3600 VSOCK-LISTEN:5000,fork,reuseaddr UNIX-CONNECT:/run/vaultd.sock 2>/dev/null &
+socat -t 3600 VSOCK-LISTEN:5001,fork,reuseaddr UNIX-CONNECT:/run/vaultd-helper.sock 2>/dev/null &
+
+# Smoke hook: kill vaultd once, so a smoke can check what survives a vaultd restart (spent
+# approval nonces; the helper's event subscription). `=N` (scripts/vault/guest-smoke.mjs): after N
+# seconds. `=touch` (the test helper's CINNA_VAULT_TEST_GUEST_SMOKE, scripts/vault/helper-smoke.mjs):
+# once /vault/agent/.cinna-smoke-killvaultd appears, a second later. Grants nothing: a restart only.
+KILLV=$(tr ' ' '\n' </proc/cmdline | sed -n 's/^vault\.smoke\.killvaultd=//p' | tail -n 1)
+case "$KILLV" in
+  '') ;;
+  touch) (until [ -e /vault/agent/.cinna-smoke-killvaultd ]; do sleep 0.2; done
+          rm -f /vault/agent/.cinna-smoke-killvaultd; sleep 1; pkill -f '^node /usr/lib/cinna/vaultd.mjs') & ;;
+  *[!0-9]*) ;;
+  *) (sleep "$KILLV"; pkill -f '^node /usr/lib/cinna/vaultd.mjs') & ;;
+esac
+
+echo "VAULT ready uptime=$(up)"
+
+# PID 1: bash's SIGCHLD handler reaps every child, including re-parented orphans.
+trap '' TERM INT HUP
+while :; do
+  sleep 3600 &
+  wait $!
+done

@@ -4,7 +4,7 @@ const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 const { test } = require('node:test')
 const { spawnSync } = require('node:child_process')
-const { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack } = require('./packaged-dependencies.cjs')
+const { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack, verifyVaultHelper } = require('./packaged-dependencies.cjs')
 const { checkDeadline, checkEnvironment, executableArch } = require('./check-packaged-main.cjs')
 const codexPatch = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 const claudePatch = require('../src/main/agents/drivers/acp/claudeAdapterPatch.json')
@@ -293,4 +293,101 @@ test('afterPack requires the extra-CA preload as real files in app.asar.unpacked
   assert.throws(() => verifyExtraCaPreload(resources), /Missing unpacked extra-CA preload: resources\/node-extra-ca\/extra-ca\.cjs\./)
   writeFileSync(join(dir, 'extra-ca.cjs'), '')
   verifyExtraCaPreload(resources)
+})
+
+// A stand-in for plutil/codesign: what a release helper (or a lesser one) reports.
+function helperTools({ flavor = 'release', group = 'G5E484HA2U.io.opencinna.desktop.vault-helper', verifies = true } = {}) {
+  return (command, args) => {
+    if (command === 'plutil') return { status: 0, output: `${flavor}\n` }
+    if (args[0] === '-d') return { status: 0, output: `<plist><dict><key>keychain-access-groups</key><array><string>${group}</string></array></dict></plist>` }
+    return verifies ? { status: 0, output: '' } : { status: 1, output: 'a sealed resource is missing or invalid\n' }
+  }
+}
+
+test('afterPack refuses an arm64 mac package without a shippable vault helper; --dir only warns; x64 drops it', (t) => {
+  const { root } = fixture(t)
+  const appPath = join(root, 'Cinna Desktop.app')
+  const helper = join(appPath, 'Contents', 'Library', 'Helpers', 'VaultHelper.app')
+  const arm64 = { appPath, arch: 3, dirOnly: false }
+  assert.throws(() => verifyVaultHelper(arm64, helperTools()), /VaultHelper\.app cannot ship: it is missing\. Build it with FLAVOR=release/)
+  const warnings = []
+  t.mock.method(console, 'warn', (line) => warnings.push(line))
+  assert.doesNotThrow(() => verifyVaultHelper({ ...arm64, dirOnly: true }, helperTools()))
+  assert.match(warnings[0], /^WARNING Agent Vault helper .* it is missing/)
+
+  mkdirSync(join(helper, 'Contents', 'MacOS'), { recursive: true })
+  writeFileSync(join(helper, 'Contents', 'MacOS', 'VaultHelper'), '')
+  assert.throws(() => verifyVaultHelper(arm64, helperTools()), /no embedded provisioning profile; guest Image is missing; guest initrd\.img is missing/)
+  writeFileSync(join(helper, 'Contents', 'embedded.provisionprofile'), '')
+  mkdirSync(join(helper, 'Contents', 'Resources', 'guest'), { recursive: true })
+  for (const file of ['Image', 'initrd.img']) writeFileSync(join(helper, 'Contents', 'Resources', 'guest', file), '')
+  assert.doesNotThrow(() => verifyVaultHelper(arm64, helperTools()))
+  // A test or dev helper must never ship: approvals without a prompt, or no parent check.
+  assert.throws(() => verifyVaultHelper(arm64, helperTools({ flavor: 'test' })), /flavor is test, not release/)
+  assert.throws(() => verifyVaultHelper(arm64, helperTools({ flavor: 'dev' })), /flavor is dev, not release/)
+  // electron-builder re-signed it (signIgnore lost): the keychain group is gone.
+  assert.throws(() => verifyVaultHelper(arm64, helperTools({ group: 'G5E484HA2U.other' })), /does not carry keychain-access-groups/)
+  assert.throws(() => verifyVaultHelper(arm64, helperTools({ verifies: false })), /signature does not verify \(a sealed resource/)
+  // A test-gate binary is refused by its bytes, even with a release plist and a good signature.
+  writeFileSync(join(helper, 'Contents', 'MacOS', 'VaultHelper'), 'xx CINNA-VAULT-TEST-GATE-BUILD:7c1e9a4f-do-not-ship xx')
+  assert.throws(() => verifyVaultHelper(arm64, helperTools()), /its binary is a test-gate build/)
+  writeFileSync(join(helper, 'Contents', 'MacOS', 'VaultHelper'), '')
+
+  verifyVaultHelper({ appPath, arch: 1, dirOnly: false }, helperTools())
+  assert.equal(existsSync(helper), false)
+})
+
+test('afterPack requires the pinned vault adapter tar inside app.asar', async (t) => {
+  const { verifyVaultAdapterTar, pinnedAdapterTarSha256 } = require('./packaged-dependencies.cjs')
+  const asar = require('@electron/asar')
+  const { createHash } = require('node:crypto')
+  const resources = mkdtempSync(join(tmpdir(), 'cinna-adapter-tar-'))
+  t.after(() => rmSync(resources, { recursive: true, force: true }))
+  const appSource = join(resources, '.app-source')
+  mkdirSync(join(appSource, 'out', 'main'), { recursive: true })
+  writeFileSync(join(appSource, 'out', 'main', 'index.js'), '')
+  await asar.createPackage(appSource, join(resources, 'app.asar'))
+  const pin = createHash('sha256').update('the pinned tar').digest('hex')
+  assert.throws(() => verifyVaultAdapterTar(resources, pin), /app\.asar holds no out\/vault\/claude-adapter\.tar/)
+  mkdirSync(join(appSource, 'out', 'vault'))
+  writeFileSync(join(appSource, 'out', 'vault', 'claude-adapter.tar'), 'another tar')
+  await asar.createPackage(appSource, join(resources, 'app.asar'))
+  assert.throws(() => verifyVaultAdapterTar(resources, pin), /not the pinned/)
+  writeFileSync(join(appSource, 'out', 'vault', 'claude-adapter.tar'), 'the pinned tar')
+  await asar.createPackage(appSource, join(resources, 'app.asar'))
+  verifyVaultAdapterTar(resources, pin)
+  // The pin is read from the TypeScript source the app compiles in.
+  const source = readFileSync(join(__dirname, '..', 'src', 'shared', 'runtimePins.ts'), 'utf8')
+  const actual = pinnedAdapterTarSha256(join(__dirname, '..'))
+  assert.match(actual, /^[0-9a-f]{64}$/)
+  assert.ok(source.includes(`vaultAdapterTarSha256: '${actual}'`))
+})
+
+test('afterPack requires the pinned Codex adapter tar beside the Claude one', async (t) => {
+  const { verifyVaultAdapterTars, pinnedAdapterTarSha256 } = require('./packaged-dependencies.cjs')
+  const asar = require('@electron/asar')
+  const { createHash } = require('node:crypto')
+  const project = mkdtempSync(join(tmpdir(), 'cinna-adapter-pins-'))
+  t.after(() => rmSync(project, { recursive: true, force: true }))
+  const sha = (text) => createHash('sha256').update(text).digest('hex')
+  mkdirSync(join(project, 'src', 'shared'), { recursive: true })
+  writeFileSync(join(project, 'src', 'shared', 'runtimePins.ts'), `export const RUNTIME_PINS = {\n  claude: {\n    vaultAdapterTarSha256: '${sha('claude tar')}',\n  },\n  codex: {\n    vaultAdapterTarSha256: '${sha('codex tar')}',\n  }\n}\n`)
+  assert.equal(pinnedAdapterTarSha256(project, 'claude'), sha('claude tar'))
+  assert.equal(pinnedAdapterTarSha256(project, 'codex'), sha('codex tar'))
+  const resources = join(project, 'resources')
+  const appSource = join(project, '.app-source')
+  mkdirSync(join(appSource, 'out', 'vault'), { recursive: true })
+  mkdirSync(resources)
+  writeFileSync(join(appSource, 'out', 'vault', 'claude-adapter.tar'), 'claude tar')
+  await asar.createPackage(appSource, join(resources, 'app.asar'))
+  assert.throws(() => verifyVaultAdapterTars(resources, project), /app\.asar holds no out\/vault\/codex-adapter\.tar/)
+  writeFileSync(join(appSource, 'out', 'vault', 'codex-adapter.tar'), 'another codex tar')
+  await asar.createPackage(appSource, join(resources, 'app.asar'))
+  assert.throws(() => verifyVaultAdapterTars(resources, project), /RUNTIME_PINS\.codex\.vaultAdapterTarSha256/)
+  writeFileSync(join(appSource, 'out', 'vault', 'codex-adapter.tar'), 'codex tar')
+  await asar.createPackage(appSource, join(resources, 'app.asar'))
+  verifyVaultAdapterTars(resources, project)
+  // The real source names both pins.
+  assert.match(pinnedAdapterTarSha256(join(__dirname, '..'), 'codex'), /^[0-9a-f]{64}$/)
+  assert.notEqual(pinnedAdapterTarSha256(join(__dirname, '..'), 'codex'), pinnedAdapterTarSha256(join(__dirname, '..'), 'claude'))
 })

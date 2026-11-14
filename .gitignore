@@ -32,3 +32,11 @@ e2e/playwright-report
 
 # The macOS speech helper, built by scripts/build-speech-helper.sh.
 /resources/speech/
+
+# make vault-image output and its download cache (build/ itself holds tracked packaging files).
+/build/vault-guest/
+
+# The Agent Vault helper, built by scripts/vault/build-helper.sh, and the guest
+# pins it generates from build/vault-guest/guest.lock.json.
+/resources/vault/
+/native/vault/helper/Sources/GuestPins.swift

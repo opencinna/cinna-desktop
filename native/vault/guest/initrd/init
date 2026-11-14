@@ -1,0 +1,39 @@
+#!/bin/sh
+# Agent Vault initramfs (busybox + veritysetup). Opens the read-only rootfs (/dev/vda: erofs
+# followed by its dm-verity hash tree) against the root hash the helper put on the kernel
+# command line, mounts it and hands over to /sbin/vault-init. Any failure powers the VM off,
+# so a tampered or wrong image never reaches userspace.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+exec </dev/console >/dev/console 2>&1
+
+fail() { echo "VAULT FAILED initrd: $*"; sync; poweroff -f; sleep 5; echo o > /proc/sysrq-trigger; }
+
+arg() { tr ' ' '\n' </proc/cmdline | sed -n "s/^$1=//p" | tail -n 1; }
+ROOTHASH=$(arg vault.roothash)
+HASHOFFSET=$(arg vault.hashoffset)
+TIME=$(arg vault.time)
+case "$ROOTHASH" in *[!0-9a-f]* | '') fail "vault.roothash missing or not hex" ;; esac
+[ ${#ROOTHASH} -eq 64 ] || fail "vault.roothash is not a sha256"
+case "$HASHOFFSET" in *[!0-9]* | '') fail "vault.hashoffset missing" ;; esac
+case "$TIME" in *[!0-9]* | '') ;; *) date -s "@$TIME" >/dev/null ;; esac
+
+for m in virtio_blk virtio_rng vsock vmw_vsock_virtio_transport dm_mod dm_verity dm_crypt erofs ext4; do
+  modprobe "$m" 2>/dev/null || [ -d "/sys/module/$m" ] || fail "modprobe $m"
+done
+# The block devices appear asynchronously after virtio_blk loads.
+i=0
+while [ ! -b /dev/vda ]; do
+  i=$((i + 1)); [ $i -gt 200 ] && fail "no /dev/vda"; sleep 0.01
+done
+
+veritysetup open /dev/vda root /dev/vda "$ROOTHASH" --hash-offset="$HASHOFFSET" || fail "veritysetup open"
+mkdir -p /newroot
+mount -t erofs -o ro /dev/mapper/root /newroot || fail "mount rootfs"
+[ -x /newroot/sbin/vault-init ] || fail "rootfs has no /sbin/vault-init"
+
+umount /proc /sys
+mount --move /dev /newroot/dev
+exec switch_root /newroot /sbin/vault-init

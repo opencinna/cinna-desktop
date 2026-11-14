@@ -41,6 +41,9 @@ files:
   # The speech helper ships via extraResources too (an executable must sit
   # outside the asar), so it is kept out of the asar and asarUnpack here.
   - '!resources/speech/**'
+  # The Agent Vault helper is a signed .app of its own, shipped beside the
+  # executable by mac.extraFiles below; never inside the asar.
+  - '!resources/vault/**'
   # The "Mention in Cinna" Finder Quick Action template ships via the mac
   # extraResources too: it is copied as a directory into ~/Library/Services.
   - '!resources/finder/**'
@@ -175,6 +178,20 @@ mac:
     # Resources/finder/ when packaged, from the repo in development.
     - from: resources/finder
       to: finder
+  # Agent Vault: VaultHelper.app, built into resources/vault by
+  # scripts/vault/build-helper.sh (FLAVOR=release for a release). It lands at
+  # Contents/Library/Helpers/VaultHelper.app, and signIgnore keeps
+  # electron-builder from re-signing anything in it: the helper carries its
+  # own Developer ID signature, its "Mac Team Direct" provisioning profile and
+  # the keychain-access-groups entitlement, and a re-sign would drop the
+  # entitlement (and the Secure Enclave key's access group with it, D17).
+  # afterPack (verifyVaultHelper) fails an arm64 package without a release
+  # helper and removes it from x64 packages, where it cannot run.
+  extraFiles:
+    - from: resources/vault/VaultHelper.app
+      to: Library/Helpers/VaultHelper.app
+  signIgnore:
+    - /Contents/Library/Helpers/VaultHelper\.app(/|$)
   # A map, not a list: a list lands in Info.plist as keys "0", "1", … and
   # macOS never sees the usage strings.
   extendInfo:

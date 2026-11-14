@@ -1,0 +1,54 @@
+{
+  "comment": "Every file make vault-image downloads, pinned by sha256 (computed from the downloaded bytes and cross-checked against the publisher's own checksum file). scripts/vault/build-guest.mjs verifies each one on every build, cached or not. Debian packages and the Alpine packages installed inside the build VM are verified by apt/apk signatures, not pinned here.",
+  "files": {
+    "alpine-minirootfs": {
+      "version": "3.24.4",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.4-aarch64.tar.gz",
+      "sha256": "4b14c18f7e90a063b61462ea1462a5732c154bf6adad594974fe6487cd98a8de"
+    },
+    "linux-virt": {
+      "version": "6.18.63-r0",
+      "kernelRelease": "6.18.63-0-virt",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/linux-virt-6.18.63-r0.apk",
+      "sha256": "151e6d7998d8a9b3648804ef689e7e8f765ada5b7db50f579cec87e371f40bfb"
+    },
+    "node": {
+      "version": "22.23.5",
+      "url": "https://nodejs.org/dist/v22.23.5/node-v22.23.5-linux-arm64.tar.xz",
+      "sha256": "2babb9eb5264860d540849f4b064a6fbdebcdc323657d9d382ce23d313fd5e09"
+    },
+    "uv": {
+      "version": "0.13.7",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc"
+    },
+    "debian-archive-keyring": {
+      "version": "2025.1",
+      "url": "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2025.1_all.deb",
+      "sha256": "9ea7778e443144ca490668737a8ab22dd3e748bb99e805e22ec055abeb3c7fac"
+    }
+  },
+  "debian": {
+    "suite": "trixie",
+    "variant": "minbase",
+    "mirror": "http://deb.debian.org/debian",
+    "include": [
+      "ca-certificates",
+      "curl",
+      "git",
+      "socat",
+      "cryptsetup-bin",
+      "e2fsprogs",
+      "ripgrep",
+      "procps",
+      "less",
+      "openssh-client",
+      "tar",
+      "bash",
+      "iproute2",
+      "util-linux",
+      "kmod",
+      "xz-utils"
+    ]
+  }
+}

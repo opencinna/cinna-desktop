@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Release flavor (dev: VaultHelper.dev.entitlements, its own group). The keychain group is what keeps the Secure Enclave
+     key away from any other binary (D17); AMFI accepts it only with the
+     Developer ID provisioning profile the export embeds. No dyld, JIT or
+     library-validation exceptions. -->
+<plist version="1.0"><dict>
+  <key>com.apple.security.virtualization</key><true/>
+  <key>keychain-access-groups</key><array><string>G5E484HA2U.io.opencinna.desktop.vault-helper</string></array>
+</dict></plist>

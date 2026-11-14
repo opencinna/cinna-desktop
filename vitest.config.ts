@@ -30,7 +30,8 @@ export default defineConfig({
         test: {
           name: 'main',
           environment: 'node',
-          include: ['src/**/*.test.ts'],
+          // cinna-vaultd (the Agent Vault guest daemon) lives outside src/ but is plain Node too.
+          include: ['src/**/*.test.ts', 'native/vault/guest/vaultd/**/*.test.ts'],
           // Replaces vitest's default exclude list, hence node_modules here.
           // The interface-contract tests need a real managed CLI and run from
           // `vitest.contract.config.ts` (`npm run test:contract`). Only that folder:

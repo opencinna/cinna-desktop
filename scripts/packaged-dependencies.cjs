@@ -1,6 +1,7 @@
 const { existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, renameSync, rmSync, statSync } = require('node:fs')
 const { basename, dirname, join, relative, resolve, sep } = require('node:path')
 const { tmpdir } = require('node:os')
+const { createHash } = require('node:crypto')
 const { verifyCodexAcpPatch } = require('./patch-codex-acp.cjs')
 const { verifyClaudeAgentAcpPatch } = require('./patch-claude-agent-acp.cjs')
 const { completePackagedKit } = require('./packaged-kit.cjs')
@@ -173,6 +174,114 @@ function verifySpeechHelper(resourcesDir) {
   console.log('Verified speech helper')
 }
 
+// The Agent Vault helper (mac.extraFiles → Contents/Library/Helpers). It is
+// excluded from electron-builder's signing (mac.signIgnore) because it must
+// keep its own Developer ID signature, embedded "Mac Team Direct" profile and
+// keychain-access-groups entitlement: without the entitlement the Secure
+// Enclave key's access group is gone (D17), and a package with a test or dev
+// flavor would ship approvals with no prompt or no parent check (D31). So an
+// arm64 mac package must carry a release helper that still verifies, with the
+// guest kernel and initrd inside. The helper is arm64-only: an x64 package
+// drops it (the app reports the vault unavailable there). A `--dir` build only
+// warns, so a local unsigned build still works without the helper.
+const VAULT_HELPER_GROUP = 'G5E484HA2U.io.opencinna.desktop.vault-helper'
+// Compiled only into the test flavor (native/vault/helper/Sources/Flavor.swift,
+// TEST_GATE_MARKER): a binary that holds it auto-grants every approval, whatever
+// its Info.plist says, so the bytes are checked as well as the plist.
+const VAULT_TEST_GATE_MARKER = 'CINNA-VAULT-TEST-GATE-BUILD:7c1e9a4f-do-not-ship'
+
+function runTool(command, args) {
+  const r = require('node:child_process').spawnSync(command, args, { encoding: 'utf8' })
+  return { status: r.status, output: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+}
+
+function vaultHelperProblems(helper, run = runTool) {
+  const binary = join(helper, 'Contents', 'MacOS', 'VaultHelper')
+  if (!existsSync(binary)) return ['it is missing']
+  const problems = []
+  if (readFileSync(binary).includes(VAULT_TEST_GATE_MARKER)) problems.push('its binary is a test-gate build')
+  const flavor = run('plutil', ['-extract', 'CinnaVaultFlavor', 'raw', join(helper, 'Contents', 'Info.plist')])
+  if (flavor.status !== 0 || flavor.output.trim() !== 'release') {
+    problems.push(`its flavor is ${flavor.status === 0 ? flavor.output.trim() : 'unknown'}, not release`)
+  }
+  if (!existsSync(join(helper, 'Contents', 'embedded.provisionprofile'))) problems.push('it has no embedded provisioning profile')
+  const entitlements = run('codesign', ['-d', '--entitlements', '-', '--xml', helper])
+  if (entitlements.status !== 0 || !entitlements.output.includes(VAULT_HELPER_GROUP)) {
+    problems.push(`its signature does not carry keychain-access-groups ${VAULT_HELPER_GROUP}`)
+  }
+  const verify = run('codesign', ['--verify', '--strict', '--deep', helper])
+  if (verify.status !== 0) problems.push(`its signature does not verify (${verify.output.trim().split('\n')[0]})`)
+  for (const file of ['Image', 'initrd.img']) {
+    if (!existsSync(join(helper, 'Contents', 'Resources', 'guest', file))) problems.push(`guest ${file} is missing`)
+  }
+  return problems
+}
+
+function verifyVaultHelper({ appPath, arch, dirOnly }, run = runTool) {
+  const helper = join(appPath, 'Contents', 'Library', 'Helpers', 'VaultHelper.app')
+  const targetArch = typeof arch === 'number' ? require('builder-util').Arch[arch] : arch
+  if (targetArch === 'x64') {
+    if (existsSync(helper)) {
+      rmSync(helper, { recursive: true, force: true })
+      console.log('Removed the arm64-only vault helper from the x64 package')
+    }
+    return
+  }
+  const problems = vaultHelperProblems(helper, run)
+  if (problems.length === 0) {
+    console.log('Verified vault helper (release flavor, profile, keychain group, guest image)')
+    return
+  }
+  const message = `Agent Vault helper ${helper} cannot ship: ${problems.join('; ')}. Build it with FLAVOR=release sh scripts/vault/build-helper.sh before electron-builder.`
+  if (dirOnly) {
+    console.warn(`WARNING ${message}`)
+    return
+  }
+  throw new Error(message)
+}
+
+// The Agent Vault adapter tars (src/main/vault/adapterTar.ts), written by
+// `electron-vite build` and streamed into a vault from inside app.asar. A move
+// refuses any tar but the pinned one, so a package carrying another (a stale
+// out/, a node_modules changed after the pin) would ship vaults that never
+// move in: fail it here instead. arm64 only, like the helper.
+const ADAPTER_TAR = 'out/vault/claude-adapter.tar'
+const CODEX_ADAPTER_TAR = 'out/vault/codex-adapter.tar'
+
+/** `RUNTIME_PINS.<engine>.vaultAdapterTarSha256`, read from the source the app compiles in. */
+function pinnedAdapterTarSha256(projectDir, engine = 'claude') {
+  const source = readFileSync(join(projectDir, 'src', 'shared', 'runtimePins.ts'), 'utf8')
+  const block = new RegExp(`\\n  ${engine}: \\{[\\s\\S]*?vaultAdapterTarSha256:\\s*'([0-9a-f]{64})'`).exec(source)
+  if (!block) throw new Error(`src/shared/runtimePins.ts pins no ${engine}.vaultAdapterTarSha256`)
+  return block[1]
+}
+
+function readAsarFileFresh(archive, file) {
+  require('@electron/asar/lib/disk').uncacheFilesystem(archive)
+  return require('@electron/asar').extractFile(archive, file)
+}
+
+function verifyVaultAdapterTar(resourcesDir, pin, readAsarFile = readAsarFileFresh, file = ADAPTER_TAR, engine = 'claude') {
+  let data = null
+  try {
+    data = readAsarFile(join(resourcesDir, 'app.asar'), file)
+  } catch {
+    data = null
+  }
+  if (!data) throw new Error(`app.asar holds no ${file}; run electron-vite build before electron-builder.`)
+  const sha256 = createHash('sha256').update(data).digest('hex')
+  if (sha256 !== pin) {
+    throw new Error(`The packaged ${file} hashes to ${sha256}, not the pinned ${pin} (RUNTIME_PINS.${engine}.vaultAdapterTarSha256). Rebuild with electron-vite build; if node_modules changed on purpose, re-pin with npm run vault:pin-adapter.`)
+  }
+  console.log(`Verified vault ${engine} adapter tar (${data.length} bytes, pinned sha256)`)
+}
+
+/** Both adapter tars a vault move streams: Claude's and Codex's. */
+function verifyVaultAdapterTars(resourcesDir, projectDir, readAsarFile = readAsarFileFresh) {
+  verifyVaultAdapterTar(resourcesDir, pinnedAdapterTarSha256(projectDir, 'claude'), readAsarFile, ADAPTER_TAR, 'claude')
+  verifyVaultAdapterTar(resourcesDir, pinnedAdapterTarSha256(projectDir, 'codex'), readAsarFile, CODEX_ADAPTER_TAR, 'codex')
+}
+
 // What app.asar may hold at its top level. `files` in electron-builder.yml is a
 // deny-list over the whole repo, so a local folder nobody excluded is packed and
 // published: 0.11.3's macOS assets carried drafts/, plans/, .claude/ (with an
@@ -218,7 +327,7 @@ function verifyExtraCaPreload(resourcesDir) {
   console.log('Verified unpacked extra-CA preload')
 }
 
-function afterPack({ packager, appOutDir, electronPlatformName, arch }) {
+function afterPack({ packager, appOutDir, electronPlatformName, arch, targets }) {
   // Runs for every target, including cross-builds, before signing/publishing.
   // Fail the build if file filtering or dependency collection lost a package.
   const unpacked = join(packager.getResourcesDir(appOutDir), 'app.asar.unpacked')
@@ -234,10 +343,20 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch }) {
     console.log(`Verified unpacked ${target.name}@${target.version}`)
   }
   if (electronPlatformName === 'darwin') verifySpeechHelper(packager.getResourcesDir(appOutDir))
+  if (electronPlatformName === 'darwin') {
+    const productFilename = packager.appInfo?.productFilename ?? 'app'
+    verifyVaultHelper({
+      appPath: join(appOutDir, `${productFilename}.app`),
+      arch,
+      dirOnly: Array.isArray(targets) && targets.length > 0 && targets.every((target) => target.name === 'dir')
+    })
+    const targetArch = typeof arch === 'number' ? require('builder-util').Arch[arch] : arch
+    if (targetArch === 'arm64') verifyVaultAdapterTars(packager.getResourcesDir(appOutDir), packager.info.projectDir)
+  }
   // electron-builder drops the kit's `.gitkeep` files; see packaged-kit.cjs.
   completePackagedKit(packager.info.projectDir, packager.getResourcesDir(appOutDir))
   verifyExtraCaPreload(packager.getResourcesDir(appOutDir))
   verifyAppContents(packager.getResourcesDir(appOutDir))
 }
 
-module.exports = { verifyAppContents, verifyExtraCaPreload, runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, beforePack, afterPack }
+module.exports = { verifyVaultAdapterTar, verifyVaultAdapterTars, pinnedAdapterTarSha256, verifyAppContents, verifyExtraCaPreload, runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, verifyVaultHelper, vaultHelperProblems, beforePack, afterPack }

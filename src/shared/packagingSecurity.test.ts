@@ -49,6 +49,27 @@ describe('packaged app hardening', () => {
     expect(main).toContain('installExtraCaCertificates()')
   })
 
+  it('ships the vault helper beside the app and never re-signs it, so its keychain group survives (D17)', () => {
+    const yml = readFileSync(join(root, 'electron-builder.yml'), 'utf8')
+    const mac = yml.slice(yml.indexOf('\nmac:\n'))
+    expect(mac).toMatch(/^ {2}extraFiles:\n {4}- from: resources\/vault\/VaultHelper\.app\n {6}to: Library\/Helpers\/VaultHelper\.app$/m)
+    const ignore = mac.match(/^ {2}signIgnore:\n {4}- (.+)$/m)?.[1]
+    expect(ignore).toBeDefined()
+    const re = new RegExp(ignore!)
+    expect(re.test('/x/Cinna Desktop.app/Contents/Library/Helpers/VaultHelper.app')).toBe(true)
+    expect(re.test('/x/Cinna Desktop.app/Contents/Library/Helpers/VaultHelper.app/Contents/MacOS/VaultHelper')).toBe(true)
+    expect(re.test('/x/Cinna Desktop.app/Contents/Resources/speech/cinna-speech')).toBe(false)
+    expect(yml).toContain("- '!resources/vault/**'")
+    const helper = readFileSync(join(root, 'native/vault/helper/VaultHelper.entitlements'), 'utf8')
+    expect(helper).toContain('<string>G5E484HA2U.io.opencinna.desktop.vault-helper</string>')
+    const test = readFileSync(join(root, 'native/vault/helper/VaultHelper.test.entitlements'), 'utf8')
+    expect(test).not.toContain('keychain-access-groups')
+    for (const plist of [helper, test]) {
+      expect(plist).toContain('com.apple.security.virtualization')
+      expect(plist).not.toMatch(/allow-dyld-environment-variables|disable-library-validation|allow-jit|allow-unsigned-executable-memory|get-task-allow/)
+    }
+  })
+
   it('does not let DYLD_* environment variables reach the hardened app', () => {
     const plist = readFileSync(join(root, 'build/entitlements.mac.plist'), 'utf8')
     expect(plist).not.toContain('allow-dyld-environment-variables')

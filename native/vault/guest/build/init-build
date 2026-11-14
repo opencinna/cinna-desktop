@@ -1,0 +1,174 @@
+#!/bin/sh
+# Agent Vault image build: PID 1 of the throwaway NAT build VM (Alpine minirootfs initramfs,
+# started by scripts/vault/build-guest.mjs through vzbuild). Inputs arrive in /inputs inside
+# this initramfs, already sha256-checked on the host. /dev/vda is a scratch disk.
+#
+# Produces, and sends back over vsock 1095 as one tar:
+#   rootfs.img  erofs (lz4hc) of a Debian trixie arm64 minbase root, followed by its dm-verity hash tree
+#   initrd.img  busybox + veritysetup + the few modules the vault boot needs + /init
+#   build.json  rootHash, hashOffset, verity parameters, package list
+# Every line meant for the host starts with "VAULT build"; failure ends in "VAULT build FAILED".
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev
+exec </dev/console >/dev/console 2>&1
+mkdir -p /run /tmp; mount -t tmpfs tmpfs /run; mount -t tmpfs tmpfs /tmp
+
+arg() { tr ' ' '\n' </proc/cmdline | sed -n "s/^$1=//p" | tail -n 1; }
+step() { echo "VAULT build: $* (uptime $(cut -d' ' -f1 /proc/uptime))"; }
+fail() { echo "VAULT build FAILED: $*"; sync; poweroff -f; sleep 10; }
+
+date -s "@$(arg vault.time)" >/dev/null || fail "clock"
+EPOCH=$(arg vault.epoch)
+. /inputs/build.env || fail "build.env"
+# build.env: KVER IMAGE_VERSION DEBIAN_SUITE DEBIAN_MIRROR DEBIAN_INCLUDE NODE_VERSION UV_VERSION
+
+for m in virtio_blk virtio_net virtio_rng vsock vmw_vsock_virtio_transport ext4 erofs dm_mod dm_verity loop; do
+  modprobe "$m" || echo "modprobe $m failed"
+done
+ip link set lo up; ip link set eth0 up
+udhcpc -i eth0 -q -n >/dev/null || fail "dhcp"
+step "network up"
+
+apk update -q || fail "apk update"
+apk add -q e2fsprogs erofs-utils cryptsetup debootstrap gpgv tar xz socat || fail "apk add build tools"
+step "build tools: $(mkfs.erofs --version 2>&1 | head -n 1), $(veritysetup --version)"
+
+mkfs.ext4 -q -F /dev/vda || fail "mkfs scratch"
+mkdir -p /work; mount /dev/vda /work || fail "mount scratch"
+ROOT=/work/root
+OUT=/work/out
+mkdir -p "$ROOT" "$OUT"
+
+# ---------------------------------------------------------------- Debian root
+step "debootstrap $DEBIAN_SUITE minbase"
+debootstrap --arch=arm64 --variant=minbase --include="$DEBIAN_INCLUDE" \
+  --keyring=/inputs/debian-archive-keyring.gpg \
+  "$DEBIAN_SUITE" "$ROOT" "$DEBIAN_MIRROR" >/work/debootstrap.log 2>&1 \
+  || { tail -n 30 /work/debootstrap.log; fail "debootstrap"; }
+chroot "$ROOT" dpkg-query -W -f '${Package} ${Version} ${Architecture}\n' | sort >"$OUT/packages.txt" || fail "package list"
+step "debootstrap done: $(wc -l <"$OUT/packages.txt") packages"
+
+step "node $NODE_VERSION"
+tar -xJf /inputs/node.tar.xz -C "$ROOT/usr/local" --strip-components=1 --no-same-owner || fail "node extract"
+rm -rf "$ROOT/usr/local/include" "$ROOT/usr/local/share/doc" "$ROOT/usr/local/share/man" \
+  "$ROOT/usr/local/CHANGELOG.md" "$ROOT/usr/local/README.md"
+[ "$(chroot "$ROOT" /usr/local/bin/node --version)" = "v$NODE_VERSION" ] || fail "node --version in the root"
+
+step "uv $UV_VERSION"
+mkdir -p /tmp/uv && tar -xzf /inputs/uv.tar.gz -C /tmp/uv --strip-components=1 --no-same-owner || fail "uv extract"
+install -m 0755 /tmp/uv/uv /tmp/uv/uvx "$ROOT/usr/local/bin/" || fail "uv install"
+chroot "$ROOT" /usr/local/bin/uv --version | grep -q "^uv $UV_VERSION" || fail "uv --version in the root"
+
+step "cinna files"
+install -d -m 0755 "$ROOT/usr/lib/cinna" "$ROOT/etc/cinna" "$ROOT/etc/profile.d" "$ROOT/vault"
+install -m 0644 /inputs/vaultd.js "$ROOT/usr/lib/cinna/vaultd.mjs" || fail "vaultd.mjs"
+install -m 0644 /inputs/boot.js "$ROOT/usr/lib/cinna/boot.js" || fail "boot.js"
+install -m 0755 /inputs/vault-init "$ROOT/sbin/vault-init" || fail "vault-init"
+install -m 0644 /inputs/image.json "$ROOT/etc/cinna/image.json" || fail "image.json"
+# No DNS in the vault: names resolve only through the proxy (CONNECT carries the host name).
+rm -f "$ROOT/etc/resolv.conf"; echo "nameserver 127.0.0.1" >"$ROOT/etc/resolv.conf"
+cat >"$ROOT/etc/environment" <<'EOF'
+HTTPS_PROXY=http://127.0.0.1:3128
+HTTP_PROXY=http://127.0.0.1:3128
+https_proxy=http://127.0.0.1:3128
+http_proxy=http://127.0.0.1:3128
+NO_PROXY=localhost,127.0.0.1
+no_proxy=localhost,127.0.0.1
+EOF
+cat >"$ROOT/etc/profile.d/cinna-proxy.sh" <<'EOF'
+# Agent Vault: the guest has no network of its own; everything goes through the helper's proxy.
+export HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://127.0.0.1:3128 NO_PROXY=localhost,127.0.0.1
+export https_proxy=$HTTPS_PROXY http_proxy=$HTTP_PROXY no_proxy=$NO_PROXY
+EOF
+# D36: children of vaultd run unprivileged. agent (1000) runs engines and the terminal, build (1001)
+# the install and check presets; both have primary group vault (1000). Group build (1001) owns the
+# uv cache and the Python installs, so agent can read but not change them.
+chroot "$ROOT" groupadd -g 1000 vault || fail "groupadd vault"
+chroot "$ROOT" groupadd -g 1001 build || fail "groupadd build"
+chroot "$ROOT" useradd -u 1000 -g vault -M -d /vault/home -s /bin/bash agent || fail "useradd agent"
+chroot "$ROOT" useradd -u 1001 -g vault -G build -M -d /vault/cache/build-home -s /usr/sbin/nologin build || fail "useradd build"
+[ "$(chroot "$ROOT" id -u agent):$(chroot "$ROOT" id -g agent)" = "1000:1000" ] || fail "agent ids"
+[ "$(chroot "$ROOT" id -u build):$(chroot "$ROOT" id -g build)" = "1001:1000" ] || fail "build ids"
+step "users: $(chroot "$ROOT" id agent); $(chroot "$ROOT" id build)"
+echo vault >"$ROOT/etc/hostname"
+printf '127.0.0.1\tlocalhost vault\n::1\tlocalhost\n' >"$ROOT/etc/hosts"
+: >"$ROOT/etc/machine-id"
+mkdir -p "$ROOT/usr/lib/modules"
+cp -a "/lib/modules/$KVER" "$ROOT/usr/lib/modules/" || fail "modules into root"
+
+step "trim"
+rm -rf "$ROOT"/var/cache/apt/* "$ROOT"/var/lib/apt/lists/* "$ROOT"/var/cache/debconf/*-old \
+  "$ROOT"/usr/share/doc/* "$ROOT"/usr/share/man/* "$ROOT"/usr/share/info/* "$ROOT"/usr/share/locale/* \
+  "$ROOT"/usr/share/lintian "$ROOT"/var/log/* "$ROOT"/tmp/* "$ROOT"/var/tmp/* "$ROOT"/root/.cache
+find "$ROOT" -name '__pycache__' -prune -exec rm -rf {} +
+# debootstrap mounts proc/sys in the target; nothing may stay mounted under it.
+awk -v r="$ROOT/" 'index($2, r) == 1 { print $2 }' /proc/mounts | sort -r | while read -r m; do umount "$m"; done
+! awk -v r="$ROOT/" 'index($2, r) == 1' /proc/mounts | grep -q . || fail "mounts left under the root"
+# No setuid/setgid binary may undo the uid switch (D36): vaultd runs as root and needs none.
+find "$ROOT" -xdev -type f \( -perm -4000 -o -perm -2000 \) | sed "s|^$ROOT||" | sort >/work/setuid.txt
+step "setuid/setgid bits removed: $(tr '\n' ' ' </work/setuid.txt)"
+find "$ROOT" -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod ug-s {} + || fail "chmod ug-s"
+[ -z "$(find "$ROOT" -xdev -type f \( -perm -4000 -o -perm -2000 \))" ] || fail "setuid files left"
+step "root: $(du -sh "$ROOT" | cut -f1)"
+
+# ---------------------------------------------------------------- erofs + dm-verity
+step "erofs"
+# -x-1: no xattrs in the image, so no file capability (security.capability) survives either.
+mkfs.erofs -zlz4hc -x-1 -T"$EPOCH" "$OUT/rootfs.img" "$ROOT" >/work/erofs.log 2>&1 || { tail -n 20 /work/erofs.log; fail "mkfs.erofs"; }
+DATA_BYTES=$(stat -c %s "$OUT/rootfs.img")
+HASH_OFFSET=$(( (DATA_BYTES + 4095) / 4096 * 4096 ))
+truncate -s "$HASH_OFFSET" "$OUT/rootfs.img"
+DATA_BLOCKS=$((HASH_OFFSET / 4096))
+step "verity over $DATA_BLOCKS blocks"
+veritysetup format "$OUT/rootfs.img" "$OUT/rootfs.img" --hash-offset="$HASH_OFFSET" --data-blocks="$DATA_BLOCKS" \
+  --data-block-size=4096 --hash-block-size=4096 --hash=sha256 >/work/verity.txt || fail "veritysetup format"
+ROOT_HASH=$(sed -n 's/^Root hash:[[:space:]]*//p' /work/verity.txt)
+SALT=$(sed -n 's/^Salt:[[:space:]]*//p' /work/verity.txt)
+[ ${#ROOT_HASH} -eq 64 ] || { cat /work/verity.txt; fail "no root hash"; }
+veritysetup verify "$OUT/rootfs.img" "$OUT/rootfs.img" "$ROOT_HASH" --hash-offset="$HASH_OFFSET" || fail "veritysetup verify"
+# Same path the vault boot takes: open, mount, check the entry point.
+LOOP=$(losetup -f) && losetup -r "$LOOP" "$OUT/rootfs.img" || fail "losetup"
+veritysetup open "$LOOP" vcheck "$LOOP" "$ROOT_HASH" --hash-offset="$HASH_OFFSET" || fail "veritysetup open"
+mkdir -p /mnt/vcheck; mount -t erofs -o ro /dev/mapper/vcheck /mnt/vcheck || fail "mount erofs"
+[ -x /mnt/vcheck/sbin/vault-init ] && [ -f /mnt/vcheck/usr/lib/cinna/vaultd.mjs ] || fail "rootfs check"
+umount /mnt/vcheck; veritysetup close vcheck; losetup -d "$LOOP"
+step "rootfs.img $(stat -c %s "$OUT/rootfs.img") bytes, root hash $ROOT_HASH"
+
+# ---------------------------------------------------------------- initrd
+step "initrd"
+IR=/work/initrd
+mkdir -p "$IR/etc/apk"
+apk add -q --root "$IR" --initdb --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories --no-cache \
+  busybox cryptsetup || fail "initrd apk"
+chroot "$IR" /bin/busybox --install -s || fail "busybox --install"
+[ -x "$IR/sbin/veritysetup" ] || [ -x "$IR/usr/sbin/veritysetup" ] || fail "initrd has no veritysetup"
+# Modules the boot needs, with their dependencies from modules.dep (already transitive).
+WANT=" virtio_blk virtio_rng vsock vmw_vsock_virtio_transport vmw_vsock_virtio_transport_common dm_mod dm_bufio dm_verity dm_crypt erofs ext4 "
+KM="/lib/modules/$KVER"
+awk -v want="$WANT" -F': *' '
+  { n = $1; sub(/.*\//, "", n); sub(/\.ko.*$/, "", n); gsub(/-/, "_", n)
+    if (index(want, " " n " ")) { print $1; m = split($2, d, " "); for (i = 1; i <= m; i++) print d[i] } }
+' "$KM/modules.dep" | sort -u >/work/initrd-modules.txt
+for w in $WANT; do
+  grep -q "/$(echo "$w" | sed 's/_/[-_]/g')\.ko" /work/initrd-modules.txt || grep -q "/$w.ko" "$KM/modules.builtin" || fail "module $w not found"
+done
+while read -r f; do
+  mkdir -p "$IR$KM/$(dirname "$f")"; cp "$KM/$f" "$IR$KM/$f" || fail "copy $f"
+done </work/initrd-modules.txt
+cp "$KM"/modules.* "$IR$KM/"
+install -m 0755 /inputs/initrd-init "$IR/init" || fail "initrd init"
+rm -rf "$IR/etc/apk" "$IR/lib/apk" "$IR/var/cache" "$IR/usr/share"
+mkdir -p "$IR/newroot" "$IR/proc" "$IR/sys" "$IR/dev" "$IR/run" "$IR/tmp"
+find "$IR" -exec touch -h -d "@$EPOCH" {} + 2>/dev/null
+( cd "$IR" && find . | sort | cpio -o -H newc 2>/dev/null | gzip -9 -n ) >"$OUT/initrd.img" || fail "cpio"
+step "initrd.img $(stat -c %s "$OUT/initrd.img") bytes, $(wc -l </work/initrd-modules.txt) modules"
+
+cat >"$OUT/build.json" <<EOF
+{"rootHash":"$ROOT_HASH","hashOffset":$HASH_OFFSET,"dataBlocks":$DATA_BLOCKS,"dataBlockSize":4096,"hashBlockSize":4096,"hashAlgorithm":"sha256","salt":"$SALT","kernelRelease":"$KVER","erofs":"$(mkfs.erofs --version 2>&1 | head -n 1)","cryptsetup":"$(veritysetup --version)"}
+EOF
+
+step "sending artifacts"
+( cd "$OUT" && tar -cf - build.json packages.txt rootfs.img initrd.img ) | socat -u -t 60 STDIN VSOCK-CONNECT:2:1095 || fail "send artifacts"
+umount /work; sync
+step DONE
+poweroff -f
