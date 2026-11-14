@@ -853,6 +853,8 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
   const messages = (vaultLocked ? [] : chatData?.messages ?? []).filter((message) =>
     !baselineIds || message.role === 'user' || message.role === 'system' || baselineIds.has(message.id))
   const hasStreamingContent = streamingBlocks.length > 0
+  // Nothing to show but the locked card (the transcript is inside the vault).
+  const lockedEmpty = vaultLocked && messages.length === 0 && !isStreaming && !hasStreamingContent
   const queuedView = useQueuedMessages(
     chatId,
     messages.filter((message) => message.role === 'user').map((message) => message.content),
@@ -1057,10 +1059,16 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
         maskImage: 'linear-gradient(to bottom, transparent 0, black var(--transcript-fade))'
       }}
     >
-      <div data-sidebar-band-limit ref={contentRef} className="max-w-3xl mx-auto space-y-3">
+      <div
+        data-sidebar-band-limit
+        ref={contentRef}
+        // The locked card alone: the column takes the visible height (between the
+        // top bar and the composer, the scroller's padding) and centres it.
+        className={`max-w-3xl mx-auto space-y-3 ${lockedEmpty ? 'min-h-full flex flex-col justify-center' : ''}`}
+      >
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
           // Locked, the transcript is not on this Mac: "Start a conversation" would say the chat is empty.
-          vaultLocked && chatData?.agentId ? (
+          lockedEmpty && chatData?.agentId ? (
             <LockedVaultChatCard agentId={chatData.agentId} />
           ) : (
             <div className="text-center text-[var(--color-text-muted)] py-16">
@@ -2018,7 +2026,7 @@ function LiveUserBubble({ content, animate }: { content: string; animate: boolea
 function LockedVaultChatCard({ agentId }: { agentId: string }): React.JSX.Element {
   const unlock = useVaultUnlock()
   return (
-    <div className="py-16">
+    <div>
       <div
         data-testid="vault-locked-chat"
         className="mx-auto flex max-w-sm flex-col items-center gap-2 rounded-xl border border-[var(--color-border)]
