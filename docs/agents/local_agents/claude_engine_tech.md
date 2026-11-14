@@ -255,7 +255,7 @@ A list-time check answers from the binary service's memoised `peek` and the prob
 
 ## Renderer Components
 
-The full runtime form and Permissions tab live in agent **Settings**. Chat mode uses `RuntimePanel compact`; its “with subscription” suffix requires `logged_in` plus `authMethod === claude.ai` or a nonempty subscription type. Unknown authentication remains unqualified. The compact model badge derives from complexity; it does not render a manually declared model override.
+The full runtime form and Security tab's Permissions section live in agent **Settings**. Chat mode uses `RuntimePanel compact`; its “with subscription” suffix requires `logged_in` plus `authMethod === claude.ai` or a nonempty subscription type. Unknown authentication remains unqualified. The compact model badge derives from complexity; it does not render a manually declared model override.
 
 | Component / helper | Renders / manages |
 |---|---|

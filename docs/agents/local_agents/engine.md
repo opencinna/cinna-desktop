@@ -498,7 +498,7 @@ The whole profile, each entry with the failure it exists for, plus the matcher r
 
 Answering these prompts belongs to [the turn](agent_turn.md); a user's *Always allow* is recorded per agent in that folder's `app-data/desktop.json` and never sent to the engine.
 
-**A manifest's `runtime.permissions` is merged shallowly, one permission name at a time** — replacing a whole entry rather than deep-merging its pattern map, so an override reads as an override instead of quietly widening `bash` from underneath. Its justification is that the folder is the user's own, so this is a legibility boundary rather than a trust one. Where a manifest does override something, the agent page's Permissions tab names which permissions were replaced, because the fixed description it shows above the list is no longer the whole truth.
+**A manifest's `runtime.permissions` is merged shallowly, one permission name at a time** — replacing a whole entry rather than deep-merging its pattern map, so an override reads as an override instead of quietly widening `bash` from underneath. Its justification is that the folder is the user's own, so this is a legibility boundary rather than a trust one. Where a manifest does override something, the agent page's Security tab's Permissions section names which permissions were replaced, because the fixed description it shows above the list is no longer the whole truth.
 
 > **Flagged for Phase 9.** That justification stops being true the moment a folder is installed from the cloud into a shell-capable engine. A manifest can replace `bash` and the `'*': 'ask'` catch-all outright. Revisit before cloud install lands.
 

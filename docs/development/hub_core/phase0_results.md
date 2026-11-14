@@ -87,7 +87,7 @@ push is implemented in Phases 0/1.
 
 The first full offline E2E run exposed two stale test assumptions. Both failures
 were reproduced in an untouched `1c54126` checkout before changing the tests:
-OpenCode's Permissions tab now includes delegation controls, and Inbox reads
+OpenCode's Security tab (Permissions section) now includes delegation controls, and Inbox reads
 task detail to discover structured delegation asks. The corrected tests explicitly
 select OpenCode and distinguish task-list titles from detail-response titles,
 preserving the behavior each scenario is intended to verify.
