@@ -2477,8 +2477,16 @@ function vaultAgentDto(row: AgentRow, ref: { vaultId: string; engine: LocalAgent
     desktop: desktopStateService.summarize(emptyDesktopState()),
     stamps: {},
     scannedAt: Date.now(),
-    vault: { vaultId: ref.vaultId, engine: ref.engine, state: vaultService.stateOf(ref.vaultId), hostCopy: hasHostCopy(row) }
+    vault: { vaultId: ref.vaultId, engine: ref.engine, state: vaultService.stateOf(ref.vaultId), ...vaultDisplayLaunch(row), hostCopy: hasHostCopy(row) }
   }
+}
+
+/** The row's display copies of what a vault agent runs on inside (`cinna.launch` decides, D34). */
+function vaultDisplayLaunch(row: AgentRow): { model: string | null; provider: 'openai' | 'anthropic' | null } {
+  const raw = (row.driverConfig?.['vault'] ?? {}) as Record<string, unknown>
+  const model = typeof raw['model'] === 'string' && raw['model'] ? raw['model'] : null
+  const provider = raw['provider'] === 'openai' || raw['provider'] === 'anthropic' ? raw['provider'] : null
+  return { model, provider }
 }
 
 type LocalAgentVaultEngine = NonNullable<LocalAgentDto['vault']>['engine']

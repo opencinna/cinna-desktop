@@ -157,6 +157,15 @@ describe('AgentVaultSection — on', () => {
     expect(screen.getByRole('button', { name: /Delete vault/ })).toBeTruthy()
   })
 
+  it('lists the network hosts by name, and has no Engine row (the agent page’s Runs on is the engine’s one surface)', async () => {
+    renderSection(inVault())
+    const value = await screen.findByText(/^\d+ hosts?: /)
+    expect(value.textContent).toContain('api.anthropic.com')
+    expect(value.textContent).not.toContain('·')
+    expect(screen.queryByText('Engine')).toBeNull()
+    expect(screen.queryByText(/Change it on the agent’s settings page/)).toBeNull()
+  })
+
   it('follows a state push to unlocked with the countdown and Lock now, in the same row', async () => {
     renderSection(inVault())
     const button = await screen.findByRole('button', { name: /^Unlock$/ })

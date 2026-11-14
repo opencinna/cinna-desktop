@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Download, File, Folder, FolderOutput, Loader2, Lock, LockOpen, Plus, SquareTerminal, Trash2 } from 'lucide-react'
 import type { LocalAgentDto } from '../../../../../../shared/localAgents'
 import type { LocalAgentVaultInfo, VaultEngine, VaultStatusDto } from '../../../../../../shared/vault/types'
-import { VAULT_ENGINE_HOSTS, VAULT_ENGINE_LOGIN } from '../../../../../../shared/vault/protocol'
+import { VAULT_ENGINE_HOSTS, VAULT_ENGINE_LOGIN, VAULT_ENGINES } from '../../../../../../shared/vault/protocol'
 import {
   onVaultMoveProgress,
   useVaultDeleteHostCopy,
   useVaultDeleteSecret,
   useVaultDestroy,
   useVaultEngineAuth,
+  useVaultEngines,
   useVaultExportFile,
   useVaultFiles,
   useVaultHostCopy,
@@ -45,6 +46,8 @@ import { GB, STATE_LABEL, formatBytes, isHostPattern, isSecretName, lockAfterLab
 
 const APPROVAL = 'Waiting for approval…'
 const ENGINE_NAME = VAULT_ENGINE_NAME
+/** Engines by their short names, where several are listed in one line. */
+const ENGINE_SHORT: Record<VaultEngine, string> = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', antigravity: 'Antigravity' }
 /** The API key secret each engine reads inside the vault; null where none is offered yet. */
 /**
  * The secret each engine signs in with inside a vault. OpenCode's is its model
@@ -124,7 +127,7 @@ export function VaultOnPanel({
       <SettingsRows>
         <LockAfterRow agentId={agent.id} status={status} forms={forms} />
         <DiskSizeRow agentId={agent.id} status={status} forms={forms} />
-        <NetworkRow agentId={agent.id} engine={vault.engine} status={status} forms={forms} />
+        <NetworkRow agentId={agent.id} engine={vault.engine} open={open} status={status} forms={forms} />
         <EngineLoginRow agentId={agent.id} engine={vault.engine} open={open} forms={forms} />
         <SecretsRow agentId={agent.id} engine={vault.engine} open={open} forms={forms} />
         <ToolchainRow agentId={agent.id} open={open} />
@@ -497,16 +500,21 @@ function DiskSizeRow({ agentId, status, forms }: { agentId: string; status: Vaul
 function NetworkRow({
   agentId,
   engine,
+  open,
   status,
   forms
 }: {
   agentId: string
   engine: VaultEngine
+  open: boolean
   status: VaultStatusDto | null
   forms: FormSlot
 }): React.JSX.Element {
   const setEgress = useVaultSetEgress()
-  const defaults = VAULT_ENGINE_HOSTS[engine]
+  // Every engine set up in the vault keeps its hosts; locked (not known which), the one it runs on.
+  const choices = useVaultEngines(agentId, open).data
+  const setUp = VAULT_ENGINES.filter((each) => each === engine || (open && choices?.some((choice) => choice.engine === each && choice.setUp)))
+  const defaults = [...new Set(setUp.flatMap((each) => VAULT_ENGINE_HOSTS[each]))]
   const hosts = status?.egress.hosts ?? []
   const extra = hosts.filter((host) => !defaults.includes(host))
   const editing = forms.active === 'network'
@@ -532,7 +540,7 @@ function NetworkRow({
       label="Network access"
       info={
         <p>
-          The vault reaches only these hosts, through the vault helper. {ENGINE_NAME[engine]} needs its own,
+          The vault reaches only these hosts, through the vault helper. Each engine set up in it needs its own,
           which are always allowed. Changing the list asks for your approval. Dependency installs open the
           package hosts for that install only.
         </p>
@@ -555,14 +563,17 @@ function NetworkRow({
     >
       <AnimatedCollapse open={editing}>
         <div className="mt-3 space-y-2">
-          <p className="text-[13px] text-[var(--color-text-muted)]">
-            Always allowed for {ENGINE_NAME[engine]}:{' '}
-            {defaults.map((host) => (
-              <code key={host} className="mr-1 rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]">
-                {host}
-              </code>
-            ))}
-          </p>
+          {/* Always allowed: each set-up engine's own hosts, by engine. */}
+          {setUp.map((each) => (
+            <p key={each} className="text-[13px] text-[var(--color-text-muted)]">
+              {ENGINE_SHORT[each]}:{' '}
+              {VAULT_ENGINE_HOSTS[each].map((host) => (
+                <code key={host} className="mr-1 rounded bg-[var(--color-bg-tertiary)] px-1.5 py-px font-mono text-[12px] text-[var(--color-text-secondary)]">
+                  {host}
+                </code>
+              ))}
+            </p>
+          ))}
           <textarea
             aria-label="Other allowed hosts, one per line"
             placeholder="api.example.com"

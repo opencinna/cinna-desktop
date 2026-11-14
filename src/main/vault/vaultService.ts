@@ -39,6 +39,7 @@ import {
   type VaultAvailabilityDto,
   type VaultChatFilesSweptEvent,
   type VaultEngineAuthDto,
+  type VaultEngineChoiceDto,
   type VaultFileEntryDto,
   type VaultRuntimeDto,
   type VaultSecretListDto,
@@ -73,6 +74,22 @@ export class VaultError extends Error {
 export async function refuseBadLogin(name: string, value: string): Promise<void> {
   const problem = await vaultLoginProblem(name, value)
   if (problem) throw new VaultError('invalid', problem)
+}
+
+/**
+ * Store a pasted engine login under `name` (the name it belongs in for
+ * `engine`, `vaultEngineLoginSecret`), and remove the engine's other login
+ * names: an engine that signs in with one of several (Claude: an API key or a
+ * `claude setup-token` token) keeps one, since an API key wins over a token.
+ */
+export async function putEngineLogin(client: Pick<VaultdClient, 'request'>, engine: VaultEngine, name: string, value: string): Promise<void> {
+  await client.request('secrets.put', { name, value })
+  try {
+    for (const other of VAULT_ENGINE_LOGIN[engine]?.names ?? []) if (other !== name) await client.request('secrets.delete', { name: other })
+  } catch {
+    // An API key wins over a token, so a leftover one would hide what was just saved.
+    throw new VaultError('internal', 'Saved, but the previous login could not be removed. Save it again.')
+  }
 }
 
 /** `driverConfig.vault` of a vault agent's row. */
@@ -230,7 +247,8 @@ function toStatus(row: AgentRow, ref: VaultRef): VaultStatusDto {
     agentId: row.id,
     vaultId: ref.vaultId,
     agentName: summary?.agentName ?? row.name,
-    engine: summary?.engine ?? ref.engine,
+    // The row says what it runs on now; the helper's copy is what it was created with.
+    engine: ref.engine,
     state: summary?.state ?? 'locked',
     until: summary?.state === 'unlocked' ? summary.until ?? null : null,
     lockAfterMs: summary?.lockAfterMs ?? VAULT_DEFAULT_LOCK_AFTER_MS,
@@ -494,13 +512,22 @@ export const vaultService = {
 
   async setEgress(userId: string, agentId: string, hosts: unknown): Promise<VaultStatusDto> {
     const { row, ref } = refFor(userId, agentId)
-    const policy = normalizeEgress(hosts)
-    // The canonical detail: the helper binds the token to exactly this policy.
-    const token = await vaultBackend().approve(ref.vaultId, 'egress', approvalDetail({ method: 'vault.setEgress', policy }))
-    await vaultBackend().setEgress(ref.vaultId, policy, token)
-    const known = summaries.get(ref.vaultId)
-    if (known) summaries.set(ref.vaultId, { ...known, egress: policy })
+    await this.applyEgress(ref.vaultId, normalizeEgress(hosts))
     return toStatus(row, ref)
+  },
+
+  /** Ask the helper for an `egress` approval of exactly `policy`, set it, and remember it. */
+  async applyEgress(vaultId: string, policy: EgressPolicy): Promise<void> {
+    // The canonical detail: the helper binds the token to exactly this policy.
+    const token = await vaultBackend().approve(vaultId, 'egress', approvalDetail({ method: 'vault.setEgress', policy }))
+    await vaultBackend().setEgress(vaultId, policy, token)
+    const known = summaries.get(vaultId)
+    if (known) summaries.set(vaultId, { ...known, egress: policy })
+  },
+
+  /** The vault's agent may have changed how it runs (its engine): readiness asks again. */
+  readinessChanged(vaultId: string): void {
+    refreshReadiness(vaultId)
   },
 
   /**
@@ -654,17 +681,14 @@ export const vaultService = {
     const logins = VAULT_ENGINE_LOGIN[ref.engine]?.names ?? []
     if (logins.includes(name)) {
       // An engine login of several names (Claude: an API key or a `claude
-      // setup-token` token, told apart by prefix); the vault keeps one, since
-      // an API key wins over a token.
+      // setup-token` token, told apart by prefix); the vault keeps one.
       const login = vaultEngineLoginSecret(ref.engine, null, value) ?? name
       await refuseBadLogin(login, value)
-      await client.request('secrets.put', { name: login, value })
       try {
-        for (const other of logins) if (other !== login) await client.request('secrets.delete', { name: other })
-      } catch {
-        // An API key wins over a token, so a leftover one would hide what was just saved.
-        refreshReadiness(ref.vaultId)
-        throw new VaultError('internal', 'Saved, but the previous login could not be removed. Save it again.')
+        await putEngineLogin(client, ref.engine, login, value)
+      } catch (error) {
+        if (error instanceof VaultError) refreshReadiness(ref.vaultId)
+        throw error
       }
     } else {
       await refuseBadLogin(name, value)
@@ -690,15 +714,28 @@ export const vaultService = {
     return { loggedIn: auth.loggedIn, method: auth.method ?? null, keyName: auth.keyName ?? null }
   },
 
-  /** The runtimes installed in the vault, each with the version this app would install. */
+  /** The runtimes installed in the vault, each with the version this app would install of its engine. */
   async runtimes(userId: string, agentId: string): Promise<VaultRuntimeDto[]> {
     const { ref } = refFor(userId, agentId)
     const { runtimes } = await (await this.client(ref.vaultId)).request('runtime.status', {})
-    const pinned = pinnedVaultVersions(ref.engine)
-    return runtimes.map((r) => ({
-      engine: r.engine, version: r.version, kind: r.kind,
-      pinned: r.engine !== ref.engine || !pinned ? null : r.kind === 'adapter' ? pinned.adapter : pinned.executable
-    }))
+    return runtimes.map((r) => {
+      const pinned = pinnedVaultVersions(r.engine)
+      return {
+        engine: r.engine, version: r.version, kind: r.kind,
+        pinned: !pinned ? null : r.kind === 'adapter' ? pinned.adapter : pinned.executable
+      }
+    })
+  },
+
+  /**
+   * Every engine a vault agent can run on, each set up or not: set up when
+   * its pinned runtime (and adapter) is installed in the vault. Derived from
+   * `runtime.status` on every call, never stored; needs the vault unlocked.
+   */
+  async engines(userId: string, agentId: string): Promise<VaultEngineChoiceDto[]> {
+    const { ref } = refFor(userId, agentId)
+    const { runtimes } = await (await this.client(ref.vaultId)).request('runtime.status', {})
+    return (await import('./moveService')).vaultEngineChoices(runtimes)
   },
 
   async listFiles(userId: string, agentId: string, path: unknown): Promise<VaultFileEntryDto[]> {

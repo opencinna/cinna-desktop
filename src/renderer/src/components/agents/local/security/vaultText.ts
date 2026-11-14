@@ -92,6 +92,18 @@ export function isSecretName(text: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(text)
 }
 
+/**
+ * An engine as the vault's engine picker names it: the runtime choice's own
+ * words, as a local agent's Runs on select says them ("Claude Agent", not the
+ * CLI's product name).
+ */
+export const VAULT_ENGINE_CHOICE_NAME: Record<VaultEngine, string> = {
+  claude: 'Claude Agent',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  antigravity: 'Antigravity'
+}
+
 /** An engine as the vault UI names it. */
 export const VAULT_ENGINE_NAME: Record<VaultEngine, string> = {
   claude: 'Claude Code',

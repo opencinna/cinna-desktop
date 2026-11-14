@@ -476,9 +476,6 @@ async function codexAdapterArtifact(): Promise<RuntimeArtifact> {
   }
 }
 
-/** The fake backend's "guest" runs this computer's Claude: labelled so it never passes for the Linux pin. */
-const HOST_CLAUDE_VERSION = `${RUNTIME_PINS.claude.cli}-host`
-
 /** Every row an engine's real runtimes install, with the hash each must have ({@link RuntimeSource.pins}). */
 export function pinnedVaultRuntimes(engine: VaultEngine): RuntimePin[] {
   switch (engine) {
@@ -545,32 +542,38 @@ export function defaultRuntimeSource(): RuntimeSource {
 }
 
 /**
- * The fake backend's source (its "guest" is this computer): the `claude` this
- * app resolved for itself (`resolveClaude`, which never downloads when the
- * download is switched off, as in E2E) and the same adapter. No network, and
- * no pin to compare with: the guest's hash must equal what main streamed.
+ * The fake backend's source (its "guest" is this computer): the `claude` and
+ * `codex` this app resolved for itself (`resolveClaude`, `resolveCodex`, which
+ * never download when the download is switched off, as in E2E) and the
+ * adapters this build carries. No network, and no pin to compare the
+ * executables with: the guest's hash must equal what main streamed. OpenCode
+ * and Antigravity ship Linux builds only for vaults, so they are not offered.
  */
-export function hostRuntimeSource(resolveClaude: () => Promise<string>): RuntimeSource {
+export function hostRuntimeSource(resolveClaude: () => Promise<string>, resolveCodex?: () => Promise<string>): RuntimeSource {
+  /** The engines this computer runs for the fake: how to find its executable, what to call it, and its adapter. */
+  const hosts: Partial<Record<VaultEngine, { resolve: () => Promise<string>; label: string; adapter: () => Promise<RuntimeArtifact> }>> = {
+    claude: { resolve: resolveClaude, label: 'Claude Code', adapter: hostAdapterArtifact },
+    ...(resolveCodex ? { codex: { resolve: resolveCodex, label: 'Codex', adapter: codexAdapterArtifact } } : {})
+  }
+  const version = (engine: VaultEngine): string => `${RUNTIME_PINS[engine].cli}-host`
   return {
-    // Claude only, as `artifacts` below: this computer's executable (nothing pins it) and the pinned adapter.
-    pins: (engine) => ({ claude: [
-      { engine: 'claude', kind: 'executable', version: HOST_CLAUDE_VERSION, sha256: null },
-      ...pinnedVaultRuntimes('claude').filter((pin) => pin.kind === 'adapter')
-    ] } as Partial<Record<VaultEngine, RuntimePin[]>>)[engine] ?? [],
+    // As `artifacts` below: this computer's executable (nothing pins it) and the pinned adapter.
+    pins: (engine) => hosts[engine]
+      ? [{ engine, kind: 'executable', version: version(engine), sha256: null }, ...pinnedVaultRuntimes(engine).filter((pin) => pin.kind === 'adapter')]
+      : [],
     async artifacts(engine) {
-      // Codex, OpenCode and Antigravity ship Linux builds only for vaults; the fake's "guest" is this Mac.
-      if (engine !== 'claude') throw new VaultRuntimeError(`The test backend runs agents in a vault on Claude only, not ${engine}.`)
-      const adapter = await hostAdapterArtifact()
+      const host = hosts[engine]
+      // The others ship Linux builds only for vaults; the fake's "guest" is this Mac.
+      if (!host) throw new VaultRuntimeError(`The test backend runs agents in a vault on Claude or Codex only, not ${engine}.`)
+      // The adapter first: a build that wrote none is the likelier problem, and its words name the fix.
+      const adapter = await host.adapter()
       let executable: string
       try {
-        executable = await resolveClaude()
+        executable = await host.resolve()
       } catch (error) {
-        throw new VaultRuntimeError(`Claude Code is not available on this computer: ${error instanceof Error ? error.message : String(error)}`)
+        throw new VaultRuntimeError(`${host.label} is not available on this computer: ${error instanceof Error ? error.message : String(error)}`)
       }
-      return [
-        { engine: 'claude', version: HOST_CLAUDE_VERSION, kind: 'executable', name: 'claude', open: () => readFileChunks(executable), expectedSha256: null },
-        adapter
-      ]
+      return [{ engine, version: version(engine), kind: 'executable', name: engine, open: () => readFileChunks(executable), expectedSha256: null }, adapter]
     }
   }
 }

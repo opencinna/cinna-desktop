@@ -265,8 +265,6 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
     why: 'A kit agent moves in sealed with the prompt the host assembled; a bare one runs native inside the vault.' },
   { file: 'src/main/vault/moveService.ts', category: 'source', count: 1,
     why: 'Only a folder agent can move into a vault; vault and other rows are refused by their source.' },
-  { file: 'src/main/vault/runtimeInstall.ts', category: 'engine', count: 1,
-    why: 'D28: the fake backend\'s host source runs Claude only (the per-engine sources and pins are switches and lookups).' },
   { file: 'src/main/db/agents.ts', category: 'source', count: 2,
     why: 'External runtime edits may update only a locally owned row; sync and folder ownership remain immutable. Only a folder row may become a vault row (`markVault`, Agent Vault).' },
   { file: 'src/main/tasks/jobDefinitionPolicy.ts', category: 'jobType', count: 2, why: 'selects the stored definition policy and its owning executor' },

@@ -16,6 +16,7 @@ import { bareInstructionsFileList } from '../../../../../shared/localAgents'
 import { describedAs } from '../../../utils/localAgents'
 import { ChatWorkspace } from '../../layout/ChatWorkspace'
 import { RuntimePanel } from './RuntimePanel'
+import { VaultEnginePanel } from './security/VaultEnginePanel'
 import { AgentsEmptyPane } from './AgentsEmptyPane'
 import { ReadinessStrip } from './ReadinessStrip'
 import { OpenInMenu } from './OpenInMenu'
@@ -448,6 +449,8 @@ export function LocalAgentPage(): React.JSX.Element {
         {/* A vault agent's runtime is the vault's engine, and its manifest is inside the
             vault: the panel could only say it cannot read cinna-agent.json. */}
         {mode === 'settings' && !inVault && <RuntimePanel agent={agent} />}
+        {/* Its engine, in the same slot: the vault's own engines, each set up on first choice. */}
+        {mode === 'settings' && inVault && <VaultEnginePanel agent={agent} />}
 
         <div hidden={mode === 'settings'} className={mode === 'settings' ? undefined : 'flex flex-1 flex-col'}>
           {/*

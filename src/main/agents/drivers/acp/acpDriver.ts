@@ -171,6 +171,9 @@ export const ACP_VAULT_LOCKED = 'This agent is in a vault that is locked. Unlock
 /** Shown when the folder moved while a turn planned in it waited for the lock. */
 export const ACP_FOLDER_MOVED = 'This agent’s folder was renamed while the turn was starting. Send the message again.'
 
+/** Shown when a vault agent's engine was switched while a turn planned on the old one waited for the lock. */
+export const ACP_VAULT_ENGINE_CHANGED = 'This agent’s engine changed while the message was being sent. Send it again.'
+
 export interface ConductorOutcome { control?: import('../../../services/coordinatorToolProvider').CoordinatorControl; budget?: boolean; needsInput?: boolean }
 
 export interface AcpDriverDeps {
@@ -214,6 +217,12 @@ export interface AcpDriverDeps {
    * is gone. Absent: the planned path is trusted, as before folders could move.
    */
   currentFolderPath?(userId: string, agent: AgentRow): string | null | undefined
+  /**
+   * The engine a vault agent runs on **now**: its row's, read again under the
+   * turn lock (a switch of engine holds the lock exclusively). Null when the
+   * agent is no longer in a vault. Absent: the planned engine is trusted.
+   */
+  currentVaultEngine?(userId: string, agent: AgentRow): VaultEngine | null
   /** Resolve and capture the actual folder or external command and its state. */
   readRuntime(userId: string, agent: AgentRow, options?: ReadinessOptions): AcpRuntimeView | null | Promise<AcpRuntimeView | null>
   /** Park an ask in the pending-request registry. */
@@ -828,6 +837,11 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
             const now = deps.currentFolderPath(userId, agent)
             if (now === null) return fail(ACP_FOLDER_NOT_FOUND)
             if (now !== undefined && now !== runtime.folder.path) return fail(ACP_FOLDER_MOVED)
+          }
+          // Likewise a vault agent's engine: a switch that held the lock meanwhile
+          // changed it, and the plan would start the old engine in the vault.
+          if (plan.spec.vault && deps.currentVaultEngine && deps.currentVaultEngine(userId, agent) !== plan.spec.vault.engine) {
+            return fail(ACP_VAULT_ENGINE_CHANGED)
           }
           const prepared = deps.prepareCredentials ? await deps.prepareCredentials(agent, plan) : plan
           if (input.signal.aborted) return canceled()

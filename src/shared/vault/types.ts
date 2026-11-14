@@ -2,9 +2,9 @@
  * Agent Vault: what the renderer sees. Types and literals only (no imports
  * from main); the wire protocols are in `protocol.ts`.
  */
-import type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultState } from './protocol'
+import type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultLaunchProvider, VaultState } from './protocol'
 
-export type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultState }
+export type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultLaunchProvider, VaultState }
 
 /**
  * The reserved folder in the default workshop root that holds every vault
@@ -26,6 +26,10 @@ export interface LocalAgentVaultInfo {
   vaultId: string
   state: VaultState
   engine: VaultEngine
+  /** Display copy of the model it runs on inside (`cinna.launch` decides); null: the CLI's default. */
+  model?: string | null
+  /** Display copy of OpenCode's provider, when a switch recorded one. */
+  provider?: VaultLaunchProvider | null
   /** The agent's host folder is still there after the move (until **Delete host copy**). */
   hostCopy?: boolean
 }
@@ -204,7 +208,18 @@ export const VAULT_MOVE_STEPS = [
   'credentials',
   'check'
 ] as const
-export type VaultMoveStep = (typeof VAULT_MOVE_STEPS)[number]
+export type VaultMoveInStep = (typeof VAULT_MOVE_STEPS)[number]
+
+/**
+ * Steps of a change of engine on a vault agent, in order: set up the
+ * engine's runtime, allow its hosts, store a key, then switch. Progress on
+ * the move channel too; a step with nothing to do is `skipped`.
+ */
+export const VAULT_SWITCH_STEPS = ['runtime', 'egress', 'credentials', 'engine'] as const
+export type VaultSwitchStep = (typeof VAULT_SWITCH_STEPS)[number]
+
+/** Any step a `vault:move-progress` event names: a move in, Update dependencies (`rebuild`) or a switch of engine. */
+export type VaultMoveStep = VaultMoveInStep | VaultSwitchStep
 
 export type VaultPrecheckKind =
   | 'unsupported-engine'
@@ -307,6 +322,25 @@ export interface VaultEngineAuthDto {
   method: 'api_key' | 'oauth_token' | 'login' | null
   /** The secret the engine signs in with in this vault (OpenCode's follows the agent's model provider); null: none. */
   keyName: string | null
+}
+
+/**
+ * One engine a vault agent may run on, as the engine picker lists it:
+ * `setUp` when its pinned runtime (and adapter) is installed in the vault,
+ * `version` the installed executable's then.
+ */
+export interface VaultEngineChoiceDto {
+  engine: VaultEngine
+  setUp: boolean
+  version: string | null
+}
+
+/** `vault:switch-engine` options. OpenCode always names its provider and model; a key is optional. */
+export interface VaultSwitchEngineOptions {
+  engine: VaultEngine
+  provider?: VaultLaunchProvider
+  model?: string
+  apiKey?: string
 }
 
 export interface VaultRuntimeDto {

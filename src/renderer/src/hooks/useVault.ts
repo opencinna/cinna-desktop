@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useMutation, useMutationState, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import {
+  VAULT_SWITCH_STEPS,
   formatVaultCountdown,
   vaultChatFilesSweptText,
   vaultImageDownloadText,
@@ -8,6 +9,8 @@ import {
   type VaultChatFilesSweptEvent,
   type VaultErrorCode,
   type VaultMoveOptions,
+  type VaultMoveProgressEvent,
+  type VaultSwitchEngineOptions,
   type VaultResult,
   type VaultStateEvent,
   type VaultStatusDto
@@ -328,6 +331,93 @@ export function useVaultRuntimes(agentId: string | null, enabled = true) {
     enabled: enabled && !!agentId && !!vaultApi()
   })
 }
+/** Every vault engine, set up in this vault or not; only while it is unlocked. */
+export function useVaultEngines(agentId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: vaultDetailKey(agentId ?? '', 'engines'),
+    queryFn: async () => unwrapVault(await vaultApi()!.engines(agentId!)),
+    enabled: enabled && !!agentId && !!vaultApi()
+  })
+}
+
+function switchEngineKey(agentId: string): readonly unknown[] {
+  return ['vault', 'switch-engine', agentId] as const
+}
+
+/** A switch of engine whose final event said it failed: the step's sentence, and which step. */
+export class VaultSwitchFailed extends Error {
+  constructor(readonly step: VaultMoveProgressEvent['step'], message: string) {
+    super(message)
+    this.name = 'VaultSwitchFailed'
+  }
+}
+
+function isSwitchStep(step: string): boolean {
+  return (VAULT_SWITCH_STEPS as readonly string[]).includes(step)
+}
+
+export interface VaultSwitchVars {
+  options: VaultSwitchEngineOptions
+  /** Each progress event of this switch (its steps), for a dialog that lists them. */
+  onEvent?: (event: VaultMoveProgressEvent) => void
+}
+
+/**
+ * Change a vault agent's engine. Pending for the whole switch, not just the
+ * call that starts it: it resolves with main's last sentence when the switch's
+ * final event says done, and fails with a {@link VaultSwitchFailed} (or the
+ * refusal that kept it from starting). However it ends, the agent, its vault
+ * status, engines, runtimes and engine login are read again; that lives on
+ * the mutation, so it happens even when the caller has gone.
+ */
+export function useVaultSwitchEngine(agentId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<string, Error, VaultSwitchVars>({
+    mutationKey: switchEngineKey(agentId),
+    mutationFn: async ({ options, onEvent }) => {
+      const api = vaultApi()
+      if (!api) throw new Error('Agent Vault is not part of this build.')
+      let moveId: string | null = null
+      let off: () => void = () => {}
+      // Listening before the call: its first events can arrive before its answer.
+      const finished = new Promise<string>((resolve, reject) => {
+        off = api.onMoveProgress((event) => {
+          if (event.agentId !== agentId || !isSwitchStep(event.step)) return
+          if (moveId && event.moveId !== moveId) return
+          onEvent?.(event)
+          if (event.status === 'failed') reject(new VaultSwitchFailed(event.step, event.message ?? 'The engine could not be changed.'))
+          else if (event.step === 'engine' && event.status === 'done') resolve(event.message ?? '')
+        })
+      })
+      finished.catch(() => {})
+      try {
+        moveId = unwrapVault(await api.switchEngine(agentId, options)).moveId
+        return await finished
+      } finally {
+        off()
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: localAgentKey(agentId) })
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: ['agents'] })
+      void queryClient.invalidateQueries({ queryKey: vaultStatusKey(agentId) })
+      for (const what of ['engines', 'runtimes', 'engine-auth', 'secrets']) {
+        void queryClient.invalidateQueries({ queryKey: vaultDetailKey(agentId, what) })
+      }
+    }
+  })
+}
+
+/** The engine a switch on `agentId` is moving to while one runs (from any component), else null. */
+export function useVaultSwitchingTo(agentId: string): VaultSwitchEngineOptions['engine'] | null {
+  const pending = useMutationState({
+    filters: { mutationKey: switchEngineKey(agentId), status: 'pending' },
+    select: (mutation) => (mutation.state.variables as VaultSwitchVars | undefined)?.options.engine ?? null
+  })
+  return pending.at(-1) ?? null
+}
+
 export function useVaultUpdateDependencies() {
   return useVaultMutation((api, agentId: string) => api.updateDependencies(agentId))
 }

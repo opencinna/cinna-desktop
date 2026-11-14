@@ -81,6 +81,7 @@ import { createA2aTurnRecoverer } from './a2aTurnRecoverer'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView, type AcpPromptTurn } from './acp/acpDriver'
 import { acpProcessPool } from './acp/acpPool'
 import { sessionActivityHub } from '../../services/sessionActivityHub'
+import { AGENT_PROCESS_KINDS } from '../../../shared/sessionActivity'
 import { agentUploadsDir, chatUploadsDir } from '../../services/agentUploads'
 import { sessionTelemetryService } from '../telemetry/sessionTelemetryService'
 import { installChatSessionForgetter } from '../../services/chatSessionRelease'
@@ -124,7 +125,7 @@ import { pinnedSkillAutoFetch } from '../../services/pinnedSkillAutoFetch'
 import { engineCredentialEnv } from '../../services/skillRuntime'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
 import { isVaultAgent } from '../../vault/isVaultAgent'
-import { vaultAcpRuntime, vaultDriverDeps } from './acp/vaultRuntime'
+import { vaultAcpRuntime, vaultDriverDeps, vaultLaunchInfo } from './acp/vaultRuntime'
 import { installVaultMoveDeps } from '../../vault/moveService'
 import { defaultRuntimeSource, hostRuntimeSource } from '../../vault/runtimeInstall'
 import { vaultBackend } from '../../vault/backend'
@@ -1195,9 +1196,9 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
 
 // What Move to vault… captures from the host agent before its folder is in the vault.
 installVaultMoveDeps({
-  // A fake vault runs on this computer: the Claude this app resolved for itself, never the Linux download.
+  // A fake vault runs on this computer: the Claude and Codex this app resolved for itself, never the Linux downloads.
   runtimeSource: () => vaultBackend().kind === 'fake'
-    ? hostRuntimeSource(async () => (await claudeBinaryService.ensure()).path)
+    ? hostRuntimeSource(async () => (await claudeBinaryService.ensure()).path, async () => (await codexBinaryService.ensure()).path)
     : defaultRuntimeSource(),
   // OpenCode's prompt is the same assembled kit document (it has no native-engine prompt of its own here).
   instructions: (userId, agentId, engine) => folderSystemPrompt(engine === 'codex' ? 'codex' : 'claude')(userId, agentId, 'isolated') || null,
@@ -1215,7 +1216,11 @@ installVaultMoveDeps({
     return { model, provider, approval: desktopStateService.read(agent.path, agent.kind).claudeApproval ?? DEFAULT_CLAUDE_APPROVAL }
   },
   hostClaudeOnSubscription: async () => (await claudeAuthService.resolve()).mode !== 'api_key',
-  defaultEngine: () => defaultEngineService.current()
+  defaultEngine: () => defaultEngineService.current(),
+  // A change of engine waits for these: their end would open a follow-up on the old engine's process.
+  hasBackgroundWork: (agentId) => sessionActivityHub.hasRunning({ agentId, kinds: AGENT_PROCESS_KINDS }),
+  // ...and then stops that process, so nothing more runs on the old engine.
+  stopAgentProcesses: (agentId) => acpProcessPool.retire(agentId)
 })
 
 /**
@@ -1371,6 +1376,11 @@ export const acpDriver = createAcpDriver({
     } catch {
       return null
     }
+  },
+  // Read again under the turn lock: a switch of a vault agent's engine holds it.
+  currentVaultEngine: (userId, agent) => {
+    const row = agentRepo.getOwned(userId, agent.id)
+    return row ? vaultLaunchInfo(row)?.engine ?? null : null
   },
   defaultEngine: () => defaultEngineService.current(),
   registerRequest: (input) => pendingRequests.register(input),

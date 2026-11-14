@@ -31,7 +31,7 @@ import {
   type DriverContractSubject
 } from '../__golden__/driverContract'
 import { goldenRow } from '../__golden__/driverWorld'
-import { ACP_FOLDER_MOVED, ACP_FOLLOW_UP_EXITED, DENIAL_CONTINUE_LIMIT, createAcpDriver, exitListenerCount, folderReadiness, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
+import { ACP_FOLDER_MOVED, ACP_FOLLOW_UP_EXITED, ACP_VAULT_ENGINE_CHANGED, DENIAL_CONTINUE_LIMIT, createAcpDriver, exitListenerCount, folderReadiness, type AcpDriver, type AcpDriverDeps, type AcpFolderView, type AcpRuntimeView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
 import { SHELL_LEAD_IN } from '../../../services/pluginCommandExpansion'
 import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
@@ -4251,6 +4251,28 @@ describe('a refusal', () => {
     gate.resolve()
     const result = await turn
     expect(result.error?.message).toBe(ACP_FOLDER_MOVED)
+    expect(w.fake.log()).toEqual([])
+  })
+
+  it('refuses a vault turn whose engine was switched while it waited for the lock, and starts no process', async () => {
+    const gate = deferred<void>()
+    let engine: 'claude' | 'codex' = 'claude'
+    const w = world({
+      script: SAYS_HELLO,
+      launcher: 'claude',
+      spec: { vault: { agentId: 'folder:a', vaultId: 'v1', engine: 'claude', extraEnv: {} } } as never,
+      deps: {
+        currentVaultEngine: () => engine,
+        withLock: async (_agentId, _owner, fn) => { await gate.promise; return fn() }
+      }
+    })
+    const turn = w.run()
+    await settle()
+    // The switch holds the lock and changes the row's engine; the turn was planned on Claude.
+    engine = 'codex'
+    gate.resolve()
+    const result = await turn
+    expect(result.error?.message).toBe(ACP_VAULT_ENGINE_CHANGED)
     expect(w.fake.log()).toEqual([])
   })
 

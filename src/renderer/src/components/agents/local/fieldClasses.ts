@@ -27,3 +27,19 @@ export const LABEL =
  */
 export const SUMMARY_BADGE =
   'max-w-full truncate rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)]'
+
+/**
+ * A bordered button at the agent-page panels' scale, sized to their 16px
+ * status slot (the Runs-with panel's Log in and Refresh, the vault engine
+ * panel's Unlock and Change model…).
+ *
+ * Not `SettingsButton`: that is the Settings scale (13px, ~28px tall), and in
+ * the reserved `h-4` line it would either overflow it or grow the panel and move
+ * the tab strip below (ux_rules rules 1 and 12 — a component takes the scale of
+ * the surface it renders into). Primary text colour and a border, so it reads
+ * as a control beside the muted and red prose around it (rule 11).
+ */
+export const LINE_BUTTON =
+  'inline-flex h-4 shrink-0 items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 ' +
+  'text-[10px] font-medium leading-none text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] ' +
+  'aria-disabled:cursor-not-allowed aria-disabled:opacity-60'

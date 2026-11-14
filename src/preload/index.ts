@@ -113,6 +113,7 @@ import {
   type VaultAvailabilityDto,
   type VaultChatFilesSweptEvent,
   type VaultEngineAuthDto,
+  type VaultEngineChoiceDto,
   type VaultFileEntryDto,
   type VaultHostCopyDto,
   type VaultMoveOptions,
@@ -123,6 +124,7 @@ import {
   type VaultSecretListDto,
   type VaultStateEvent,
   type VaultStatusDto,
+  type VaultSwitchEngineOptions,
   type VaultUnlockProgressEvent,
   type VaultTerminalCommand,
   type VaultTerminalEvent,
@@ -620,6 +622,13 @@ const api = {
     deleteSecret: (agentId: string, name: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:delete-secret', agentId, name),
     engineAuth: (agentId: string): Promise<VaultResult<VaultEngineAuthDto>> => ipcRenderer.invoke('vault:engine-auth', agentId),
     runtimes: (agentId: string): Promise<VaultResult<VaultRuntimeDto[]>> => ipcRenderer.invoke('vault:runtimes', agentId),
+    /** Every vault engine, set up in this vault or not (needs it unlocked). */
+    engines: (agentId: string): Promise<VaultResult<VaultEngineChoiceDto[]>> => ipcRenderer.invoke('vault:engines', agentId),
+    /**
+     * Changes the engine; progress on `onMoveProgress` (steps runtime, egress,
+     * credentials, engine). Prompts to set up an engine and to allow its hosts.
+     */
+    switchEngine: (agentId: string, options: VaultSwitchEngineOptions): Promise<VaultResult<{ moveId: string }>> => ipcRenderer.invoke('vault:switch-engine', agentId, options),
     /** Gated: prompts. Installs the pinned runtimes and runs uv sync with the install hosts open. Output on onMoveProgress-like stream: `vault:move-progress` with step 'rebuild'. */
     updateDependencies: (agentId: string): Promise<VaultResult<{ moveId: string }>> => ipcRenderer.invoke('vault:update-dependencies', agentId),
     listFiles: (agentId: string, path: string): Promise<VaultResult<VaultFileEntryDto[]>> => ipcRenderer.invoke('vault:list-files', agentId, path),

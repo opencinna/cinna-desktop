@@ -325,12 +325,35 @@ export function vaultSecretAsEnv(engine: VaultEngine, name: string): boolean {
 export const VAULT_KV_LAUNCH = 'cinna.launch'
 export const VAULT_KV_INSTRUCTIONS = 'cinna.instructions'
 
+/**
+ * `cinna.instructions.<engine>`: a kit agent's prompt as the host assembled it
+ * for that engine, captured for every vault engine at move-in. A switch of
+ * engine copies the new engine's into {@link VAULT_KV_INSTRUCTIONS}, the one
+ * the launchers and vaultd read; nothing reads these directly.
+ */
+export function vaultKvInstructionsFor(engine: VaultEngine): string {
+  return `${VAULT_KV_INSTRUCTIONS}.${engine}`
+}
+
 /** The model providers an OpenCode agent may use inside a vault (their API hosts are in `VAULT_ENGINE_HOSTS.opencode`). */
 export const VAULT_LAUNCH_PROVIDERS = ['openai', 'anthropic'] as const
 export type VaultLaunchProvider = (typeof VAULT_LAUNCH_PROVIDERS)[number]
 
 /** A model id as `cinna.launch` may hold it (no provider prefix). */
 export const VAULT_LAUNCH_MODEL = /^[A-Za-z0-9._:\[\]-]{1,100}$/
+
+/**
+ * Engines that run in a vault only on a provider and model the vault names
+ * (`cinna.launch`): vaultd writes OpenCode's config from them and refuses to
+ * start it without a model. The others start on their CLI's default model.
+ */
+export const VAULT_ENGINE_NAMES_MODEL: Record<VaultEngine, boolean> = { claude: false, codex: false, opencode: true, antigravity: false }
+
+/** The model a switch to OpenCode offers for each provider (OpenCode in a vault always names one). */
+export const VAULT_OPENCODE_DEFAULT_MODEL: Record<VaultLaunchProvider, string> = {
+  openai: 'gpt-5.6-luna',
+  anthropic: 'claude-sonnet-5-5'
+}
 
 /** The two secrets Claude Code signs in with inside a vault; a vault holds one of them. */
 export const CLAUDE_LOGIN_SECRETS: readonly string[] = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']

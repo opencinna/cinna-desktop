@@ -46,16 +46,22 @@ import { launcherOfFolder } from '../agents/drivers/driverOf'
 import {
   VAULT_DEFAULT_SIZE_BYTES,
   VAULT_ENGINE_HOSTS,
+  VAULT_LAUNCH_MODEL,
+  VAULT_LAUNCH_PROVIDERS,
   approvalDetail,
   vaultEngineKeyName,
   vaultEngineLoginSecret,
+  vaultKvInstructionsFor,
   VAULT_ENGINE_LOGIN,
+  VAULT_ENGINE_NAMES_MODEL,
   type ExecPreset,
+  type RuntimeKind,
   type VaultEngine,
   type VaultLaunchProvider
 } from '../../shared/vault/protocol'
 import {
   VAULT_MOVE_PROGRESS_CHANNEL,
+  type VaultEngineChoiceDto,
   type VaultHostCopyDto,
   type VaultMoveOptions,
   type VaultMoveProgressEvent,
@@ -66,8 +72,11 @@ import {
 } from '../../shared/vault/types'
 import { vaultBackend, VaultBackendError } from './backend'
 import { refreshVaultAgents } from './isVaultAgent'
-import { defaultRuntimeSource, ensureRuntimes, tarFiles, type RuntimePin, type RuntimeSource } from './runtimeInstall'
+import { currentRuntimeRow, defaultRuntimeSource, ensureRuntimes, tarFiles, type RuntimePin, type RuntimeSource } from './runtimeInstall'
 import { VAULT_KV_INSTRUCTIONS, vaultAgentState } from './vaultAgentState'
+import { installedRuntime } from '../agents/drivers/acp/vaultLauncher'
+import { turnLock } from '../services/localAgents/turnLock'
+import { LocalAgentError } from '../errors'
 import type { VaultdClient } from './vaultdClient'
 import { vaultHost } from './vaultHost'
 import { hostCopyPathOf } from './hostCopy'
@@ -107,6 +116,14 @@ export interface MoveDeps {
   hostClaudeOnSubscription(): Promise<boolean>
   /** This computer's Default Runtime: what a folder that names no engine runs on. */
   defaultEngine(): AgentEngine
+  /**
+   * The agent has background work running (a subagent or a background task of
+   * its engine's process): a follow-up turn would open on that process when it
+   * ends, whatever engine the row names by then.
+   */
+  hasBackgroundWork(agentId: string): boolean
+  /** Stop the agent's engine processes (now when idle, else when their last turn lets go). */
+  stopAgentProcesses(agentId: string): void | Promise<void>
 }
 
 let deps: MoveDeps = {
@@ -114,7 +131,9 @@ let deps: MoveDeps = {
   instructions: () => null,
   launchFacts: () => ({ model: null, approval: 'ask' }),
   hostClaudeOnSubscription: async () => true,
-  defaultEngine: () => DEFAULT_AGENT_ENGINE
+  defaultEngine: () => DEFAULT_AGENT_ENGINE,
+  hasBackgroundWork: () => false,
+  stopAgentProcesses: () => {}
 }
 
 export function installVaultMoveDeps(next: Partial<MoveDeps>): void {
@@ -760,9 +779,16 @@ async function runMoveIn(userId: string, agentId: string, moveId: string, check:
         throw error
       }
       if (located.dto.kind === 'kit') {
-        const instructions = (() => {
-          try { return deps.instructions(userId, agentId, engine) } catch { return null }
-        })()
+        const instructionsFor = (each: VaultEngine): string | null => {
+          try { return deps.instructions(userId, agentId, each) } catch { return null }
+        }
+        // Every engine's, while the host folder is here: a later switch of
+        // engine copies the new one's into the active key.
+        for (const each of VAULT_MOVE_ENGINES) {
+          const text = instructionsFor(each)
+          if (text) await client.request('kv.put', { key: vaultKvInstructionsFor(each), value: text })
+        }
+        const instructions = instructionsFor(engine)
         if (instructions) await client.request('kv.put', { key: VAULT_KV_INSTRUCTIONS, value: instructions })
       }
       // How it is launched lives inside the vault from now on (D34); the row keeps a display copy.
@@ -1084,7 +1110,13 @@ export async function updateDependencies(userId: string, agentId: string): Promi
       held = true
       const token = await backend.approve(ref.vaultId, 'install', 'Update dependencies')
       const client = await vaultService.client(ref.vaultId)
-      await ensureRuntimes(client, deps.runtimeSource(), ref.engine, token, (message) => report.output('rebuild', `${message}\n`))
+      // Every engine set up in the vault, and the one it runs on even when its runtime went missing.
+      const { runtimes } = await client.request('runtime.status', {})
+      const source = deps.runtimeSource()
+      const engines = VAULT_MOVE_ENGINES.filter((each) => each === ref.engine || installedRuntime(runtimes, each, source.pins(each)) !== 'missing')
+      for (const each of engines) {
+        await ensureRuntimes(client, source, each, token, (message) => report.output('rebuild', `${message}\n`))
+      }
       const code = await runExec(client, 'rebuild', token, (text) => report.output('rebuild', text), controller.signal)
       if (code !== 0) throw new VaultError('internal', `The rebuild (uv python install, uv sync) failed (exit ${code}).`)
       report.final({ step: 'rebuild', status: 'done', message: 'Dependencies are up to date.' })
@@ -1098,6 +1130,295 @@ export async function updateDependencies(userId: string, agentId: string): Promi
   })()
   moves.set(moveId, { moveId, agentId, controller, done })
   return { moveId }
+}
+
+// ---------------------------------------------------------------------------
+// The engine of a vault agent
+
+type RuntimeRow = { engine: VaultEngine; version: string; kind: RuntimeKind; sha256: string }
+
+/**
+ * Every vault engine, set up or not, from the vault's `runtime.status`: set
+ * up when the runtime (and adapter) this app pins for it is installed, at
+ * any version (an outdated one is still set up; Update dependencies moves it).
+ */
+export function vaultEngineChoices(runtimes: readonly RuntimeRow[]): VaultEngineChoiceDto[] {
+  const source = deps.runtimeSource()
+  return VAULT_MOVE_ENGINES.map((engine) => {
+    const setUp = installedRuntime(runtimes, engine, source.pins(engine)) !== 'missing'
+    return { engine, setUp, version: setUp ? currentRuntimeRow(runtimes, engine, false)?.version ?? null : null }
+  })
+}
+
+interface SwitchOptions {
+  engine: VaultEngine
+  provider: VaultLaunchProvider | null
+  model: string | null
+  apiKey: string | null
+}
+
+function parseSwitchOptions(raw: unknown): SwitchOptions {
+  const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const engine = value['engine']
+  if (typeof engine !== 'string' || !(VAULT_MOVE_ENGINES as readonly string[]).includes(engine)) {
+    throw new VaultError('invalid', 'Choose Claude Agent, Codex, OpenCode or Antigravity.')
+  }
+  const provider = value['provider']
+  const model = value['model']
+  let out: SwitchOptions = { engine: engine as VaultEngine, provider: null, model: null, apiKey: null }
+  if (VAULT_ENGINE_NAMES_MODEL[engine as VaultEngine]) {
+    // vaultd configures OpenCode from these and refuses to start it without a model.
+    if (typeof provider !== 'string' || !(VAULT_LAUNCH_PROVIDERS as readonly string[]).includes(provider)) {
+      throw new VaultError('invalid', 'OpenCode in a vault reaches OpenAI or Anthropic models: choose one.')
+    }
+    if (typeof model !== 'string' || !VAULT_LAUNCH_MODEL.test(model.trim())) throw new VaultError('invalid', 'Enter the model OpenCode should run, like gpt-5.6-luna.')
+    out = { ...out, provider: provider as VaultLaunchProvider, model: model.trim() }
+  } else if ((provider !== undefined && provider !== null) || (model !== undefined && model !== null)) {
+    // The other engines start on their CLI's default model.
+    throw new VaultError('invalid', 'Only OpenCode takes a provider and a model.')
+  }
+  // The same rule as Move to vault…'s key.
+  const key = parseMoveOptions({ apiKey: value['apiKey'] }).apiKey
+  return { ...out, apiKey: key ?? null }
+}
+
+/** A sentence for a switch's failed step: a declined prompt is an answer, said as one. */
+function switchFailure(error: unknown): string {
+  if (error instanceof VaultBackendError && error.code === 'denied') return 'Cancelled at the prompt.'
+  if (error instanceof VaultError && error.code === 'denied') return 'Cancelled at the prompt.'
+  const raw = (error instanceof Error ? error.message : String(error)).trim()
+  return /[.!?…]$/.test(raw) ? raw : `${raw}.`
+}
+
+/**
+ * An engine as the switch names it: the runtime choice's own words, as a local
+ * agent's Runs on select says them ("Claude Agent", not the CLI's name).
+ */
+const VAULT_ENGINE_CHOICE_NAME: Record<VaultEngine, string> = { claude: 'Claude Agent', codex: 'Codex', opencode: 'OpenCode', antigravity: 'Antigravity' }
+
+/** A Claude setup-token over an API key the vault holds: Claude would sign in with the key. */
+const CLAUDE_TOKEN_UNDER_KEY = 'This vault already holds an Anthropic API key, which Claude would use over a token. Paste an API key, or leave the field empty to use the one it holds.'
+
+/** Appended to a switch's failure when the vault's launch settings could not be put back. */
+const LAUNCH_NOT_RESTORED = ' The vault’s launch settings could not be put back; switch the engine again.'
+
+/**
+ * Change the engine a vault agent runs on (a vault can hold every vault
+ * engine; each is set up the first time it is chosen). Progress on
+ * `vault:move-progress`, steps `VAULT_SWITCH_STEPS`: set up the pinned
+ * runtime (an `install` prompt) when it is not in the vault, allow the
+ * engine's hosts (an `egress` prompt) when the allowlist lacks one, store a
+ * given key under the engine's name, then switch: the instructions captured
+ * for that engine at move-in become the active ones, `cinna.launch` gets the
+ * new model (null, the CLI's default; OpenCode's provider and model), and the
+ * row names the engine. A failure leaves the row and `cinna.launch` as they
+ * were; what was installed or allowed before it stays.
+ *
+ * A key is stored under its own name and no other login name is removed: an
+ * engine's login names are shared (OpenCode on Anthropic reads Claude's
+ * ANTHROPIC_API_KEY). A Claude token pasted while the vault holds an API key
+ * is refused, since Claude would sign in with the key.
+ *
+ * Refused at once while the vault is locked, the agent moves or updates, its
+ * background work (a subagent, a background task) runs, or a turn (anything
+ * but a preemptible dashboard run, which it stops) holds its turn lock. A
+ * switch that succeeds stops the agent's pooled engine process, so no
+ * follow-up turn opens on the old engine. The switch holds the vault open and the agent's turn lock
+ * (exclusive) for its whole length, so no turn starts on the old engine
+ * mid-switch; both are let go before the final event, so a message sent the
+ * moment it says done is not refused as busy.
+ */
+export async function switchEngine(userId: string, agentId: string, options: unknown): Promise<{ moveId: string }> {
+  const opts = parseSwitchOptions(options)
+  const { row, ref } = vaultService.refFor(userId, agentId)
+  // The same engine again only to name another provider or model.
+  if (opts.engine === ref.engine && !VAULT_ENGINE_NAMES_MODEL[opts.engine]) throw new VaultError('invalid', `This agent already runs on ${VAULT_ENGINE_CHOICE_NAME[opts.engine]}.`)
+  if (vaultService.stateOf(ref.vaultId) !== 'unlocked') throw new VaultError('locked', 'Unlock the vault to change the engine.')
+  // A key that cannot sign in fails here, in the dialog, before any prompt.
+  const secret = opts.apiKey ? vaultEngineLoginSecret(opts.engine, opts.provider, opts.apiKey) ?? 'ANTHROPIC_API_KEY' : null
+  if (opts.apiKey && secret) {
+    await refuseBadLogin(secret, opts.apiKey)
+    if (secret === 'CLAUDE_CODE_OAUTH_TOKEN') {
+      const { names } = await (await vaultService.client(ref.vaultId)).request('secrets.list', {})
+      if (names.includes('ANTHROPIC_API_KEY')) throw new VaultError('invalid', CLAUDE_TOKEN_UNDER_KEY)
+    }
+  }
+  // From here to the lock, one synchronous step.
+  if (vaultService.stateOf(ref.vaultId) !== 'unlocked') throw new VaultError('locked', 'Unlock the vault to change the engine.')
+  if (movingAgents.has(agentId)) throw new VaultError('busy', 'This agent is busy moving or updating. Change the engine when that ends.')
+  // Its end would open a follow-up turn on the old engine's process.
+  if (deps.hasBackgroundWork(agentId)) throw new VaultError('busy', 'Background work is still running on this agent. Change the engine when it ends.')
+  // Refused by any holder but a dashboard run, which the exclusive hold stops instead.
+  let lock: ReturnType<typeof turnLock.acquire>
+  try {
+    lock = turnLock.acquire(agentId, 'vault-engine')
+  } catch (error) {
+    if (error instanceof LocalAgentError && error.code === 'turn_in_progress') {
+      throw new VaultError('busy', 'A turn is running on this agent. Change the engine when it ends.')
+    }
+    throw error
+  }
+  movingAgents.add(agentId)
+  const moveId = randomUUID()
+  const controller = new AbortController()
+  const report = reporter(moveId, agentId)
+  const finish = (): void => {
+    lock.release()
+    movingAgents.delete(agentId)
+  }
+  const done = runSwitch(userId, row, ref.vaultId, moveId, opts)
+    .catch((error: unknown): Omit<VaultMoveProgressEvent, 'moveId' | 'agentId'> => {
+      logger.error('a vault agent’s change of engine ended unexpectedly', { agentId, error: error instanceof Error ? error.message : String(error) })
+      return { step: 'engine', status: 'failed', message: switchFailure(error) }
+    })
+    .then((final) => {
+      // Free before it says so: a send right after "done" must find the agent free.
+      finish()
+      report.final(final)
+    })
+    .finally(() => {
+      finish()
+      moves.delete(moveId)
+    })
+  moves.set(moveId, { moveId, agentId, controller, done })
+  return { moveId }
+}
+
+/** Runs a switch and returns its final event (not yet sent); lets go of the vault's hold before returning. */
+async function runSwitch(
+  userId: string,
+  row: AgentRow,
+  vaultId: string,
+  moveId: string,
+  opts: SwitchOptions
+): Promise<Omit<VaultMoveProgressEvent, 'moveId' | 'agentId'>> {
+  const agentId = row.id
+  const { engine } = opts
+  const name = VAULT_ENGINE_CHOICE_NAME[engine]
+  const report = reporter(moveId, agentId)
+  const backend = vaultBackend()
+  const holdId = randomUUID()
+  let held = false
+  let current: VaultMoveStep = 'runtime'
+  let restoreFailed = false
+  try {
+    await backend.hold(vaultId, holdId)
+    held = true
+    const client = await vaultService.client(vaultId)
+    const source = deps.runtimeSource()
+
+    current = 'runtime'
+    const { runtimes } = await client.request('runtime.status', {})
+    if (installedRuntime(runtimes, engine, source.pins(engine)) === 'missing') {
+      report.step('runtime', 'running')
+      const token = await backend.approve(vaultId, 'install', `Set up ${name}`)
+      await ensureRuntimes(client, source, engine, token, (message) => report.output('runtime', `${message}\n`))
+      report.step('runtime', 'done')
+    } else {
+      report.step('runtime', 'skipped')
+    }
+
+    current = 'egress'
+    const status = await backend.status(vaultId)
+    const hosts = status.egress?.hosts ?? []
+    if (VAULT_ENGINE_HOSTS[engine].some((host) => !hosts.includes(host))) {
+      report.step('egress', 'running')
+      await vaultService.applyEgress(vaultId, { hosts: [...new Set([...hosts, ...VAULT_ENGINE_HOSTS[engine]])].sort() })
+      report.step('egress', 'done')
+    } else {
+      report.step('egress', 'skipped')
+    }
+
+    current = 'credentials'
+    if (opts.apiKey) {
+      report.step('credentials', 'running')
+      // Under its own name only: another login name may be another engine's (see switchEngine).
+      const secret = vaultEngineLoginSecret(engine, opts.provider, opts.apiKey) ?? 'ANTHROPIC_API_KEY'
+      await client.request('secrets.put', { name: secret, value: opts.apiKey })
+      report.step('credentials', 'done')
+    } else {
+      report.step('credentials', 'skipped')
+    }
+
+    current = 'engine'
+    report.step('engine', 'running')
+    const before = await readLaunch(client)
+    try {
+      await switchLaunch(client, engine, opts)
+      if (!agentRepo.patchVaultConfig(userId, agentId, { engine, model: opts.model, provider: opts.provider })) {
+        throw new VaultError('internal', 'The agent changed while its engine was switching.')
+      }
+    } catch (error) {
+      // The row keeps the old engine: the vault's launch goes back to agree with it.
+      restoreFailed = !(await restoreLaunch(client, before, agentId))
+      throw error
+    }
+    refreshVaultAgents()
+    const roots = agentsHomeService.rootRows(userId)
+    agentChanged((roots.find((root) => root.id === row.localRootId) ?? roots.find((root) => root.isDefault))?.id ?? row.localRootId ?? '', agentId)
+    vaultService.readinessChanged(vaultId)
+    // The old engine's process must not serve another turn (a follow-up opens on a pooled connection).
+    try {
+      await deps.stopAgentProcesses(agentId)
+    } catch (error) {
+      logger.warn('the old engine’s process could not be stopped after a change of engine', { agentId, error: error instanceof Error ? error.message : String(error) })
+    }
+    logger.info('a vault agent changed its engine', { agentId, vaultId, engine })
+    return { step: 'engine', status: 'done', message: `The agent runs on ${name} now.` }
+  } catch (error) {
+    const message = switchFailure(error) + (restoreFailed ? LAUNCH_NOT_RESTORED : '')
+    logger.warn('a vault agent’s change of engine failed', { agentId, step: current, error: message })
+    return { step: current, status: 'failed', message }
+  } finally {
+    if (held) await backend.release(vaultId, holdId).catch(() => {})
+  }
+}
+
+/** What a switch changes in the vault, as it was before: put back by {@link restoreLaunch}. */
+interface LaunchBefore {
+  launch: Awaited<ReturnType<typeof vaultAgentState.launch>>
+  instructions: unknown
+}
+
+async function readLaunch(client: Client): Promise<LaunchBefore> {
+  return {
+    launch: await vaultAgentState.launch(client),
+    instructions: (await client.request('kv.get', { key: VAULT_KV_INSTRUCTIONS })).value
+  }
+}
+
+/**
+ * Put back the active instructions and `cinna.launch` a switch found. False
+ * (and logged) when either could not be written: the vault may then disagree
+ * with the row.
+ */
+async function restoreLaunch(client: Client, before: LaunchBefore, agentId: string): Promise<boolean> {
+  let ok = true
+  if (typeof before.instructions === 'string') {
+    await client.request('kv.put', { key: VAULT_KV_INSTRUCTIONS, value: before.instructions }).catch((error: unknown) => {
+      ok = false
+      logger.error('a failed change of engine could not put back the vault’s instructions', { agentId, error: error instanceof Error ? error.message : String(error) })
+    })
+  }
+  await vaultAgentState.writeLaunch(client, before.launch).catch((error: unknown) => {
+    ok = false
+    logger.error('a failed change of engine could not put back cinna.launch', { agentId, error: error instanceof Error ? error.message : String(error) })
+  })
+  return ok
+}
+
+/**
+ * The vault side of a switch: the new engine's captured instructions become
+ * the active ones (kept as they are when none was captured: a vault moved in
+ * before they were), then `cinna.launch` with its model. The caller puts back
+ * what was there when this or the row's update fails ({@link restoreLaunch}).
+ */
+async function switchLaunch(client: Client, engine: VaultEngine, opts: SwitchOptions): Promise<void> {
+  const launch = await vaultAgentState.launch(client)
+  const captured = (await client.request('kv.get', { key: vaultKvInstructionsFor(engine) })).value
+  if (typeof captured === 'string' && captured.trim() !== '') await client.request('kv.put', { key: VAULT_KV_INSTRUCTIONS, value: captured })
+  // Mode and sealed/native stay; the model resets to the CLI's default (OpenCode names its own).
+  await vaultAgentState.writeLaunch(client, { kind: launch.kind, approval: launch.approval, model: opts.model, provider: opts.provider })
 }
 
 /** Test seam: wait for a move (or dependency update) to finish. */
@@ -1114,5 +1435,6 @@ export const moveService = {
   moveOut,
   exportFile,
   updateDependencies,
+  switchEngine,
   waitForMove
 }

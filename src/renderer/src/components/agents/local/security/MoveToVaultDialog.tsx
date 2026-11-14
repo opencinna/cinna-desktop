@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, ChevronDown, Circle, GitBranch, Info, KeyRound, Loader2, Minus, X, XCircle } from 'lucide-react'
 import {
   VAULT_MOVE_STEPS,
+  type VaultMoveInStep,
   type VaultMoveProgressEvent,
-  type VaultMoveStep,
   type VaultPrecheckItem,
   type VaultRotationItem
 } from '../../../../../../shared/vault/types'
@@ -26,7 +26,7 @@ import { VaultDialog } from './VaultDialog'
 import { HostCopyConsequences } from './VaultOnPanel'
 import { GB, formatBytes, sizeLimitProblem } from './vaultText'
 
-export const MOVE_STEP_LABEL: Record<VaultMoveStep, string> = {
+export const MOVE_STEP_LABEL: Record<VaultMoveInStep, string> = {
   create: 'Create the vault',
   unlock: 'Unlock it',
   approve: 'Approve the move',
@@ -37,7 +37,7 @@ export const MOVE_STEP_LABEL: Record<VaultMoveStep, string> = {
   check: 'Check it runs'
 }
 
-type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 interface StepState {
   status: StepStatus
   message?: string
@@ -46,16 +46,16 @@ interface StepState {
 type Phase = 'check' | 'move' | 'original' | 'rotate'
 
 /** Every step the dialog will show, listed from the start so nothing appears later (ux_rules rule 1). */
-const OUTLINE: { id: 'precheck' | VaultMoveStep | 'original' | 'rotate'; label: string }[] = [
+const OUTLINE: { id: 'precheck' | VaultMoveInStep | 'original' | 'rotate'; label: string }[] = [
   { id: 'precheck', label: 'Check the folder' },
   ...VAULT_MOVE_STEPS.map((step) => ({ id: step, label: MOVE_STEP_LABEL[step] })),
   { id: 'original', label: 'Delete the original' },
   { id: 'rotate', label: 'Rotate credentials' }
 ]
 
-function emptySteps(): Record<VaultMoveStep, StepState> {
+function emptySteps(): Record<VaultMoveInStep, StepState> {
   return Object.fromEntries(VAULT_MOVE_STEPS.map((step) => [step, { status: 'pending', output: '' }])) as Record<
-    VaultMoveStep,
+    VaultMoveInStep,
     StepState
   >
 }
@@ -87,7 +87,7 @@ export function MoveToVaultDialog({
   /** A refused size, said on the field's own line (rule 6), not in the footer. */
   const [sizeError, setSizeError] = useState<string | null>(null)
   const [steps, setSteps] = useState(emptySteps)
-  const [failure, setFailure] = useState<{ step: VaultMoveStep; message: string } | null>(null)
+  const [failure, setFailure] = useState<{ step: VaultMoveInStep; message: string } | null>(null)
   const [rolledBack, setRolledBack] = useState<boolean | null>(null)
   const [rotation, setRotation] = useState<VaultRotationItem[]>([])
   const [cancelling, setCancelling] = useState(false)
@@ -101,18 +101,21 @@ export function MoveToVaultDialog({
   useEffect(() => {
     return onVaultMoveProgress((event: VaultMoveProgressEvent) => {
       if (event.agentId !== agentId || !runningRef.current) return
+      // A move's own steps only (a switch of engine reports on this channel too).
+      if (!isMoveInStep(event.step)) return
+      const step = event.step
       if (moveIdRef.current && event.moveId !== moveIdRef.current) return
       moveIdRef.current ??= event.moveId
       setSteps((prev) => ({
         ...prev,
-        [event.step]: {
+        [step]: {
           status: event.status,
-          message: event.message ?? prev[event.step].message,
-          output: prev[event.step].output + (event.output ?? '')
+          message: event.message ?? prev[step].message,
+          output: prev[step].output + (event.output ?? '')
         }
       }))
       if (event.status === 'failed') {
-        setFailure({ step: event.step, message: event.message ?? '' })
+        setFailure({ step, message: event.message ?? '' })
         if (event.rolledBack !== undefined) {
           setRolledBack(event.rolledBack)
           runningRef.current = false
@@ -329,17 +332,22 @@ export function MoveToVaultDialog({
   )
 }
 
+function isMoveInStep(step: string): step is VaultMoveInStep {
+  return (VAULT_MOVE_STEPS as readonly string[]).includes(step)
+}
+
 /** Main's message as a sentence: a full stop unless it already ends in one. */
 function sentence(text: string): string {
   const trimmed = text.trim()
   return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`
 }
 
-function currentStep(steps: Record<VaultMoveStep, StepState>): VaultMoveStep | null {
+function currentStep(steps: Record<VaultMoveInStep, StepState>): VaultMoveInStep | null {
   return VAULT_MOVE_STEPS.find((step) => steps[step].status === 'running') ?? null
 }
 
-function StepIcon({ status }: { status: StepStatus }): React.JSX.Element {
+/** A step's state as an icon of one fixed size (the move's outline, a switch of engine's steps). */
+export function StepIcon({ status }: { status: StepStatus }): React.JSX.Element {
   const box = 'flex h-[15px] w-[15px] shrink-0 items-center justify-center'
   if (status === 'running') return <span className={box}><Loader2 size={14} className="animate-spin text-[var(--color-accent)]" aria-label="Running" /></span>
   if (status === 'done') return <span className={box}><Check size={14} className="text-[var(--color-success)]" aria-label="Done" /></span>
@@ -489,7 +497,7 @@ function PrecheckRow({ item }: { item: VaultPrecheckItem }): React.JSX.Element {
  * (rebuild, check), a message while running, or the failure. The outline on the
  * left already lists every step and its status; repeating it here was noise.
  */
-function ProgressPanel({ steps }: { steps: Record<VaultMoveStep, StepState> }): React.JSX.Element {
+function ProgressPanel({ steps }: { steps: Record<VaultMoveInStep, StepState> }): React.JSX.Element {
   const shown = VAULT_MOVE_STEPS.filter((step) => {
     const state = steps[step]
     return state.output !== '' || state.status === 'failed' || (state.status === 'running' && !!state.message)
@@ -503,7 +511,7 @@ function ProgressPanel({ steps }: { steps: Record<VaultMoveStep, StepState> }): 
   )
 }
 
-function StepLog({ step, state }: { step: VaultMoveStep; state: StepState }): React.JSX.Element {
+function StepLog({ step, state }: { step: VaultMoveInStep; state: StepState }): React.JSX.Element {
   const [open, setOpen] = useState<boolean | null>(null)
   // Open by default while it runs or after it failed; the user's own toggle wins.
   const expanded = open ?? (state.status === 'running' || state.status === 'failed')

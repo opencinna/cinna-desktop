@@ -11,7 +11,8 @@ import type { VaultChannel } from './backend'
 import { VaultdClient } from './vaultdClient'
 import { installRuntimeHost } from '../host/runtimeHost'
 import { adapterClosure, ADAPTER_TAR_PATH, claudeAdapterFiles, closureFiles, CODEX_ADAPTER_TAR_PATH, codexAdapterFiles, deterministicTar, deterministicTarSha256, deterministicTarSize, ensureClaudeAdapterTar, ensureCodexAdapterTar, writeClaudeAdapterTar, writeDeterministicTar } from './adapterTar'
-import { codexAdapterVersionLabel, defaultRuntimeSource, hostRuntimeSource, claudeAdapterVersionLabel, installRuntimeArtifact, pinnedVaultVersions, tarFiles } from './runtimeInstall'
+import { codexAdapterVersionLabel, defaultRuntimeSource, ensureRuntimes, hostRuntimeSource, claudeAdapterVersionLabel, installRuntimeArtifact, pinnedVaultVersions, tarFiles } from './runtimeInstall'
+import { installedRuntime } from '../agents/drivers/acp/vaultLauncher'
 
 /**
  * D28 against the real cinna-vaultd (in process, fake mode): this app's own
@@ -141,6 +142,47 @@ describe('vault runtime install (D28)', () => {
       writeFileSync(tar, bytes)
       await expect(source.artifacts('claude')).rejects.toThrow(/not the ones this app pins/)
     } finally {
+      rmSync(appPath, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it('the fake backend’s source sets up Codex too: this computer’s codex and the Codex adapter tar, which vaultd installs as set up', async () => {
+    harness = await startVaultd()
+    const sock = harness.sock
+    const appPath = mkdtempSync(join(tmpdir(), 'host-codex-app-'))
+    const client = await VaultdClient.connect(await channelTo(sock), { openChannel: () => channelTo(sock) })
+    try {
+      installRuntimeHost({ isPackaged: false, getAppPath: () => appPath } as never)
+      const hostCodex = join(appPath, 'codex')
+      writeFileSync(hostCodex, '#!/bin/sh\necho host codex\n', { mode: 0o755 })
+      const source = hostRuntimeSource(async () => '/bin/sh', async () => hostCodex)
+      // No Codex adapter tar built: refused in words naming the build step.
+      await expect(source.artifacts('codex')).rejects.toThrow(/No Codex adapter tar.*electron-vite build/)
+      await writeDeterministicTar(process.cwd(), codexAdapterFiles(process.cwd()), join(appPath, ...CODEX_ADAPTER_TAR_PATH.split('/')))
+      const hostVersion = `${RUNTIME_PINS.codex.cli}-host`
+      expect(source.pins('codex')).toEqual([
+        { engine: 'codex', kind: 'executable', version: hostVersion, sha256: null },
+        { engine: 'codex', kind: 'adapter', version: codexAdapterVersionLabel(), sha256: RUNTIME_PINS.codex.vaultAdapterTarSha256 }
+      ])
+      const artifacts = await source.artifacts('codex')
+      expect(artifacts.map((a) => `${a.kind}:${a.name}:${a.version}`)).toEqual([`executable:codex:${hostVersion}`, `adapter:codex-acp:${codexAdapterVersionLabel()}`])
+
+      await client.request('layout.ensure', {})
+      await ensureRuntimes(client, source, 'codex', mint('install'))
+      const { runtimes } = await client.request('runtime.status', {})
+      expect(installedRuntime(runtimes, 'codex', source.pins('codex'))).not.toBe('missing')
+      expect(installedRuntime(runtimes, 'codex', source.pins('codex'))).not.toBe('not_pinned')
+      // Where vaultd's engine.spawn finds it (CODEX_PATH): the host bytes.
+      expect(readFileSync(join(harness.root, 'runtime', 'codex', hostVersion, 'codex'), 'utf8')).toBe('#!/bin/sh\necho host codex\n')
+
+      // A Codex the app cannot resolve, and the engines with Linux builds only, say so.
+      const unresolved = hostRuntimeSource(async () => '/bin/sh', async () => { throw new Error('Codex is not installed') })
+      await expect(unresolved.artifacts('codex')).rejects.toThrow(/Codex is not available on this computer: Codex is not installed/)
+      await expect(source.artifacts('opencode')).rejects.toThrow(/Claude or Codex only, not opencode/)
+      expect(source.pins('opencode')).toEqual([])
+      expect(hostRuntimeSource(async () => '/bin/sh').pins('codex')).toEqual([])
+    } finally {
+      client.close()
       rmSync(appPath, { recursive: true, force: true })
     }
   }, 60_000)

@@ -8,6 +8,7 @@ import { openVaultTerminal } from '../vault/vaultTerminal'
 import type {
   VaultAvailabilityDto,
   VaultEngineAuthDto,
+  VaultEngineChoiceDto,
   VaultFileEntryDto,
   VaultHostCopyDto,
   VaultPrecheckDto,
@@ -127,6 +128,16 @@ export function registerVaultHandlers(): void {
   ipcHandle('vault:runtimes', (_event, agentId: string): Promise<VaultResult<VaultRuntimeDto[]>> => {
     userActivation.requireActivated()
     return vaultService.result(() => vaultService.runtimes(getSettingsScopeUserId(), agentId))
+  })
+
+  ipcHandle('vault:engines', (_event, agentId: string): Promise<VaultResult<VaultEngineChoiceDto[]>> => {
+    userActivation.requireActivated()
+    return vaultService.result(() => vaultService.engines(getSettingsScopeUserId(), agentId))
+  })
+
+  ipcHandle('vault:switch-engine', (_event, agentId: string, options: unknown): Promise<VaultResult<{ moveId: string }>> => {
+    userActivation.requireActivated()
+    return vaultService.result(() => moveService.switchEngine(getSettingsScopeUserId(), agentId, options))
   })
 
   ipcHandle('vault:update-dependencies', (_event, agentId: string): Promise<VaultResult<{ moveId: string }>> => {
