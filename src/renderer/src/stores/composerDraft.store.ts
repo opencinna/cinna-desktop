@@ -50,6 +50,16 @@ export function composerDraftKey(profileId: string | undefined, surface: string)
   return JSON.stringify([profileId ?? null, surface])
 }
 
+/** The surface a draft key names (`chat:<id>`, `agent:<id>`, …), or null for a key not made by {@link composerDraftKey}. */
+export function composerDraftSurface(key: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(key)
+    return Array.isArray(parsed) && typeof parsed[1] === 'string' ? parsed[1] : null
+  } catch {
+    return null
+  }
+}
+
 export const useComposerDraftStore = create<{
   drafts: Record<string, ComposerDraft>
   beginSend: (key: string) => boolean

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, ArrowUpRight, Check, Copy, Cpu, Download, ExternalLink, FileWarning, FolderOpen, KeyRound, Loader2, Lock, LockOpen, LogIn, Plus, RefreshCw, WifiOff, X } from 'lucide-react'
+import { SafeIcon } from '../ui/SafeIcon'
 import type { LucideIcon } from 'lucide-react'
 import { FindingText, NoticeButton, StableLabel } from './ComposerNoticePanel'
 import type { ComposerNotice } from './ComposerNoticePanel'
@@ -315,7 +316,7 @@ const ICON: Record<Exclude<AgentReadinessState, 'ok'>, LucideIcon> = {
   invalid: AlertTriangle,
   contract_too_new: AlertTriangle,
   vault_locked: Lock,
-  vault_other_chat: Lock
+  vault_other_chat: SafeIcon
 }
 
 /** The readiness answer as a row of the composer's notice panel, or null when ready. */

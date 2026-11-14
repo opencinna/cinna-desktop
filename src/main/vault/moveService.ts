@@ -71,7 +71,7 @@ import { VAULT_KV_INSTRUCTIONS, vaultAgentState } from './vaultAgentState'
 import type { VaultdClient } from './vaultdClient'
 import { vaultHost } from './vaultHost'
 import { hostCopyPathOf } from './hostCopy'
-import { VaultError, vaultService } from './vaultService'
+import { VaultError, refuseBadLogin, vaultService } from './vaultService'
 
 import { ensureGuestImage } from './guestImage'
 import { vaultCredentials } from './vaultCredentials'
@@ -622,6 +622,14 @@ export async function moveIn(userId: string, agentId: string, options: unknown):
   if (!check.canMove) {
     const blocker = check.items.find((item) => item.severity === 'blocker')
     throw new VaultError('invalid', blocker?.title ?? 'This agent cannot move into a vault.')
+  }
+  // A key that cannot sign in fails here, in the dialog, not at the first prompt after the move.
+  // Before the busy check: it can wait on the provider for seconds, and the
+  // check and the add below must stay one synchronous step.
+  if (opts.apiKey) {
+    const engine: VaultEngine = check.engine ?? 'claude'
+    // Only OpenCode's key name depends on the provider; the others ignore it.
+    await refuseBadLogin(vaultEngineLoginSecret(engine, launchProvider(launchFactsOf(userId, agentId)), opts.apiKey) ?? 'ANTHROPIC_API_KEY', opts.apiKey)
   }
   if (movingAgents.has(agentId)) throw new VaultError('busy', 'This agent is already moving.')
   const moveId = randomUUID()

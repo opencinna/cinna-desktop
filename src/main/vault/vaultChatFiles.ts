@@ -26,6 +26,7 @@
 import { rm, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { MessageAttachment } from '../../shared/attachments'
+import type { VaultChatFilesSwept } from '../../shared/vault/types'
 import { chatFileRepo } from '../db/chatFiles'
 import { chatVaultId } from '../db/chats'
 import { runtimeHost } from '../host/runtimeHost'
@@ -83,15 +84,21 @@ export function vaultChatFilesDir(userId: string, chatId: string): string {
  * every vault chat plus the whole {@link vaultChatFilesRoot}. A draft
  * attached while its vault was open loses its copy at the lock; the vault is
  * locked then, and nothing can be sent into it until it is opened again.
- * Never throws; resolves with the number of rows removed.
+ * Never throws; resolves with the attachment ids whose rows it removed, by
+ * chat (the composer drops those chips, see `VAULT_CHAT_FILES_SWEPT_CHANNEL`).
  */
-export async function sweepVaultChatFiles(vaultId?: string): Promise<number> {
+export async function sweepVaultChatFiles(vaultId?: string): Promise<VaultChatFilesSwept[]> {
   let removed = 0
+  const byChat = new Map<string, string[]>()
   try {
     const rows = chatFileRepo.listOfVaultChats(vaultId)
     for (const row of rows) {
       await unlink(row.storagePath).catch(() => {})
-      if (chatFileRepo.delete(row.userId, row.id)) removed++
+      if (!chatFileRepo.delete(row.userId, row.id)) continue
+      removed++
+      const ids = byChat.get(row.chatId)
+      if (ids) ids.push(row.id)
+      else byChat.set(row.chatId, [row.id])
     }
     // One vault: each of its chats' directories; at start, everything.
     const dirs = vaultId === undefined ? [vaultChatFilesRoot()] : [...new Set(rows.map((row) => vaultChatFilesDir(row.userId, row.chatId)))]
@@ -100,5 +107,5 @@ export async function sweepVaultChatFiles(vaultId?: string): Promise<number> {
   } catch (error) {
     logger.warn('could not sweep vault chat attachment copies', { error: error instanceof Error ? error.message : String(error) })
   }
-  return removed
+  return [...byChat].map(([chatId, attachmentIds]) => ({ chatId, attachmentIds }))
 }

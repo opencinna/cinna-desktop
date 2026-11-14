@@ -1,4 +1,5 @@
-import { Lock, MessageSquarePlus } from 'lucide-react'
+import { MessageSquarePlus } from 'lucide-react'
+import { SafeIcon } from '../ui/SafeIcon'
 import type { AgentReadiness } from '../../../../shared/agentDrivers'
 import { NoticeButton } from './ComposerNoticePanel'
 import type { ComposerNotice } from './ComposerNoticePanel'
@@ -23,7 +24,7 @@ export function vaultOtherChatNotice(
   return {
     key: 'vault-other-chat',
     tone: 'warning',
-    icon: Lock,
+    icon: SafeIcon,
     text,
     textId,
     title: readiness.detail || text,

@@ -12,10 +12,11 @@
  *
  * Hub core: the desktop's window and its MessagePort are the IPC adapter's.
  */
-import { approvalDetail } from '../../shared/vault/protocol'
+import { approvalDetail, VAULT_TERMINAL_COLS, VAULT_TERMINAL_ROWS } from '../../shared/vault/protocol'
 import type { VaultTerminalEvent } from '../../shared/vault/types'
 import { createLogger } from '../logger/logger'
 import { vaultBackend } from './backend'
+import type { VaultdClient } from './vaultdClient'
 import { VaultError, vaultService } from './vaultService'
 
 const logger = createLogger('vault-terminal')
@@ -23,6 +24,12 @@ const logger = createLogger('vault-terminal')
 export interface VaultTerminalSession {
   /** Keystrokes (or pasted text) for the shell; ignored once ended. */
   write(data: Uint8Array | string): void
+  /**
+   * The terminal's size. Before the shell starts it is kept and the shell
+   * opens at it; afterwards it goes to vaultd's `exec.resize`. Anything but
+   * integers is ignored; out-of-range values are clamped.
+   */
+  resize(cols: unknown, rows: unknown): void
   /** End the session: the shell is killed, the hold released. Idempotent. */
   close(): void
 }
@@ -39,6 +46,8 @@ export function openVaultTerminal(userId: string, agentId: string, emit: (event:
   let channel: { writable: WritableStream<Uint8Array>; readable: ReadableStream<Uint8Array>; close(reason?: string): void } | null = null
   let writer: WritableStreamDefaultWriter<Uint8Array> | null = null
   let stopExit: (() => void) | null = null
+  let size: { cols: number; rows: number } | null = null
+  let shell: { client: VaultdClient; stream: string } | null = null
   const encoder = new TextEncoder()
 
   const finish = (event: VaultTerminalEvent): void => {
@@ -66,7 +75,12 @@ export function openVaultTerminal(userId: string, agentId: string, emit: (event:
         if (notification.method !== 'exec.exit' || notification.params.stream !== stream) return
         exitCode = notification.params.code
       })
-      stream = (await client.request('exec', { preset: 'shell', token })).stream
+      // The shell starts at the terminal's size when the window has sent one.
+      const opened = size
+      stream = (await client.request('exec', { preset: 'shell', token, ...(opened ?? {}) })).stream
+      shell = { client, stream }
+      // A resize that came while `exec` was in flight: send the latest.
+      if (size !== opened) sendResize()
       channel = await client.attach(stream)
       if (closeRequested) return finish({ type: 'exit', code: null })
       writer = channel.writable.getWriter()
@@ -95,7 +109,22 @@ export function openVaultTerminal(userId: string, agentId: string, emit: (event:
     }
   })()
 
+  function sendResize(): void {
+    if (ended || !shell || !size) return
+    shell.client.request('exec.resize', { stream: shell.stream, ...size }).catch(() => { /* the shell is gone: its exit says so */ })
+  }
+
   return {
+    resize(cols, rows) {
+      if (ended || !Number.isInteger(cols) || !Number.isInteger(rows)) return
+      const next = {
+        cols: Math.min(VAULT_TERMINAL_COLS.max, Math.max(VAULT_TERMINAL_COLS.min, cols as number)),
+        rows: Math.min(VAULT_TERMINAL_ROWS.max, Math.max(VAULT_TERMINAL_ROWS.min, rows as number))
+      }
+      if (size && size.cols === next.cols && size.rows === next.rows) return
+      size = next
+      sendResize()
+    },
     write(data) {
       if (ended || !writer) return
       const bytes = typeof data === 'string' ? encoder.encode(data) : data

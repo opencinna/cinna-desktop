@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { ChevronDown, Lock } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
+import { SafeIcon } from '../../../ui/SafeIcon'
 import type { LocalAgentDto } from '../../../../../../shared/localAgents'
 import { useVaultAvailability } from '../../../../hooks/useVault'
 import { AnimatedCollapse } from '../../../ui/AnimatedCollapse'
@@ -103,7 +104,7 @@ function VaultOffCard({
               disabled={!availability.data}
               title={availability.data ? undefined : 'Checking this Mac…'}
             >
-              <Lock size={14} aria-hidden="true" />
+              <SafeIcon size={14} aria-hidden="true" />
               Move to vault…
             </SettingsButton>
           }
@@ -140,7 +141,8 @@ export function ThreatModel(): React.JSX.Element {
       <div>
         <div className="mb-1 text-[14px] font-medium text-[var(--color-text)]">It does not protect</div>
         <ul className="list-disc space-y-1 pl-4">
-          <li>Against deletion. Another program can delete the vault’s disk image, and there is no backup yet, so the agent would be lost.</li>
+          <li>Against deletion. Any program running as you can delete the vault’s disk image, with no Touch ID or password, and the agent goes with it.</li>
+          <li>Backups. Cinna keeps no backup of a vault, and its key never leaves this Mac’s Secure Enclave, so a vault can’t be restored on another Mac. Export the files you can’t lose.</li>
           <li>The clipboard. Anything you copy out of a vault chat can be read by other apps.</li>
           <li>Anything exposed before the move. Rotate credentials other agents could already read.</li>
           <li>An unlocked vault from someone with administrator (root) control of this Mac.</li>

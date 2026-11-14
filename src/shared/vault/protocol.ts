@@ -373,7 +373,16 @@ export interface VaultdRequestMap {
   'files.import': { params: { dest: 'agent'; token: string }; result: { stream: string } }
   'files.export': { params: { path: string; token: string }; result: { stream: string } }
   'files.list': { params: { path: string }; result: { entries: { name: string; type: 'file' | 'dir' | 'link'; size: number; mtime: number }[] } }
-  exec: { params: { preset: ExecPreset; token?: string }; result: { stream: string } }
+  /** `cols`/`rows` (shell only, optional): the terminal's size at open, as for `exec.resize`. */
+  exec: { params: { preset: ExecPreset; token?: string; cols?: number; rows?: number }; result: { stream: string } }
+  /**
+   * The window size of a live `shell` exec stream (integers, clamped to
+   * {@link VAULT_TERMINAL_COLS} / {@link VAULT_TERMINAL_ROWS}). No token: the
+   * terminal approval opened the shell, a size grants nothing. The guest sets
+   * it on the shell's pty; fake mode applies nothing and answers {}.
+   * `not_found` for any other stream.
+   */
+  'exec.resize': { params: { stream: string; cols: number; rows: number }; result: Record<string, never> }
   'secrets.put': { params: { name: string; value: string }; result: Record<string, never> }
   'secrets.list': { params: Record<string, never>; result: { names: string[] } }
   'secrets.delete': { params: { name: string }; result: Record<string, never> }
@@ -399,6 +408,10 @@ export interface VaultdRequestMap {
   'kv.put': { params: { key: string; value: unknown }; result: Record<string, never> }
 }
 export type VaultdMethod = keyof VaultdRequestMap
+
+/** Bounds of a vault terminal's size (`exec`, `exec.resize`); values outside are clamped. */
+export const VAULT_TERMINAL_COLS = { min: 2, max: 500 } as const
+export const VAULT_TERMINAL_ROWS = { min: 2, max: 200 } as const
 
 export type VaultdNotification =
   | { method: 'runtime.installed'; params: { stream: string; sha256: string; bytes: number } }

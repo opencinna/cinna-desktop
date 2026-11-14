@@ -1,6 +1,7 @@
 import { ServiceCredentialsTab } from './ServiceCredentialsTab'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Lock, MessageSquare, Settings } from 'lucide-react'
+import { MessageSquare, Settings } from 'lucide-react'
+import { SafeIcon } from '../../ui/SafeIcon'
 import { useUIStore } from '../../../stores/ui.store'
 import {
   useDraftLocalAgent,
@@ -316,7 +317,7 @@ export function LocalAgentPage(): React.JSX.Element {
               <span className="truncate">{agent.name}</span>
               {inVault && (
                 <span role="img" aria-label="In a vault" title="In a vault" className="shrink-0 text-[var(--color-text-muted)]">
-                  <Lock size={15} aria-hidden="true" />
+                  <SafeIcon size={15} aria-hidden="true" />
                 </span>
               )}
             </h1>

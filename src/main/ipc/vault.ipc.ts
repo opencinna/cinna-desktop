@@ -170,6 +170,7 @@ export function openTerminalPort(port: Pick<MessagePortMain, 'start' | 'postMess
     const command = message.data as VaultTerminalCommand | null
     if (!open || !command || typeof command !== 'object') return
     if (command.type === 'input' && typeof command.data === 'string') session.write(command.data)
+    else if (command.type === 'resize') session.resize(command.cols, command.rows)
     else if (command.type === 'close') session.close()
   })
   port.on('close', () => {

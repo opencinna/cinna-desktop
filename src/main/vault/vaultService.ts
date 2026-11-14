@@ -30,8 +30,10 @@ import {
 import {
   SECURE_AGENTS_DIR,
   SECURE_AGENTS_MARKER,
+  VAULT_CHAT_FILES_SWEPT_CHANNEL,
   VAULT_STATE_CHANNEL,
   type VaultAvailabilityDto,
+  type VaultChatFilesSweptEvent,
   type VaultEngineAuthDto,
   type VaultFileEntryDto,
   type VaultRuntimeDto,
@@ -49,6 +51,7 @@ import { VaultdClient, VaultdError } from './vaultdClient'
 import { pinnedVaultVersions } from './runtimeInstall'
 import { guestHashMismatch, guestRootfs } from './guestImage'
 import { sweepVaultChatFiles } from './vaultChatFiles'
+import { vaultLoginProblem } from './engineLoginCheck'
 
 const logger = createLogger('vault')
 
@@ -58,6 +61,12 @@ export class VaultError extends Error {
     super(message)
     this.name = 'VaultError'
   }
+}
+
+/** Refuses a pasted login that cannot sign in (engineLoginCheck.ts) before it is stored. */
+export async function refuseBadLogin(name: string, value: string): Promise<void> {
+  const problem = await vaultLoginProblem(name, value)
+  if (problem) throw new VaultError('invalid', problem)
 }
 
 /** `driverConfig.vault` of a vault agent's row. */
@@ -138,8 +147,11 @@ function onLeftUnlocked(vaultId: string, locked = true): void {
   // `booting` is the unlock's own progress, not a lock that should cancel it.
   if (locked) {
     lockGenerations.set(vaultId, generationOf(vaultId) + 1)
-    // Attachment copies of its chats that no turn took (a draft never sent).
-    void sweepVaultChatFiles(vaultId)
+    // Attachment copies of its chats that no turn took (a draft never sent);
+    // the composers holding them drop the chips and say why.
+    void sweepVaultChatFiles(vaultId).then((chats) => {
+      if (chats.length > 0) publishEvent(VAULT_CHAT_FILES_SWEPT_CHANNEL, { vaultId, chats } satisfies VaultChatFilesSweptEvent, 'all')
+    })
   }
   vaultTranscripts.closeVault(vaultId)
   const client = clients.get(vaultId)
@@ -515,6 +527,7 @@ export const vaultService = {
       // setup-token` token, told apart by prefix); the vault keeps one, since
       // an API key wins over a token.
       const login = vaultEngineLoginSecret(ref.engine, null, value) ?? name
+      await refuseBadLogin(login, value)
       await client.request('secrets.put', { name: login, value })
       try {
         for (const other of logins) if (other !== login) await client.request('secrets.delete', { name: other })
@@ -524,6 +537,7 @@ export const vaultService = {
         throw new VaultError('internal', 'Saved, but the previous login could not be removed. Save it again.')
       }
     } else {
+      await refuseBadLogin(name, value)
       await client.request('secrets.put', { name, value })
     }
     refreshReadiness(ref.vaultId)

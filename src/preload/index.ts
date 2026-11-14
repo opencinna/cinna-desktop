@@ -105,8 +105,10 @@ import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } 
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
 import {
   VAULT_MOVE_PROGRESS_CHANNEL,
+  VAULT_CHAT_FILES_SWEPT_CHANNEL,
   VAULT_STATE_CHANNEL,
   type VaultAvailabilityDto,
+  type VaultChatFilesSweptEvent,
   type VaultEngineAuthDto,
   type VaultFileEntryDto,
   type VaultHostCopyDto,
@@ -576,6 +578,12 @@ const api = {
       ipcRenderer.on(VAULT_STATE_CHANNEL, listener)
       return () => { ipcRenderer.removeListener(VAULT_STATE_CHANNEL, listener) }
     },
+    /** A lock deleted the copies of these not-yet-sent attachments (by chat): drafts drop the chips. */
+    onChatFilesSwept: (cb: (event: VaultChatFilesSweptEvent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: VaultChatFilesSweptEvent): void => cb(payload)
+      ipcRenderer.on(VAULT_CHAT_FILES_SWEPT_CHANNEL, listener)
+      return () => { ipcRenderer.removeListener(VAULT_CHAT_FILES_SWEPT_CHANNEL, listener) }
+    },
     /** Move to vault… step 1: lists what will not work inside. Changes nothing. */
     precheck: (agentId: string): Promise<VaultResult<VaultPrecheckDto>> => ipcRenderer.invoke('vault:precheck', agentId),
     /** Starts the move; progress arrives on `onMoveProgress`. Prompts twice (unlock, move-in). */
@@ -606,7 +614,9 @@ const api = {
     /**
      * Gated: prompts. A shell inside the vault over a MessagePort: `onEvent`
      * gets `open`, the shell's output, then one `exit` or `error`, after which
-     * the handle is inert. `close()` ends the shell.
+     * the handle is inert. `resize(cols, rows)` sizes the shell's pty (send it
+     * as soon as the terminal is laid out: the shell starts at the last one).
+     * `close()` ends the shell.
      */
     openTerminal: (agentId: string, onEvent: (event: VaultTerminalEvent) => void): VaultTerminalHandle => {
       const channel = new MessageChannel()
@@ -626,6 +636,7 @@ const api = {
       ipcRenderer.postMessage('vault:open-terminal', agentId, [channel.port2])
       return {
         write: (data) => { if (!ended) channel.port1.postMessage({ type: 'input', data } satisfies VaultTerminalCommand) },
+        resize: (cols, rows) => { if (!ended) channel.port1.postMessage({ type: 'resize', cols, rows } satisfies VaultTerminalCommand) },
         close: () => {
           if (ended) return
           channel.port1.postMessage({ type: 'close' } satisfies VaultTerminalCommand)

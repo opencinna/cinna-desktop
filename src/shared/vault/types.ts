@@ -79,6 +79,32 @@ export interface VaultStateEvent {
 export const VAULT_STATE_CHANNEL = 'vault:state'
 
 /**
+ * `vault:chat-files-swept` push: the vault locked and the `userData` copies of
+ * its chats' not-yet-sent attachments were deleted (D23). The ids, by chat,
+ * so each composer draft can drop those chips and say why. Sent only for a
+ * lock that removed something, never for the sweep at start.
+ */
+export interface VaultChatFilesSweptEvent {
+  vaultId: string
+  chats: VaultChatFilesSwept[]
+}
+export interface VaultChatFilesSwept {
+  chatId: string
+  attachmentIds: string[]
+}
+
+export const VAULT_CHAT_FILES_SWEPT_CHANNEL = 'vault:chat-files-swept'
+
+/**
+ * What a draft that lost files to a lock says, in place of its file error:
+ * short, since it sits in the composer toolbar's one-line slot. Only Cinna's
+ * staged copy went; the user's own file is untouched, so it says what to do.
+ */
+export function vaultChatFilesSweptText(count: number): string {
+  return count === 1 ? 'Vault locked: attach the file again' : 'Vault locked: attach the files again'
+}
+
+/**
  * Readiness `vault_other_chat`: a vault agent in a chat that started before it
  * moved into its vault. The same words in the composer row and in the refusal
  * of a send there.
@@ -114,11 +140,16 @@ export type VaultTerminalEvent =
   | { type: 'exit'; code: number | null }
   | { type: 'error'; code: VaultErrorCode; message: string }
 
-/** Window → main: keystrokes, and the end of the session. */
-export type VaultTerminalCommand = { type: 'input'; data: string } | { type: 'close' }
+/** Window → main: keystrokes, the terminal's size (columns × rows), and the end of the session. */
+export type VaultTerminalCommand =
+  | { type: 'input'; data: string }
+  | { type: 'resize'; cols: number; rows: number }
+  | { type: 'close' }
 
 export interface VaultTerminalHandle {
   write(data: string): void
+  /** The terminal's size; the shell's pty follows it (sent before `open` too: the shell starts at it). */
+  resize(cols: number, rows: number): void
   close(): void
 }
 

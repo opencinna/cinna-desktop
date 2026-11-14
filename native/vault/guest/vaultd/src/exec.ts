@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { approvalDetail, type ApprovalClaims, type ExecPreset } from '../../../../../src/shared/vault/protocol'
 import type { Ctx, Handler } from './context'
 import { bindChild, spawnGroup } from './procs'
+import { optionalPtySize, ShellPty } from './pty'
 import { spawnIdentity, roleEnv, type Role } from './users'
 import { log, oneOf } from './util'
 
@@ -111,22 +112,31 @@ export function presetCommand(ctx: Ctx, preset: ExecPreset): { command: string; 
 
 export const exec: Handler = async (ctx, params, conn) => {
   const preset = oneOf(params.preset, PRESETS, 'preset')
+  // The terminal's size at open (shell only), checked before a single-use token is spent.
+  const size = preset === 'shell' ? optionalPtySize(params) : null
   const claims = ctx.tokens.verify(params.token, preset === 'shell'
     ? { actions: ['terminal'], detail: () => approvalDetail({ method: 'exec', preset }) }
     : { actions: ['move-in', 'install'] })
+  // Applied once the shell's pty exists, then on each `exec.resize`.
+  const pty = preset === 'shell' ? new ShellPty(ctx.ptyOps, ctx.config.path, size, spawnIdentity(ctx, 'agent').asUser) : null
   const { command, args, interactive } = presetCommand(ctx, preset)
   const role = presetRole(preset)
   // Only this exec gets the install hosts (D37); the helper revokes the credential at exec-end.
   const cred = CRED_PRESETS.includes(preset) ? proxyCredOf(claims) : null
   if (cred) ctx.helperEvents.execStarted(cred)
   let ended = false
+  let stream = ''
   const end = (): void => {
     if (ended) return
     ended = true
     if (cred) ctx.helperEvents.execEnded(cred)
+    if (pty) {
+      pty.end()
+      ctx.shells.delete(stream)
+    }
   }
 
-  const stream = ctx.streams.create((socket) => {
+  stream = ctx.streams.create((socket) => {
     const env = {
       ...roleEnv(ctx, role),
       ...(cred ? credProxyEnv(ctx.config.proxyEnv, cred) : {}),
@@ -135,6 +145,7 @@ export const exec: Handler = async (ctx, params, conn) => {
     const child = spawnGroup(command, args, {
       cwd: ctx.layout.agent, env, stdio: ['pipe', 'pipe', 'pipe'], ...spawnIdentity(ctx, role)
     })
+    pty?.started(child.pid)
     log('info', 'exec started', { preset, stream })
     bindChild(child, socket, interactive, (code) => {
       log('info', 'exec exited', { preset, stream, code })
@@ -142,5 +153,6 @@ export const exec: Handler = async (ctx, params, conn) => {
       conn.notify('exec.exit', { stream, code })
     })
   }, end)
+  if (pty) ctx.shells.set(stream, pty)
   return { stream }
 }

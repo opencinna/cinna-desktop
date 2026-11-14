@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { Loader2, Lock, Square, Trash2 } from 'lucide-react'
+import { Loader2, Square, Trash2 } from 'lucide-react'
+import { SafeIcon } from '../ui/SafeIcon'
 import { useChatStore } from '../../stores/chat.store'
 import { useDeleteChat, useInterruptChat, useRenameChat, useSetChatPinned } from '../../hooks/useChat'
 import { useOpenAgentPath } from '../../hooks/useLocalAgents'
@@ -37,7 +38,7 @@ interface ChatItemProps {
     pinnedRank?: number | null
     /** The dashboard whose panel started this chat: a "From dashboard" mark on the row. */
     originDashboardId?: string | null
-    /** The Agent Vault holding this chat's transcript: a lock on the row. */
+    /** The Agent Vault holding this chat's transcript: a safe on the row. */
     vaultId?: string | null
   }
   /** From `useChatSummaries`, not the polled list row. Not loaded yet: no tooltip. */
@@ -321,10 +322,10 @@ export function ChatItem({ chat, summary: loaded, index, folderAgentId, dragGrou
           {renameChat.isPending && renameChat.variables ? renameChat.variables.title.trim() : chat.title}
         </span>
       )}
-      {/* A vault chat: its transcript lives in the agent's vault (the sidebar's agent row wears the same lock). */}
+      {/* A vault chat: its transcript lives in the agent's vault (the sidebar's agent row wears the same safe; a lock means locked or unlocked, never "is a vault"). */}
       {!renaming && chat.vaultId && (
-        <span role="img" aria-label="In a vault" title="Kept in the agent’s vault" data-vault-chat className="shrink-0 text-[var(--color-text-muted)]">
-          <Lock size={11} aria-hidden="true" />
+        <span role="img" aria-label="In a vault" title="In a vault" data-vault-chat className="shrink-0 text-[var(--color-text-muted)]">
+          <SafeIcon size={11} aria-hidden="true" />
         </span>
       )}
       {!renaming && <DashboardOriginRowMark dashboardId={chat.originDashboardId} />}

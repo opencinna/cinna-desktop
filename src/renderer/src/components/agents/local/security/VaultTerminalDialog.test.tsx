@@ -8,11 +8,18 @@ import { VaultOnPanel } from './VaultOnPanel'
 
 /** Security → Terminal: gated on an unlocked vault, a dialog that streams the shell both ways, Close ends it. */
 
-const term = vi.hoisted(() => ({ writes: [] as (string | Uint8Array)[], onData: null as null | ((d: string) => void), disposed: 0 }))
+const term = vi.hoisted(() => ({
+  writes: [] as (string | Uint8Array)[], onData: null as null | ((d: string) => void), disposed: 0,
+  /** What the next fit() lays the grid out as (the host's size, in cells). */
+  fitTo: { cols: 80, rows: 24 },
+  current: null as null | { cols: number; rows: number }
+}))
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     options: Record<string, unknown> = {}
     cols = 80
+    rows = 24
+    constructor() { term.current = this }
     loadAddon(): void {}
     open(): void {}
     focus(): void {}
@@ -22,11 +29,19 @@ vi.mock('@xterm/xterm', () => ({
     dispose(): void { term.disposed++ }
   }
 }))
-vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit(): void {} } }))
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit(): void { Object.assign(term.current!, term.fitTo) } } }))
+
+/** jsdom has no ResizeObserver: one whose callback the test fires, frames run at once. */
+const observers = vi.hoisted(() => [] as (() => void)[])
+class FakeResizeObserver {
+  constructor(private readonly cb: () => void) {}
+  observe(): void { observers.push(this.cb) }
+  disconnect(): void { observers.splice(observers.indexOf(this.cb), 1) }
+}
 
 let status: VaultStatusDto
 let emit: ((event: VaultTerminalEvent) => void) | null = null
-const handle = { write: vi.fn(), close: vi.fn() }
+const handle = { write: vi.fn(), resize: vi.fn(), close: vi.fn() }
 const vault = {
   status: vi.fn(async () => ({ ok: true, data: status })),
   hostCopy: vi.fn(async () => ({ ok: true, data: null })),
@@ -46,10 +61,17 @@ beforeEach(() => {
   }
   emit = null
   term.writes = []
+  term.fitTo = { cols: 80, rows: 24 }
+  observers.length = 0
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+  vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { fn(0); return 0 })
   ;(window as unknown as { api: unknown }).api = { vault }
   vi.clearAllMocks()
 })
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 function renderPanel(state: 'locked' | 'unlocked'): void {
   const agent = { id: 'folder:alpha', name: 'Alpha', path: '', kind: 'kit', vault: { vaultId: 'v1', state, engine: 'claude' } } as LocalAgentDto
@@ -86,6 +108,32 @@ describe('Security → Terminal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(handle.close).toHaveBeenCalled()
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('sends the terminal size before the approval, then again only when the box changes it', async () => {
+    renderPanel('unlocked')
+    const button = await screen.findByRole('button', { name: /Open terminal/ })
+    await vi.waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false))
+    term.fitTo = { cols: 132, rows: 30 }
+    fireEvent.click(button)
+    // The shell starts at it.
+    expect(handle.resize.mock.calls).toEqual([[132, 30]])
+    act(() => emit?.({ type: 'open' }))
+    expect(handle.resize).toHaveBeenCalledTimes(1)
+    // The user drags the box taller.
+    term.fitTo = { cols: 132, rows: 44 }
+    act(() => observers.forEach((cb) => cb()))
+    expect(handle.resize.mock.calls.at(-1)).toEqual([132, 44])
+    // A resize that does not change the grid sends nothing.
+    act(() => observers.forEach((cb) => cb()))
+    expect(handle.resize).toHaveBeenCalledTimes(2)
+    // The box is the user's to resize, within bounds.
+    const host = document.querySelector('[data-vault-terminal]')!
+    expect(host.className).toContain('resize-y')
+    expect(host.className).toContain('min-h-[12rem]')
+    expect(host.className).toContain('max-h-[min(70vh,calc(84vh_-_11rem))]')
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(observers).toHaveLength(0)
   })
 
   it('says a declined prompt and keeps the dialog until closed', async () => {

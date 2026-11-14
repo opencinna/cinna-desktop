@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Lock, MessageSquare, Plus } from 'lucide-react'
+import { MessageSquare, Plus } from 'lucide-react'
+import { SafeIcon } from '../../ui/SafeIcon'
 import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
 import {
@@ -155,7 +156,7 @@ function AgentRow({ agent, color, menuOpen, onMenu }: {
         <span className="min-w-0 flex-1 truncate text-xs">{agent.name}</span>
         {agent.vault && (
           <span role="img" aria-label="In a vault" title="In a vault" className="mt-0.5 shrink-0 text-[var(--color-text-muted)]">
-            <Lock size={11} aria-hidden="true" />
+            <SafeIcon size={11} aria-hidden="true" />
           </span>
         )}
       </button>

@@ -43,6 +43,7 @@ const { openVaultTerminal } = await import('./vaultTerminal')
 const { openTerminalPort } = await import('../ipc/vault.ipc')
 const { userActivation } = await import('../auth/activation')
 const { buildVaultd } = await import('./testSupport/fakeRuntime')
+const { VaultdClient } = await import('./vaultdClient')
 
 const USER = '__default__'
 const AGENT = 'folder:dddddddd-0000-0000-0000-000000000004'
@@ -138,6 +139,41 @@ describe('Open terminal', () => {
     expect(release).toHaveBeenCalledTimes(1)
     // Nothing typed or printed reaches a log line.
     expect(logged.join('\n')).not.toContain('sum=')
+  }, 30_000)
+
+  it('opens the shell at the size the window sent first, then forwards each change as exec.resize (validated, clamped)', async () => {
+    vi.spyOn(userActivation, 'isActivated').mockReturnValue(true)
+    await unlock()
+    const request = vi.spyOn(VaultdClient.prototype, 'request')
+    const posted: VaultTerminalEvent[] = []
+    const handlers: Record<string, (arg?: unknown) => void> = {}
+    openTerminalPort({
+      start: () => {},
+      postMessage: (event: unknown) => { posted.push(event as VaultTerminalEvent) },
+      close: () => {},
+      on: ((name: string, fn: (arg?: unknown) => void) => { handlers[name] = fn }) as never
+    }, AGENT)
+    // Sent before the approval: kept, and the shell starts at it.
+    handlers['message']!({ data: { type: 'resize', cols: 132, rows: 41 } })
+    await vi.waitFor(() => expect(posted.some((e) => e.type === 'open')).toBe(true), { timeout: 15_000 })
+    const execCall = request.mock.calls.find(([method]) => method === 'exec')!
+    expect(execCall[1]).toMatchObject({ preset: 'shell', cols: 132, rows: 41 })
+    const stream = (await request.mock.results[request.mock.calls.indexOf(execCall)]!.value as { stream: string }).stream
+
+    handlers['message']!({ data: { type: 'resize', cols: 90, rows: 20 } })
+    // Not integers: ignored. Out of range: clamped. The same size twice: sent once.
+    handlers['message']!({ data: { type: 'resize', cols: '90', rows: 20 } })
+    handlers['message']!({ data: { type: 'resize', cols: 90.5, rows: 20 } })
+    handlers['message']!({ data: { type: 'resize', cols: 9_000, rows: 1 } })
+    handlers['message']!({ data: { type: 'resize', cols: 9_001, rows: 0 } })
+    const resizes = (): unknown[] => request.mock.calls.filter(([method]) => method === 'exec.resize').map(([, params]) => params)
+    await vi.waitFor(() => expect(resizes()).toHaveLength(2))
+    expect(resizes()).toEqual([{ stream, cols: 90, rows: 20 }, { stream, cols: 500, rows: 2 }])
+    // vaultd (fake mode) took them: answered {}, and no error ended the session.
+    const answers = request.mock.calls.flatMap(([method], i) => (method === 'exec.resize' ? [request.mock.results[i]!.value] : []))
+    expect(await Promise.all(answers)).toEqual([{}, {}])
+    expect(posted.some((e) => e.type === 'error' || e.type === 'exit')).toBe(false)
+    handlers['close']!()
   }, 30_000)
 
   it('ends the shell when the window closes it', async () => {

@@ -14,6 +14,7 @@ import { exec } from './exec'
 import { filesExport, filesImport, filesList } from './files'
 import { cryptsetupOps, fakeOps, HELPER_CONNECTIONS_MAX, HelperEvents, serveHelper, type HelperOps } from './helperControl'
 import { killGroup } from './procs'
+import { execResize, ptyOpsFor, type PtyOps } from './pty'
 import { runtimeInstall, runtimeStatus } from './runtime'
 import { secretsDelete, secretsList, secretsPut } from './secrets'
 import { secretsPutFile } from './secretFiles'
@@ -34,6 +35,7 @@ export const HANDLERS: Record<VaultdMethod, Handler> = {
   'files.export': filesExport,
   'files.list': filesList,
   exec,
+  'exec.resize': execResize,
   'secrets.put': secretsPut,
   'secrets.list': secretsList,
   'secrets.delete': secretsDelete,
@@ -85,6 +87,8 @@ export interface VaultdOptions {
   attachTimeoutMs?: number
   now?: () => number
   helperOps?: HelperOps
+  /** Tests: how a shell's pty is sized (default: Linux outside fake mode, else nothing). */
+  ptyOps?: PtyOps | null
 }
 
 export interface Vaultd {
@@ -238,6 +242,8 @@ export function createVaultd(config: VaultdConfig, options: VaultdOptions = {}):
     helperEvents: new HelperEvents(),
     streams: new Streams(options.attachTimeoutMs),
     engines: new Map(),
+    shells: new Map(),
+    ptyOps: options.ptyOps !== undefined ? options.ptyOps : ptyOpsFor(config.fake),
     serial: serialQueue()
   }
   const sockets = new Set<Socket>()

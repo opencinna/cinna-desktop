@@ -29,6 +29,8 @@ vi.mock('../logger/logger', () => ({
 const { chatRepo } = await import('../db/chats')
 const { agentRepo } = await import('../db/agents')
 const { installRuntimeHost } = await import('../host/runtimeHost')
+const { installEventPublisher } = await import('../host/events')
+const { VAULT_CHAT_FILES_SWEPT_CHANNEL } = await import('../../shared/vault/types')
 const { fileService } = await import('../services/fileService')
 const { pastedRoot } = await import('../services/pastedFiles')
 const { vaultTranscripts } = await import('./transcriptStore')
@@ -141,13 +143,13 @@ describe('attachments in a vault chat', () => {
     vaultTranscripts.openVault(OTHER_VAULT)
     const otherChat = chatRepo.create(USER, { agentId: OTHER_AGENT }).id
     vaultService.bindChat(USER, USER, otherChat, OTHER_AGENT)
-    await fileService.ingest({ userId: USER, scope: 'local', chatId: vaultChat, filePaths: [source('draft.txt')] })
-    await fileService.ingest({ userId: USER, scope: 'local', chatId: otherChat, filePaths: [source('other.txt')] })
+    const [draft] = await fileService.ingest({ userId: USER, scope: 'local', chatId: vaultChat, filePaths: [source('draft.txt')] })
+    const [other] = await fileService.ingest({ userId: USER, scope: 'local', chatId: otherChat, filePaths: [source('other.txt')] })
     await fileService.ingest({ userId: USER, scope: 'local', chatId: hostChat, filePaths: [source('host.txt')] })
     expect(fileRows()).toBe(3)
 
-    // One vault locks: its chats' copies go, nothing else.
-    expect(await sweepVaultChatFiles(VAULT)).toBe(1)
+    // One vault locks: its chats' copies go, nothing else; it says which, by chat.
+    expect(await sweepVaultChatFiles(VAULT)).toEqual([{ chatId: vaultChat, attachmentIds: [draft!.id] }])
     expect(stored(vaultChat)).toEqual([])
     expect(stored(otherChat)).toHaveLength(1)
     expect(stored(hostChat)).toHaveLength(1)
@@ -155,10 +157,38 @@ describe('attachments in a vault chat', () => {
 
     // At start: every vault chat's rows, and the whole directory (a stray file a crash left too).
     writeFileSync(join(userData, 'vault', 'chat-files', USER, otherChat, 'stray.bin'), 'x')
-    expect(await sweepVaultChatFiles()).toBe(1)
+    expect(await sweepVaultChatFiles()).toEqual([{ chatId: otherChat, attachmentIds: [other!.id] }])
     expect(existsSync(join(userData, 'vault', 'chat-files'))).toBe(false)
     expect(stored(hostChat)).toHaveLength(1)
     expect(fileRows()).toBe(1)
+  })
+
+  it('groups a lock\'s sweep by chat, and a lock publishes it once for the drafts; a lock that removed nothing publishes nothing', async () => {
+    const secondChat = chatRepo.create(USER, { agentId: AGENT }).id
+    vaultService.bindChat(USER, USER, secondChat, AGENT)
+    const first = await fileService.ingest({ userId: USER, scope: 'local', chatId: vaultChat, filePaths: [source('a.txt'), source('b.txt')] })
+    const [second] = await fileService.ingest({ userId: USER, scope: 'local', chatId: secondChat, filePaths: [source('c.txt')] })
+    const published: { channel: string; payload: unknown; audience: string }[] = []
+    installEventPublisher((channel, payload, audience) => { if (channel === VAULT_CHAT_FILES_SWEPT_CHANNEL) published.push({ channel, payload, audience }) })
+    try {
+      // The vault leaves `unlocked` (the lock path every lock goes through).
+      vaultService.untrack(VAULT, false)
+      await vi.waitFor(() => expect(published).toHaveLength(1))
+      const payload = published[0]!.payload as { vaultId: string; chats: { chatId: string; attachmentIds: string[] }[] }
+      expect(payload.vaultId).toBe(VAULT)
+      expect([...payload.chats].sort((a, b) => a.chatId.localeCompare(b.chatId))).toEqual([
+        { chatId: vaultChat, attachmentIds: first.map((f) => f.id) },
+        { chatId: secondChat, attachmentIds: [second!.id] }
+      ].sort((a, b) => a.chatId.localeCompare(b.chatId)))
+      expect(published[0]!.audience).toBe('all')
+      expect(fileRows()).toBe(0)
+
+      vaultService.untrack(VAULT, false)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(published).toHaveLength(1)
+    } finally {
+      installEventPublisher(() => {})
+    }
   })
 
   it('leaves an ordinary chat\'s attachments alone', async () => {

@@ -127,6 +127,25 @@ describe('MoveToVaultDialog', () => {
     expect(screen.getByRole('button', { name: 'Move' })).toBeTruthy()
   })
 
+  it('stays on the form, busy, while main checks the key, and keeps the key when it is refused', async () => {
+    precheck = { ...precheck, engine: 'antigravity', needsApiKey: true, apiKeyName: 'GEMINI_API_KEY' }
+    let answer: (value: unknown) => void = () => {}
+    vault.moveIn.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }) as never)
+    renderDialog()
+    const key = (await screen.findByLabelText('API key for the engine inside the vault')) as HTMLInputElement
+    fireEvent.change(key, { target: { value: 'AIzaWrongKey123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }))
+    const busy = await screen.findByRole('button', { name: 'Checking key…' })
+    expect((busy as HTMLButtonElement).disabled).toBe(true)
+    expect(key.readOnly).toBe(true)
+    expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => answer({ ok: false, code: 'invalid', message: 'Google refused this Gemini API key.' }))
+    expect(await screen.findByText('Google refused this Gemini API key.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Move' })).toBeTruthy()
+    expect(key.value).toBe('AIzaWrongKey123')
+    expect(key.readOnly).toBe(false)
+  })
+
   it('shows each step as it runs, with the rebuild output, and a failure that closes nothing', async () => {
     const { onClose } = renderDialog()
     await screen.findByText('Scripts call macOS-only commands')

@@ -215,6 +215,16 @@ describe('pre-check for the other engines', () => {
   })
 })
 
+describe('a pasted login that cannot sign in', () => {
+  it('refuses a claude setup-token token for OpenCode on an Anthropic model before the move starts', async () => {
+    env.engine = 'opencode'
+    installVaultMoveDeps({ launchFacts: () => ({ model: 'claude-haiku-4-5', approval: 'ask', provider: 'anthropic' }) })
+    await expect(moveService.moveIn(USER, AGENT, { apiKey: 'sk-ant-oat01-0123456789' })).rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('Claude Code token') })
+    expect(events).toEqual([])
+    expect(agentRepo.getOwned(USER, AGENT)!.driverConfig?.['vault']).toBeUndefined()
+  })
+})
+
 describe('Move to vault… on Codex', () => {
   it('moves in with the key as OPENAI_API_KEY and the settings in the vault; a turn\'s engine is configured by vaultd from them', async () => {
     const { vaultId } = await moveIn({ apiKey: 'sk-openai-test-0123456789' })

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight, Download, File, Folder, Loader2, Lock, LockOpen, Plus, SquareTerminal, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, File, Folder, FolderOutput, Loader2, Lock, LockOpen, Plus, SquareTerminal, Trash2 } from 'lucide-react'
 import type { LocalAgentDto } from '../../../../../../shared/localAgents'
 import type { LocalAgentVaultInfo, VaultEngine, VaultStatusDto } from '../../../../../../shared/vault/types'
 import { VAULT_ENGINE_HOSTS, VAULT_ENGINE_LOGIN } from '../../../../../../shared/vault/protocol'
@@ -1125,7 +1125,7 @@ function LeaveVaultCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element 
       {/* The buttons say what they do; a sentence restating them was removed (rule 7). */}
       <div className="flex items-center justify-end gap-2">
         <SettingsButton onClick={() => { moveOut.reset(); setAsking('move-out') }}>
-          <LockOpen size={14} aria-hidden="true" />
+          <FolderOutput size={14} aria-hidden="true" />
           Move out of vault…
         </SettingsButton>
         <button

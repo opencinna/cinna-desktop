@@ -1,13 +1,16 @@
 import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import type {
-  VaultAvailabilityDto,
-  VaultErrorCode,
-  VaultMoveOptions,
-  VaultResult,
-  VaultStateEvent,
-  VaultStatusDto
+import {
+  vaultChatFilesSweptText,
+  type VaultAvailabilityDto,
+  type VaultChatFilesSweptEvent,
+  type VaultErrorCode,
+  type VaultMoveOptions,
+  type VaultResult,
+  type VaultStateEvent,
+  type VaultStatusDto
 } from '../../../shared/vault/types'
+import { composerDraftSurface, useComposerDraftStore } from '../stores/composerDraft.store'
 import { LOCAL_AGENTS_KEY, localAgentKey } from './useLocalAgents'
 
 /**
@@ -90,20 +93,48 @@ export function applyVaultState(queryClient: QueryClient, event: VaultStateEvent
 }
 
 /**
+ * A lock deleted the copies of these not-yet-sent attachments (D23): each
+ * chat's composer draft drops their chips and says why in its file error, in
+ * the store, so a composer that is not mounted shows it when it comes back.
+ * Typed text and everything else in the draft stay.
+ */
+export function applyVaultChatFilesSwept(event: VaultChatFilesSweptEvent): void {
+  const store = useComposerDraftStore.getState()
+  for (const { chatId, attachmentIds } of event.chats) {
+    const gone = new Set(attachmentIds)
+    for (const key of Object.keys(store.drafts)) {
+      if (composerDraftSurface(key) !== `chat:${chatId}`) continue
+      store.update(key, (draft) => {
+        const kept = draft.files.attachments.filter((attachment) => !gone.has(attachment.id))
+        const lost = draft.files.attachments.length - kept.length
+        if (lost === 0) return {}
+        return { files: { ...draft.files, attachments: kept, error: vaultChatFilesSweptText(lost) } }
+      })
+    }
+  }
+}
+
+/**
  * App-wide: every `vault:state` push updates that vault's status and drops the
- * agent lists (the sidebar lock, the readiness row), which carry the state too.
+ * agent lists (the readiness row and the agent page's Unlock / Lock now), which carry the state too;
+ * a lock's attachment sweep reaches the composer drafts.
  */
 export function useVaultWatch(): void {
   const queryClient = useQueryClient()
   useEffect(() => {
     const api = vaultApi()
     if (!api?.onState) return
-    return api.onState((event) => {
+    const offState = api.onState((event) => {
       applyVaultState(queryClient, event)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY }, { cancelRefetch: false })
       void queryClient.invalidateQueries({ queryKey: localAgentKey(event.agentId) }, { cancelRefetch: false })
       void queryClient.invalidateQueries({ queryKey: ['agents'] }, { cancelRefetch: false })
     })
+    const offSwept = api.onChatFilesSwept?.(applyVaultChatFilesSwept)
+    return () => {
+      offState()
+      offSwept?.()
+    }
   }, [queryClient])
 }
 

@@ -92,7 +92,8 @@ describe('AgentVaultSection — off', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByText(/there is no backup yet, so the agent would be lost/)).toBeTruthy()
+    expect(screen.getByText(/with no Touch ID or password, and the agent goes with it/)).toBeTruthy()
+    expect(screen.getByText(/Cinna keeps no backup of a vault/)).toBeTruthy()
     expect(screen.getByText(/The clipboard/)).toBeTruthy()
   })
 

@@ -415,6 +415,40 @@ describe('exec', () => {
   })
 })
 
+describe('exec.resize', () => {
+  beforeEach(() => boot())
+  const shellToken = (): string => mint('terminal', { detail: approvalDetail({ method: 'exec', preset: 'shell' }) })
+
+  it('takes integer sizes for a live shell stream, with no token, and answers {} (fake mode applies nothing)', async () => {
+    const { stream } = await c.call<{ stream: string }>('exec', { preset: 'shell', token: shellToken(), cols: 120, rows: 40 })
+    expect(await c.call('exec.resize', { stream, cols: 100, rows: 30 })).toEqual({})
+    // Out of range is clamped, not refused.
+    expect(await c.code('exec.resize', { stream, cols: 1, rows: 10_000 })).toBe('ok')
+    for (const bad of [{ cols: 80.5, rows: 24 }, { cols: '80', rows: 24 }, { cols: 80 }, { rows: 24 }, { cols: null, rows: 24 }, { cols: Number.NaN, rows: 24 }]) {
+      expect(await c.code('exec.resize', { stream, ...bad })).toBe('invalid')
+    }
+  })
+
+  it('refuses an unknown stream, a non-shell exec and a shell that has exited', async () => {
+    expect(await c.code('exec.resize', { stream: 'nope', cols: 80, rows: 24 })).toBe('not_found')
+    expect(await c.code('exec.resize', { cols: 80, rows: 24 })).toBe('not_found')
+    const check = await c.call<{ stream: string }>('exec', { preset: 'check', token: mint('move-in') })
+    expect(await c.code('exec.resize', { stream: check.stream, cols: 80, rows: 24 })).toBe('not_found')
+    await collect(await attach(h.sock, check.stream))
+
+    const { stream } = await c.call<{ stream: string }>('exec', { preset: 'shell', token: shellToken() })
+    const s = await attach(h.sock, stream)
+    s.end('exit 0\n')
+    await collect(s)
+    await c.waitFor((n) => n.method === 'exec.exit' && n.params.stream === stream)
+    expect(await c.code('exec.resize', { stream, cols: 80, rows: 24 })).toBe('not_found')
+  })
+
+  it('refuses a bad initial size on exec before asking anything of the token', async () => {
+    expect(await c.code('exec', { preset: 'shell', token: shellToken(), cols: 'wide', rows: 24 })).toBe('invalid')
+  })
+})
+
 describe('transcripts and kv', () => {
   beforeEach(() => boot())
 

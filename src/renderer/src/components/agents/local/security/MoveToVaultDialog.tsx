@@ -91,6 +91,8 @@ export function MoveToVaultDialog({
   const [rolledBack, setRolledBack] = useState<boolean | null>(null)
   const [rotation, setRotation] = useState<VaultRotationItem[]>([])
   const [cancelling, setCancelling] = useState(false)
+  /** Main is still accepting the move (it checks a pasted key with its provider first, up to a few seconds). */
+  const [starting, setStarting] = useState(false)
   const [typedName, setTypedName] = useState('')
   const moveIdRef = useRef<string | null>(null)
   const runningRef = useRef(false)
@@ -133,7 +135,7 @@ export function MoveToVaultDialog({
   const data = precheck.data
   const blockers = data?.items.filter((item) => item.severity === 'blocker') ?? []
   const moving = phase === 'move' && failure === null
-  const canStart = !!data && data.canMove && blockers.length === 0
+  const canStart = !!data && data.canMove && blockers.length === 0 && !starting
 
   const start = async (): Promise<void> => {
     const sizeProblem = sizeLimitProblem(sizeText, null)
@@ -144,8 +146,10 @@ export function MoveToVaultDialog({
     setFailure(null)
     setRolledBack(null)
     moveIdRef.current = null
+    // Progress is recorded from here; the form stays up, busy, until main has
+    // accepted the move, so a refused key comes back to the field it is about.
     runningRef.current = true
-    setPhase('move')
+    setStarting(true)
     try {
       const moveId = await startVaultMove(agentId, {
         sizeBytes: Math.round(Number(sizeText) * GB),
@@ -153,11 +157,13 @@ export function MoveToVaultDialog({
         ...(data?.needsApiKey && apiKey.trim() ? { apiKey: apiKey.trim() } : {})
       })
       moveIdRef.current = moveId
+      setPhase('move')
     } catch (err) {
-      // Refused before anything ran: back where the user pressed Move, with the reason (rule 6).
+      // Refused before anything ran: still on the form, with the reason (rule 6).
       runningRef.current = false
-      setPhase('check')
       setFormError(vaultErrorText(err, 'Cancelled at the prompt — nothing was moved.'))
+    } finally {
+      setStarting(false)
     }
   }
 
@@ -223,6 +229,7 @@ export function MoveToVaultDialog({
               sizeError={sizeError}
               apiKey={apiKey}
               setApiKey={setApiKey}
+              disabled={starting}
             />
           ) : phase === 'move' ? (
             <ProgressPanel steps={steps} />
@@ -276,9 +283,9 @@ export function MoveToVaultDialog({
       >
         {phase === 'check' && (
           <>
-            <button type="button" className={CANCEL} onClick={onClose}>Cancel</button>
-            <button ref={primaryRef} type="button" className={PRIMARY} disabled={!canStart} onClick={() => void start()}>
-              Move
+            <button type="button" className={CANCEL} disabled={starting} onClick={onClose}>Cancel</button>
+            <button ref={primaryRef} type="button" className={`${PRIMARY} min-w-[7rem]`} disabled={!canStart} aria-busy={starting || undefined} onClick={() => void start()}>
+              {starting ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" />{apiKey.trim() && data?.needsApiKey ? 'Checking key…' : 'Starting…'}</> : 'Move'}
             </button>
           </>
         )}
@@ -351,7 +358,8 @@ function PrecheckPanel({
   setSizeText,
   sizeError,
   apiKey,
-  setApiKey
+  setApiKey,
+  disabled = false
 }: {
   loading: boolean
   error: string | null
@@ -361,6 +369,8 @@ function PrecheckPanel({
   sizeError: string | null
   apiKey: string
   setApiKey: (value: string) => void
+  /** While main accepts the move: what was sent cannot be edited under it. */
+  disabled?: boolean
 }): React.JSX.Element {
   const items = [...(data?.items ?? [])].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
   return (
@@ -397,6 +407,7 @@ function PrecheckPanel({
             inputMode="decimal"
             value={sizeText}
             onChange={(event) => setSizeText(event.target.value)}
+            readOnly={disabled}
             aria-label="Disk size limit in GB"
             aria-invalid={sizeError ? true : undefined}
             aria-describedby="vault-size-note"
@@ -424,6 +435,7 @@ function PrecheckPanel({
               autoComplete="off"
               placeholder={apiKeyPlaceholder(data.apiKeyName)}
               onChange={(event) => setApiKey(event.target.value)}
+              readOnly={disabled}
               aria-label="API key for the engine inside the vault"
               title="This Mac signs in with a subscription login, which stays here. The vault signs in with this key; Cinna keeps no copy."
               className={`min-w-0 flex-1 font-mono ${FIELD_BASE}`}

@@ -12,7 +12,7 @@ import type { LocalAgentDto } from '../../src/shared/localAgents'
  * approvals granted at once. No VM, no helper, no prompt — so nothing here
  * proves isolation, the helper's prompts or the network allowlist; it proves
  * the app's side of the flow: the Security tab, Move to vault… with its steps
- * and rollback, Delete original, the lock in the sidebar and title, the
+ * and rollback, Delete original, the safe in the sidebar and title, the
  * composer's locked row, and that a vault chat's words never reach SQLite.
  *
  * The engine inside is the scripted Claude CLI (`fakeClaudeCli.ts`) saved as
@@ -164,7 +164,7 @@ test('V1 the Security tab offers Move to vault and says what a vault protects ag
   ).toBeVisible()
 })
 
-test('V2 a move runs every step, Delete original removes the folder, and the agent wears a lock', async ({ cinna }) => {
+test('V2 a move runs every step, Delete original removes the folder, and the agent wears a safe', async ({ cinna }) => {
   test.setTimeout(MOVE_TIMEOUT + 120_000)
   const agent = await arrangeClaudeAgent(cinna)
   const page = cinna.page
@@ -208,7 +208,7 @@ test('V2 a move runs every step, Delete original removes the folder, and the age
   await dialog.getByRole('button', { name: 'Done' }).click()
   await expect(dialog).toHaveCount(0)
 
-  // The agent: a lock in the title and on its sidebar row, no folder tabs, no host-copy row.
+  // The agent: a safe in the title and on its sidebar row, no folder tabs, no host-copy row.
   await expect(page.getByRole('heading', { level: 1, name: AGENT }).getByRole('img', { name: 'In a vault' })).toBeVisible()
   await expect(page.getByRole('button', { name: AGENT }).first().getByRole('img', { name: 'In a vault' })).toBeVisible()
   for (const name of FOLDER_TABS) await expect(page.getByRole('tab', { name })).toHaveCount(0)
