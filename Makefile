@@ -10,7 +10,7 @@ PW := npx playwright test -c e2e/playwright.config.ts
 # (CINNA_E2E_LIVE_ENGINE, e2e/fixtures/liveEngine.ts); claude/codex/antigravity use your own login.
 LIVE_ENV = $(if $(LIVE_ENGINE),CINNA_E2E_LIVE_ENGINE=$(LIVE_ENGINE) )
 
-.PHONY: help test test-hub typecheck build speech-helper vault-image vault-helper vault-helper-smoke vault-dev vault-move-smoke vault-live kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build speech-helper vault-image vault-helper vault-helper-smoke vault-dev vault-dev-restart vault-move-smoke vault-live kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -37,6 +37,12 @@ vault-helper: ## Agent Vault helper into resources/vault/VaultHelper.app: make v
 	FLAVOR=$(or $(FLAVOR),test) sh scripts/vault/build-helper.sh
 
 vault-dev: ## Run the dev app under a copy of Electron signed as Cinna, so a dev-flavor helper (make vault-helper FLAVOR=dev) accepts it: real Touch ID in the app
+	sh scripts/vault/dev-electron.sh
+
+vault-dev-restart: ## Rebuild everything the dev vault runs on, then start it: app build (bundles vaultd) → guest image → dev helper (embeds the image's root hash) → make vault-dev. NO_IMAGE=1 keeps the current guest image (only app code changed)
+	npx electron-vite build
+	$(if $(NO_IMAGE),@echo "NO_IMAGE=1: keeping build/vault-guest/",sh scripts/vault/build-guest.sh)
+	FLAVOR=dev sh scripts/vault/build-helper.sh
 	sh scripts/vault/dev-electron.sh
 
 vault-helper-smoke: ## Drive a test-flavor helper against the real guest image (no prompts, no billing): make vault-helper-smoke [NO_NET=1]
