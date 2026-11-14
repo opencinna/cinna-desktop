@@ -10,7 +10,7 @@ PW := npx playwright test -c e2e/playwright.config.ts
 # (CINNA_E2E_LIVE_ENGINE, e2e/fixtures/liveEngine.ts); claude/codex/antigravity use your own login.
 LIVE_ENV = $(if $(LIVE_ENGINE),CINNA_E2E_LIVE_ENGINE=$(LIVE_ENGINE) )
 
-.PHONY: help test test-hub typecheck build speech-helper vault-image vault-helper vault-release vault-clean vault-helper-smoke vault-dev vault-dev-restart vault-move-smoke vault-live kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build speech-helper vault-image vault-helper vault-release vault-clean vault-helper-smoke vault-dev vault-dev-restart vault-move-smoke vault-live vault-switch-live kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -63,6 +63,9 @@ vault-move-smoke: ## Move to vault… on a real VM with the pinned Claude + adap
 
 vault-live: ## BILLED: Agent Vault live lane — real VM, real Claude, one Haiku turn on the repo .env ANTHROPIC_API_KEY; sandboxed HOME/userData
 	npx vitest run --config scripts/vault/vitest.vault-live.config.ts --silent=false
+
+vault-switch-live: ## BILLED: Agent Vault engine switch live lane — real VM: move in on Claude (no key), switch to OpenCode (repo .env OPENAI_API_KEY) and Antigravity (GEMINI_API_KEY) and back, one short turn each; sandboxed HOME/userData
+	npx vitest run --config scripts/vault/vitest.vault-switch-live.config.ts --silent=false
 
 # The agent kit bundle (resources/cinna-agent-kit/) is a byte-exact render of
 # cinna-core's docs/local_agent_kit/, the whole kit; never edit it by hand.
