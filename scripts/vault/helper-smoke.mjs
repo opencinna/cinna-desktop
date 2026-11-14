@@ -567,6 +567,21 @@ try {
   await call('vault.resize', { vaultId, sizeBytes: 2 * 1024 ** 3, token: rs.token })
   check(readVault(vaultId).pendingGrowTo === 2 * 1024 ** 3, 'resize records pendingGrowTo')
 
+  // Lock timeout: 5 min by default; shorter needs no token, longer a lock-timeout token for exactly that value.
+  check((await call('vault.status', { vaultId })).lockAfterMs === 300_000, 'lock timeout defaults to 5 minutes')
+  await call('vault.setLockTimeout', { vaultId, lockAfterMs: 30_000 })
+  check(readVault(vaultId).lockAfterMs === 30_000, 'a shorter lock timeout is saved without a token')
+  const noToken = await call('vault.setLockTimeout', { vaultId, lockAfterMs: 0 }).catch((e) => e)
+  check(noToken.code === 'bad_token', 'a longer lock timeout without a token is refused', noToken.code)
+  const lt = await call('vault.approve', { vaultId, action: 'lock-timeout', detail: approvalDetail({ method: 'vault.setLockTimeout', lockAfterMs: 0 }) })
+  const wrongValue = await call('vault.setLockTimeout', { vaultId, lockAfterMs: 300_000, token: lt.token }).catch((e) => e)
+  check(wrongValue.code === 'bad_token', 'a lock-timeout token is for exactly one value', wrongValue.code)
+  const odd = await call('vault.setLockTimeout', { vaultId, lockAfterMs: 60_000 }).catch((e) => e)
+  check(odd.code === 'invalid', 'a timeout not offered is invalid', odd.code)
+  const lt2 = await call('vault.approve', { vaultId, action: 'lock-timeout', detail: approvalDetail({ method: 'vault.setLockTimeout', lockAfterMs: 300_000 }) })
+  await call('vault.setLockTimeout', { vaultId, lockAfterMs: 300_000, token: lt2.token })
+  check(readVault(vaultId).lockAfterMs === 300_000 && (await call('vault.status', { vaultId })).lockAfterMs === 300_000, 'a longer lock timeout is saved with its token')
+
   // D33: a paused vault is stopped cold after PAUSED_STOP_MS; the next unlock boots and grows the disk.
   const coldEv = await step('paused → stopped (D33)', () => waitEvent((e) => e.event === 'vault.state' && e.vaultId === vaultId && e.state === 'stopped', PAUSED_STOP_MS + 10_000))
   check(coldEv?.state === 'stopped', 'paused vault stopped cold after the paused limit')
@@ -575,6 +590,13 @@ try {
   check(grown.sizeBytes === 2 * 1024 ** 3 && grown.pendingGrowTo === undefined, 'grow applied and recorded', JSON.stringify({ size: grown.sizeBytes, pending: grown.pendingGrowTo }))
   const usage = await vaultd(vaultId, 'disk.usage')
   check(usage.reply?.result?.sizeBytes > 1.9 * 1024 ** 3, 'guest sees the grown filesystem', JSON.stringify(usage.reply?.result ?? usage.reply?.error))
+
+  // vault.touch restarts an unlocked vault's window (the test window override still sets its length).
+  const before = (await call('vault.status', { vaultId })).until
+  await new Promise((r) => setTimeout(r, 300))
+  await call('vault.touch', { vaultId })
+  const after = (await call('vault.status', { vaultId })).until
+  check(typeof before === 'number' && typeof after === 'number' && after > before, 'touch moves the unlock deadline', `${before} → ${after}`)
 
   // Lock → stop cold via destroy-less path: lock is a no-op when locked; tamper needs a stopped VM.
   const stopEv = waitEvent((e) => e.event === 'vault.state' && e.vaultId === vaultId && e.state === 'stopped', 20_000).catch(() => null)
