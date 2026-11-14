@@ -76,7 +76,7 @@ final class VaultVM: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     }
   }
 
-  static func make(doc: VaultDoc, vaultDir: URL, assets: GuestAssets) throws -> VaultVM {
+  static func make(doc: VaultDoc, vaultDir: URL, assets: GuestAssets, rootfsPath: String) throws -> VaultVM {
     try probeDiskLock(VaultFiles.dataURL(vaultDir))
     let c = VZVirtualMachineConfiguration()
     let boot = VZLinuxBootLoader(kernelURL: assets.kernel)
@@ -108,9 +108,11 @@ final class VaultVM: NSObject, VZVirtualMachineDelegate, VZVirtioSocketListenerD
     c.serialPorts = [console]
     c.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
 
-    let rootfs = URL(fileURLWithPath: doc.rootfsPath)
+    // The unlock's rootfs when it named one (the image the app pins now), else
+    // the vault's own; verity-checked against GuestPins.rootHash either way.
+    let rootfs = URL(fileURLWithPath: rootfsPath)
     guard FileManager.default.isReadableFile(atPath: rootfs.path) else {
-      throw VMError(message: "guest root filesystem not found at \(doc.rootfsPath)")
+      throw VMError(message: "guest root filesystem not found at \(rootfsPath)")
     }
     let root = try VZDiskImageStorageDeviceAttachment(url: rootfs, readOnly: true)
     let data = try VZDiskImageStorageDeviceAttachment(

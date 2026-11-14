@@ -5,6 +5,7 @@ const { createHash } = require('node:crypto')
 const { verifyCodexAcpPatch } = require('./patch-codex-acp.cjs')
 const { verifyClaudeAgentAcpPatch } = require('./patch-claude-agent-acp.cjs')
 const { completePackagedKit } = require('./packaged-kit.cjs')
+const { readVaultGuestPin } = require('./vault/guest-pin.cjs')
 
 // These are the app-owned entry points executed with ELECTRON_RUN_AS_NODE.
 const CHILD_PACKAGES = [
@@ -217,7 +218,29 @@ function vaultHelperProblems(helper, run = runTool) {
   return problems
 }
 
-function verifyVaultHelper({ appPath, arch, dirOnly }, run = runTool) {
+// The guest the helper was built for (Contents/Resources/guest/guest.lock.json,
+// copied there by build-helper.sh) against RUNTIME_PINS.vaultGuest: its verity
+// root hash is compiled in, so a helper for another image could boot no vault
+// the app downloads. An unpublished pin ships no image (the app reports
+// image-missing) and asks nothing of the lock.
+function vaultHelperGuestProblems(helper, pin) {
+  if (!pin.published) return []
+  const path = join(helper, 'Contents', 'Resources', 'guest', 'guest.lock.json')
+  if (!existsSync(path)) return ['it carries no guest/guest.lock.json (build it with make vault-release)']
+  let lock
+  try {
+    lock = JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return ['its guest/guest.lock.json is not JSON']
+  }
+  const problems = []
+  if (String(lock.version) !== pin.version) problems.push(`its guest is ${lock.version}, not the pinned ${pin.version}`)
+  if (String(lock.rootHash).toLowerCase() !== pin.rootHash.toLowerCase()) problems.push(`its guest root hash is not the pinned one (RUNTIME_PINS.vaultGuest.rootHash)`)
+  if (Number(lock.hashOffset) !== pin.hashOffset) problems.push(`its guest hash offset ${lock.hashOffset} is not the pinned ${pin.hashOffset}`)
+  return problems
+}
+
+function verifyVaultHelper({ appPath, arch, dirOnly, projectDir = join(__dirname, '..') }, run = runTool) {
   const helper = join(appPath, 'Contents', 'Library', 'Helpers', 'VaultHelper.app')
   const targetArch = typeof arch === 'number' ? require('builder-util').Arch[arch] : arch
   if (targetArch === 'x64') {
@@ -227,12 +250,21 @@ function verifyVaultHelper({ appPath, arch, dirOnly }, run = runTool) {
     }
     return
   }
+  const pin = readVaultGuestPin(projectDir)
+  // An unpublished guest pin ships no helper (make vault-release removes it):
+  // the app reports Agent Vault unavailable. One that is there anyway must
+  // still pass every release check: a test or dev helper never ships.
+  if (!pin.published && !existsSync(helper)) {
+    console.log('No vault helper: RUNTIME_PINS.vaultGuest is unpublished, so this package ships none (Agent Vault unavailable)')
+    return
+  }
   const problems = vaultHelperProblems(helper, run)
+  if (existsSync(helper)) problems.push(...vaultHelperGuestProblems(helper, pin))
   if (problems.length === 0) {
     console.log('Verified vault helper (release flavor, profile, keychain group, guest image)')
     return
   }
-  const message = `Agent Vault helper ${helper} cannot ship: ${problems.join('; ')}. Build it with FLAVOR=release sh scripts/vault/build-helper.sh before electron-builder.`
+  const message = `Agent Vault helper ${helper} cannot ship: ${problems.join('; ')}. Build it with make vault-release before electron-builder.`
   if (dirOnly) {
     console.warn(`WARNING ${message}`)
     return
@@ -348,6 +380,7 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch, targets })
     verifyVaultHelper({
       appPath: join(appOutDir, `${productFilename}.app`),
       arch,
+      projectDir: packager.info.projectDir,
       dirOnly: Array.isArray(targets) && targets.length > 0 && targets.every((target) => target.name === 'dir')
     })
     const targetArch = typeof arch === 'number' ? require('builder-util').Arch[arch] : arch
@@ -359,4 +392,4 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch, targets })
   verifyAppContents(packager.getResourcesDir(appOutDir))
 }
 
-module.exports = { verifyVaultAdapterTar, verifyVaultAdapterTars, pinnedAdapterTarSha256, verifyAppContents, verifyExtraCaPreload, runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, verifyVaultHelper, vaultHelperProblems, beforePack, afterPack }
+module.exports = { verifyVaultAdapterTar, verifyVaultAdapterTars, pinnedAdapterTarSha256, verifyAppContents, verifyExtraCaPreload, runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, verifyVaultHelper, vaultHelperProblems, vaultHelperGuestProblems, beforePack, afterPack }

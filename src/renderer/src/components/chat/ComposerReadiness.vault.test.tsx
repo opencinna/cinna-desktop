@@ -10,7 +10,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  */
 
 const unlock = vi.fn()
-;(window as unknown as { api: unknown }).api = { vault: { unlock, onState: () => () => {} } }
+type ProgressListener = (event: { agentId: string; vaultId: string; percent: number | null }) => void
+const progressListeners = new Set<ProgressListener>()
+const onUnlockProgress = (cb: ProgressListener): (() => void) => {
+  progressListeners.add(cb)
+  return () => { progressListeners.delete(cb) }
+}
+;(window as unknown as { api: unknown }).api = { vault: { unlock, onState: () => () => {}, onUnlockProgress } }
 
 const { useComposerReadiness, readinessNoticeItem } = await import('./ComposerReadiness')
 const { ComposerNoticePanel } = await import('./ComposerNoticePanel')
@@ -50,5 +56,22 @@ describe('composer readiness — vault locked', () => {
     unmount()
     act(() => result.current.action!.run())
     await waitFor(() => expect(result.current.text).toBe('Vault locked. Couldn\'t unlock — cancelled at the prompt.'))
+  })
+
+  it('says the image download in the pending label while the unlock downloads it, then Unlocking… again', async () => {
+    let finish: (value: unknown) => void = () => {}
+    unlock.mockReturnValue(new Promise((resolve) => { finish = resolve }))
+    const { result } = renderHook(() => useComposerReadiness(target, ''), { wrapper })
+    act(() => result.current.action!.run())
+    await waitFor(() => expect(result.current.action?.pending).toBe(true))
+    expect(result.current.action?.pendingLabel).toBe('Unlocking…')
+    // Another agent's download is not this row's.
+    act(() => progressListeners.forEach((cb) => cb({ agentId: 'folder:beta', vaultId: 'v2', percent: 10 })))
+    expect(result.current.action?.pendingLabel).toBe('Unlocking…')
+    act(() => progressListeners.forEach((cb) => cb({ agentId: 'folder:alpha', vaultId: 'v1', percent: 40 })))
+    expect(result.current.action?.pendingLabel).toBe('Unlocking… 40%')
+    act(() => progressListeners.forEach((cb) => cb({ agentId: 'folder:alpha', vaultId: 'v1', percent: null })))
+    expect(result.current.action?.pendingLabel).toBe('Unlocking…')
+    await act(async () => { finish({ ok: true, data: {} }) })
   })
 })

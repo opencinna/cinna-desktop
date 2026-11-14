@@ -21,7 +21,7 @@ import { skillsLackingCredentials, useSkillCredentialPromptStore } from '../../s
 import { useAgentActiveSessions } from '../../hooks/useAgentSessions'
 import { activeSessionSentence, openSessionTitle, runningSessionsOf, useOpenSession } from '../agents/AgentActiveSessionNotice'
 import { useCinnaReauth } from '../../hooks/useAuth'
-import { useVaultUnlock, vaultErrorText } from '../../hooks/useVault'
+import { useVaultUnlock, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
 import { useEngineLogin } from '../../hooks/useLocalTools'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { RUN_REFERENCE_PATTERN } from '../../../../shared/kit/manifest'
@@ -120,6 +120,8 @@ export function isCatalogCommand(agent: AgentData | null | undefined, typed: str
 export interface ReadinessAction {
   label: string
   pendingLabel: string
+  /** Text the button is sized for besides its two labels (a pending label that grows). */
+  reserveLabel?: string
   pending: boolean
   run: () => void
   /**
@@ -178,6 +180,8 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   // An agent in a locked vault (`vault_locked`): Unlock raises the vault
   // helper's own prompt, and the readiness push that follows clears the row.
   const unlock = useVaultUnlock()
+  // The first unlock after an update downloads the pinned guest image first.
+  const unlockPercent = useVaultUnlockPercent(agentId)
 
   // An earlier failure belongs to the agent and the answer it was shown
   // against; a new target, or a new answer, starts clean.
@@ -222,7 +226,10 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   const action: ReadinessAction = vaultLocked
     ? {
         label: 'Unlock',
-        pendingLabel: 'Unlocking…',
+        // The percent rides on the pending label, and the button is sized for
+        // "Unlocking… 100%" from the start, so it never widens (ux_rules rule 1).
+        pendingLabel: unlockPercent === null ? 'Unlocking…' : `Unlocking… ${unlockPercent}%`,
+        reserveLabel: 'Unlocking… 100%',
         pending: unlock.isPending,
         icon: LockOpen,
         run: () => unlock.mutate(target.id),
@@ -291,7 +298,7 @@ function ReadinessActionButton({ action, tip }: {
       // and Cancel comes with it: sized to both, the idle button would be mostly padding. On its own
       // line under the sentence (`actionBelow`) it widens into free space instead.
       ? <>{pending ? <Loader2 size={12} className="animate-spin" /> : <ActionIcon size={12} aria-hidden="true" />}{pending ? action.pendingLabel : action.label}</>
-      : <StableLabel pending={pending}
+      : <StableLabel pending={pending} reserve={action.reserveLabel ? <><Loader2 size={12} />{action.reserveLabel}</> : undefined}
           label={<><ActionIcon size={12} aria-hidden="true" />{action.label}</>}
           pendingLabel={<>{isCheck ? <RefreshCw size={12} className="animate-spin" /> : <Loader2 size={12} className="animate-spin" />}{action.pendingLabel}</>} />}
   </NoticeButton>

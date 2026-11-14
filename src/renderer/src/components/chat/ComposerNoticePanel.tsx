@@ -286,9 +286,11 @@ function NoticeRow({ notice, unfold, leaving, onLeft }: {
  * or `Checking…` never moves the text or the button beside it. Either may
  * carry its 12 px icon.
  */
-export function StableLabel({ label, pending, pendingLabel }: { label: ReactNode; pending: boolean; pendingLabel: ReactNode }): React.JSX.Element {
+export function StableLabel({ label, pending, pendingLabel, reserve }: { label: ReactNode; pending: boolean; pendingLabel: ReactNode; reserve?: ReactNode }): React.JSX.Element {
   return (
-    <span className="grid">
+    <span className="grid tabular-nums">
+      {/* Never shown: only sizes the cell for a pending label that grows. */}
+      {reserve && <span aria-hidden="true" className="invisible col-start-1 row-start-1 flex items-center justify-center gap-1">{reserve}</span>}
       {/* Centred: the cell is as wide as the longer label, and the shorter one sits in its middle. */}
       <span aria-hidden={pending} className={`col-start-1 row-start-1 flex items-center justify-center gap-1 ${pending ? 'invisible' : ''}`}>{label}</span>
       <span aria-hidden={!pending} className={`col-start-1 row-start-1 flex items-center justify-center gap-1 ${pending ? '' : 'invisible'}`}>{pendingLabel}</span>

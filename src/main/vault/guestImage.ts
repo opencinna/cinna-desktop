@@ -13,11 +13,14 @@
  *
  * The helper boots the rootfs with the verity root hash compiled into it, so a
  * helper built for another image could never boot this one: {@link
- * guestHashMismatch} says so before anything is created.
+ * guestHashMismatch} says so before anything is created. For the same reason
+ * every unlock hands the helper the image pinned *now* (a vault records the
+ * one it was created with, which an update replaces), and {@link
+ * pruneGuestImages} deletes the images no pin names any more.
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { chmod, mkdir, rename } from 'node:fs/promises'
-import { join } from 'node:path'
+import { existsSync, readFileSync, type Dirent } from 'node:fs'
+import { chmod, lstat, mkdir, readdir, rename, rm } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { runtimeHost } from '../host/runtimeHost'
 import { createLogger } from '../logger/logger'
 import { downloadToFile, isFile, sweepStaging, withVerifiedFile, type DownloadProgress } from '../managed/managedAsset'
@@ -61,7 +64,10 @@ export function guestRootfs(): { ok: true; path: string | null; version: string 
     return { ok: true, path: null, version: pin.version }
   }
   const path = join(devGuestDir(), 'rootfs.img')
-  return existsSync(path) ? { ok: true, path, version: 'dev' } : { ok: false, detail: `No guest image at ${path}; run \`make vault-image\`.` }
+  if (existsSync(path)) return { ok: true, path, version: 'dev' }
+  // Said as the folder a developer knows (`make vault-clean` empties it).
+  const where = process.env['CINNA_VAULT_GUEST_DIR'] || 'build/vault-guest'
+  return { ok: false, detail: `No guest image in ${where}: run make vault-image (or make vault-dev-restart).` }
 }
 
 /**
@@ -180,4 +186,43 @@ async function downloadGuestImage(
   )
   logger.info('downloaded the vault guest image', { version: pin.version })
   return target
+}
+
+/** A downloaded guest image's name in `.images/`. */
+const GUEST_IMAGE_NAME = /^rootfs-[A-Za-z0-9._-]+\.img$/
+
+/**
+ * Packaged, published pin: deletes the guest images in
+ * `<secureAgentsDir>/.images/` that are not the pinned one, and the staging
+ * leftovers of an interrupted download. Safe because every unlock boots the
+ * pinned image (a running VM keeps the inode it opened). Touches only
+ * `rootfs-*.img` entries and `.staging-*` directories directly inside
+ * `.images/`, and nothing when `.images` is not a real directory. Never
+ * throws; the names it removed.
+ */
+export async function pruneGuestImages(secureAgentsDir: string, pin: VaultGuestPin = guestPin()): Promise<string[]> {
+  if (!runtimeHost.isPackaged || !pin.published) return []
+  const root = join(secureAgentsDir, GUEST_IMAGES_DIR)
+  try {
+    if (!(await lstat(root)).isDirectory()) return []
+  } catch {
+    return []
+  }
+  const keep = basename(guestImagePath(secureAgentsDir, pin))
+  const entries: Dirent[] = await readdir(root, { withFileTypes: true }).catch((): Dirent[] => [])
+  const removed: string[] = []
+  for (const entry of entries) {
+    if (entry.name === keep || !GUEST_IMAGE_NAME.test(entry.name)) continue
+    if (!entry.isFile() && !entry.isSymbolicLink()) continue
+    try {
+      await rm(join(root, entry.name), { force: true })
+      removed.push(entry.name)
+    } catch (error) {
+      logger.warn('could not delete an old vault guest image', { name: entry.name, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  // Partial downloads (a download running in this process keeps its own).
+  await sweepStaging(root).catch(() => undefined)
+  if (removed.length > 0) logger.info('deleted old vault guest images', { removed, kept: keep })
+  return removed
 }

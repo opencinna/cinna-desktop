@@ -68,6 +68,8 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   // backend's state events (the backend itself is the composition root's).
   vaultService.init()
   initSession()
+  // Packaged: guest images an update left behind (every unlock boots the pinned one).
+  void vaultService.pruneGuestImages(getSettingsScopeUserId())
   // Notes and Dashboards nobody has turned on or off yet: decided once, from
   // whether any profile holds a note or a dashboard, before the first window
   // reads its settings and before the dashboard warm-up asks. A failure stays

@@ -24,6 +24,14 @@
 # hashOffset are compiled in (Sources/GuestPins.swift, generated). Without a
 # guest the helper still builds, with empty pins, and reports image-missing.
 #
+# guest.lock.json itself goes into Contents/Resources/guest/ too, so packaging
+# can compare the bundled guest with RUNTIME_PINS.vaultGuest.
+#
+# FLAVOR=release builds only from the published guest pin: the guest dir's
+# guest.lock.json (version, rootHash, hashOffset) and its Image / initrd.img
+# bytes must be RUNTIME_PINS.vaultGuest's (scripts/vault/guest-pin.cjs). Use
+# `make vault-release`, which finds or downloads exactly that guest.
+#
 # The flavor is also written into Info.plist as CinnaVaultFlavor (signed with
 # the bundle), so packaging can refuse a non-release helper without running it.
 set -eu
@@ -53,6 +61,10 @@ VERSION="$(node -p "require('$ROOT/package.json').version")"
 # --- guest pins ---------------------------------------------------------------
 PINS="$SRC/Sources/GuestPins.swift"
 LOCK="$GUEST/guest.lock.json"
+if [ "$FLAVOR" = release ]; then
+  # Before anything is generated or compiled: a release helper boots only the pinned image.
+  node "$ROOT/scripts/vault/guest-pin.cjs" check-release "$GUEST"
+fi
 if [ -f "$LOCK" ] && [ -f "$GUEST/Image" ] && [ -f "$GUEST/initrd.img" ]; then
   node - "$LOCK" "$PINS" <<'JS'
 const fs = require('node:fs')
@@ -107,6 +119,7 @@ fi
 if [ "$HAVE_GUEST" = 1 ]; then
   mkdir -p "$APP/Contents/Resources/guest"
   cp "$GUEST/Image" "$GUEST/initrd.img" "$APP/Contents/Resources/guest/"
+  cp "$LOCK" "$APP/Contents/Resources/guest/guest.lock.json"
 fi
 
 # --- sign --------------------------------------------------------------------

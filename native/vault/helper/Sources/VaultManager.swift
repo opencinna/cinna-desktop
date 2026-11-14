@@ -38,6 +38,10 @@ final class VaultEntry {
   var unlocking = false
   var stopRequested = false
   var unlockWaiters: [(HelperError?) -> Void] = []
+  /// The rootfs the next cold boot uses: the last `rootfsPath` a `vault.unlock`
+  /// named (the image the app pins now); nil = none ever named, so the one
+  /// recorded at create.
+  var bootRootfs: String?
 
   init(vaultId: String, vaultDir: URL) {
     self.vaultId = vaultId
@@ -99,6 +103,11 @@ final class VaultManager {
       case "vault.unlock":
         let e = try entry(params)
         let purpose = (params["purpose"] as? String) ?? ""
+        let rootfs = try optionalRootfsPath(params)
+        // The first unlock's image wins; a click that joins it boots that one.
+        // An unlock that names none keeps the last one named: the vault's own
+        // record is only the fallback when no unlock ever named an image.
+        if !e.unlocking, let rootfs = rootfs { e.bootRootfs = rootfs }
         unlock(e, purpose: purpose) { err in
           if let err = err { reply(nil, err) } else { reply(["state": e.state], nil) }
         }
@@ -449,7 +458,7 @@ final class VaultManager {
     let vm: VaultVM
     do {
       try prepareDisk(&doc, e.vaultDir)
-      vm = try VaultVM.make(doc: doc, vaultDir: e.vaultDir, assets: assets)
+      vm = try VaultVM.make(doc: doc, vaultDir: e.vaultDir, assets: assets, rootfsPath: e.bootRootfs ?? doc.rootfsPath)
     } catch {
       key.zero()
       let m = (error as? VMError)?.message ?? (error as? HelperError)?.message ?? "\(error)"
@@ -511,6 +520,23 @@ final class VaultManager {
         self.finishUnlock(e, nil)
       }
     }
+  }
+
+  /// `vault.unlock`'s optional `rootfsPath`: an absolute path to a regular file
+  /// (not a symlink). Trusting it costs nothing: whatever the path, the guest
+  /// checks the rootfs against the verity root hash compiled into this helper,
+  /// so only the pinned image can boot. It lets a vault made with an older
+  /// image boot the current one after an update.
+  private func optionalRootfsPath(_ p: [String: Any]) throws -> String? {
+    guard let raw = p["rootfsPath"], !(raw is NSNull) else { return nil }
+    guard let path = raw as? String, path.hasPrefix("/"), path.count <= 4096, !path.contains("\0") else {
+      throw HelperError.invalid("rootfsPath must be an absolute path")
+    }
+    let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+    guard (attrs?[.type] as? FileAttributeType) == .typeRegular else {
+      throw HelperError.invalid("rootfsPath is not a regular file")
+    }
+    return path
   }
 
   /// Applies a pending grow to data.img (sparse) before boot.

@@ -180,11 +180,22 @@ Composer [voice input](../../chat/voice_input/voice_input.md) runs a native prog
 
 [Agent Vault](../../agents/vault/vault.md) ships a second signed program, `VaultHelper.app`, at `Contents/Library/Helpers/VaultHelper.app`, plus a guest image that is **not** in the app: the kernel and initrd are inside the helper, and the read-only rootfs is a release asset the pins name; the app downloads it into `SecureAgents/.images/` on a user's first move and checks its sha256. The per-engine adapter tars (`out/vault/claude-adapter.tar`, `codex-adapter.tar`) are written by `electron-vite build` and ship inside `app.asar`; `afterPack` verifies them against `RUNTIME_PINS`. Neither `build:mac` nor `release:mac` builds them; build them first, in this order.
 
-- **Image.** `npx electron-vite build`, then `make vault-image RELEASE=1 VERSION=<x.y.z-n>` (Apple silicon, Command Line Tools, network). It refuses to build without the real `out/main/vaultd.js`. Upload `build/vault-guest/rootfs.img` as an asset of the release, then fill `RUNTIME_PINS.vaultGuest` in `src/shared/runtimePins.ts` (`published: true`, `version`, `rootHash`, `hashOffset`, `rootfs.{file,url,sha256,size}`, all from `guest.lock.json`). With `published: false`, as today, a packaged app reports `image-missing` and offers no vault.
-- **Helper.** `make vault-helper FLAVOR=release`, **after** the image: it compiles the kernel, initrd and verity root hash into the helper, so a helper built before a new image cannot boot it. It needs the team's Developer ID Application identity in the login keychain and Xcode, and it talks to Apple to fetch the "Mac Team Direct" provisioning profile, which carries the `keychain-access-groups` entitlement the Secure Enclave key depends on. The script fails if the entitlement does not survive the export.
-- **Packaging.** `mac.extraFiles` copies the helper in and `mac.signIgnore` keeps electron-builder from re-signing it: a re-sign would drop the entitlement and with it the key's access group. `verifyVaultHelper` in `scripts/packaged-dependencies.cjs` fails an arm64 package unless the helper is the release flavor, free of the test-gate marker, carries its profile and group, verifies with `codesign --strict --deep`, and has the kernel and initrd inside. The x64 packages have the helper removed, because it is arm64-only; the app reports the vault unavailable there. A `--dir` build only warns.
+- **Image.** Built only when the guest changed: `npx electron-vite build`, then `make vault-image RELEASE=1 VERSION=<x.y.z-n>` (Apple silicon, Command Line Tools, network). It refuses to build without the real `out/main/vaultd.js`. `npm run vault:pin-guest -- --app-version <next version>` then stages the four assets (`vault-guest-<version>-Image`, `-initrd.img`, `-rootfs.img`, `vault-guest-<version>.lock.json`) and prints the `VAULT_GUEST` pin block and the `gh release upload` line. The assets live on the app release that first ships that guest, so their URLs are known before the upload. All three files are pinned (version, root hash, hash offset, sha256 and size each), so the release helper can be rebuilt later from the published assets alone.
+- **Helper.** `make vault-release`, for every release: it builds the release helper strictly from the published pin (from `build/vault-guest/` when its lock is exactly the pin, else from the pinned assets it downloads and checks). It needs the team's Developer ID Application identity in the login keychain and Xcode, and it talks to Apple to fetch the "Mac Team Direct" provisioning profile, which carries the `keychain-access-groups` entitlement the Secure Enclave key depends on. The script fails if the entitlement does not survive the export, and `build-helper.sh` refuses a release flavor built from any guest but the pinned one.
+- **Packaging.** `mac.extraFiles` copies the helper in and `mac.signIgnore` keeps electron-builder from re-signing it: a re-sign would drop the entitlement and with it the key's access group. `verifyVaultHelper` in `scripts/packaged-dependencies.cjs` fails an arm64 package unless the helper is the release flavor, free of the test-gate marker, carries its profile and group, verifies with `codesign --strict --deep`, and has the kernel, initrd and `guest.lock.json` inside, and (with a published pin) unless that lock's version, root hash and hash offset are the pin's. The x64 packages have the helper removed, because it is arm64-only; the app reports the vault unavailable there. A `--dir` build only warns.
 - **The signing caveat.** The helper's keychain group protects the Secure Enclave key only as well as the Developer ID key does. On a machine that holds that key with codesign set to "Always allow" (the release machine, normally), a process running as the user can sign its own binary into the group. Take that permission back on any machine that also runs agents.
-- **Still open before a release carries vaults.** The rootfs is not published and `RUNTIME_PINS.vaultGuest` is `published: false`, so a packaged app reports `image-missing` and offers no vault. Publishing the asset and filling the pin is enough: the download exists. The helper must be built from the same image, because the app compares its root hash with the pin before creating a vault. See the [runbook](../../agents/vault/vault_llm.md#release).
+- **Upgrades.** Every unlock boots the guest the app pins now, whatever image the vault was created with (dm-verity checks it against the root hash in the helper), downloading it first when it is missing. At start a packaged app deletes the other `rootfs-*.img` files and partial downloads in `<SecureAgents>/.images/`, so users' Macs keep one image.
+- **Still open before a release carries vaults.** `RUNTIME_PINS.vaultGuest` is `published: false`, so releases ship without the vault helper and a packaged app offers no vault until the first guest is published as below. See the [vault runbook](../../agents/vault/vault_llm.md#release).
+
+#### Agent Vault in a release
+
+Where the vault steps go in the [release runbook](#release-runbook):
+
+1. **Before `npm version` (step 2), only if the guest changed** since the published one (`git log <last tag>.. -- native/vault/guest scripts/vault/build-guest.*` shows commits): `npx electron-vite build`, `make vault-image RELEASE=1 VERSION=<x.y.z-n>`, `npm run vault:pin-guest -- --app-version <the version step 2 will create>`, paste the printed block into `src/shared/runtimePins.ts`, run `npm test` (the pin test parses it), commit. `npm version` needs the clean tree.
+2. **Before `npm run release:mac` (step 3), always:** `make vault-release`. A dry run first is cheap: `make vault-release DRY_RUN=1`. While the pin is unpublished it removes `resources/vault/VaultHelper.app` and says so: that release ships no vault helper and the app reports Agent Vault unavailable. Packaging accepts a missing helper only with an unpublished pin; a helper that is there must always be the release one.
+3. **After `release:mac` has made the draft, only with a new guest:** run the printed `gh release upload v<version> …` line, so the guest assets ship on the same draft.
+4. **Step 6** checks the guest assets are on the draft (new guest) or that the pinned URLs answer (`curl -sIL <rootfs url> | head -1` → 200).
+5. **Step 9** cleans the vault build leftovers.
 
 ### Usage strings: `extendInfo` is a map
 
@@ -312,6 +323,9 @@ git pull
 git status               # should show: clean
 git diff origin/main     # should be empty
 
+# Start from an empty dist/: artifacts of earlier builds (several GB) only get in the way
+rm -rf dist
+
 # Build + typecheck succeed (release:mac runs this, but fail fast here)
 npm install
 npm run typecheck
@@ -355,10 +369,13 @@ npm version major        # 0.1.1 -> 1.0.0
 
 ```bash
 source ~/.cinna-desktop-signing.env
+make vault-release        # the release Agent Vault helper, from the pinned guest (see "Agent Vault in a release")
 npm run release:mac
+# Only when this release ships a new guest image: the line npm run vault:pin-guest printed
+# gh release upload "v<version>" build/vault-guest-release/<guest version>/* --repo opencinna/cinna-desktop
 ```
 
-This single command:
+This single command (`release:mac`):
 - Compiles main/preload/renderer.
 - Creates the `v${version}` draft release first (`scripts/release-draft.cjs`), or reuses the one draft already there, and stops if the tag has more than one. electron-builder 26 creates its GitHub publisher behind an `await` before caching it, so two artifacts finishing together each got their own publisher, and each created a draft: 0.11.0 and 0.11.1 shipped from two drafts with the assets split between them, and the Linux workflow uploaded to whichever came first. With the draft already there, every publisher reuses it. `release:linux` and `release:all` run the same step.
 - Prepares target Canvas payloads, discovers/unpacks the ACP runtime dependency trees, rebuilds native addons per target, and validates shipped manifests/payloads while packaging `.app` bundles for `x64` and `arm64`.
@@ -405,6 +422,10 @@ gh release view "$VERSION" --repo opencinna/cinna-desktop
 #   cinna-desktop-${V}-arm64-mac.zip        (+ .blockmap)  ← mandatory for auto-update
 #   cinna-desktop-${V}-x64-mac.zip          (+ .blockmap)  ← mandatory for auto-update
 #   latest-mac.yml                          (must list the .zip URLs in `files:`)
+#
+# Only when this release ships a new Agent Vault guest:
+#   vault-guest-<guest>-Image, vault-guest-<guest>-initrd.img, vault-guest-<guest>-rootfs.img,
+#   vault-guest-<guest>.lock.json           (the URLs in RUNTIME_PINS.vaultGuest)
 #
 # Expected assets (Linux, added by CI ~5-8 min after tag push):
 #   cinna-desktop-${V}-x86_64.AppImage
@@ -475,6 +496,32 @@ gh release edit "$VERSION" --repo opencinna/cinna-desktop \
 Or edit notes in the GitHub web UI: https://github.com/opencinna/cinna-desktop/releases → click the draft → write notes → Publish release.
 
 Done. Installed clients on a previous version will pick up the new release on next launch or within 6 hours of running.
+
+#### 9. Clean up
+
+Once the release is public and the auto-update check in step 7 (or a first install) went through:
+
+```bash
+# Local build output: the signed artifacts are on GitHub now
+rm -rf dist
+# Agent Vault leftovers: dev/release guest images, the release helper, the signed dev Electron copy
+make vault-clean
+make vault-helper          # back to the test helper for the unattended lanes (or make vault-dev-restart)
+# A bare-Mac run, if you did one, leaves VMs behind
+make bare-mac-clean
+
+# No draft may be left for any tag (an aborted run leaves one): list drafts, delete stale ones by id
+gh api repos/opencinna/cinna-desktop/releases --jq '.[] | select(.draft) | "\(.id) \(.tag_name) assets=\(.assets|length)"'
+# gh api -X DELETE repos/opencinna/cinna-desktop/releases/<id>
+```
+
+What stays on GitHub:
+
+- **Published releases are kept.** electron-updater's differential download reads the installed version's `.blockmap` from that version's release; deleting old releases turns every update from those versions into a full download, and leaves no way back for a user who needs an older build.
+- **Never delete a release that hosts Agent Vault guest assets** the current `RUNTIME_PINS.vaultGuest` names, nor one an app version still in use pins: that app could no longer download its guest and create a vault. The release that first shipped a guest keeps those assets for as long as any pin names it.
+- **Replacing a bad asset** goes through `gh release delete-asset` and a fresh upload into the same release, never a second release for the same tag.
+
+On users' Macs there is nothing to clean: the app deletes guest images it no longer pins at start (see [Agent Vault helper and guest image](#agent-vault-helper-and-guest-image)), and electron-updater replaces its own download cache.
 
 #### Linux build details
 
@@ -597,6 +644,9 @@ For each release, GitHub Releases will hold:
 - `cinna-desktop-${version}-x86_64.AppImage`
 - `cinna-desktop-${version}-amd64.deb`
 - `latest-linux.yml` — auto-update manifest (only AppImage uses it)
+
+**Agent Vault guest** (only on the release that first ships a guest version; uploaded by hand after `release:mac`, see [Agent Vault in a release](#agent-vault-in-a-release)):
+- `vault-guest-<guest>-Image`, `vault-guest-<guest>-initrd.img`, `vault-guest-<guest>-rootfs.img`, `vault-guest-<guest>.lock.json`
 
 The `.blockmap` files (macOS only currently) enable **differential downloads** — a user updating from 0.1.0 to 0.1.1 typically transfers ~5–20 MB instead of the full ~130 MB. Linux AppImage updates download the full new AppImage.
 

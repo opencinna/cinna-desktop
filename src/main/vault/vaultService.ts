@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { agentRepo, type AgentRow } from '../db/agents'
 import { chatRepo } from '../db/chats'
 import { publishEvent } from '../host/events'
+import { runtimeHost } from '../host/runtimeHost'
 import { createLogger } from '../logger/logger'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import {
@@ -34,6 +35,7 @@ import {
   SECURE_AGENTS_MARKER,
   VAULT_CHAT_FILES_SWEPT_CHANNEL,
   VAULT_STATE_CHANNEL,
+  VAULT_UNLOCK_PROGRESS_CHANNEL,
   type VaultAvailabilityDto,
   type VaultChatFilesSweptEvent,
   type VaultEngineAuthDto,
@@ -43,7 +45,8 @@ import {
   type VaultErrorCode,
   type VaultResult,
   type VaultStateEvent,
-  type VaultStatusDto
+  type VaultStatusDto,
+  type VaultUnlockProgressEvent
 } from '../../shared/vault/types'
 import { GUEST_AGENT_PATH, onVaultBackendInstalled, vaultBackend, VaultBackendError, type VaultBackend, type VaultBackendEvent } from './backend'
 import { refreshVaultAgents, isVaultAgent } from './isVaultAgent'
@@ -51,7 +54,7 @@ import { vaultTranscripts, type JournalOutcome } from './transcriptStore'
 import { foreignSecureAgentsDir } from './secureAgentsDir'
 import { VaultdClient, VaultdError } from './vaultdClient'
 import { pinnedVaultVersions } from './runtimeInstall'
-import { guestHashMismatch, guestRootfs } from './guestImage'
+import { ensureGuestImage, guestHashMismatch, guestRootfs, pruneGuestImages } from './guestImage'
 import { sweepVaultChatFiles } from './vaultChatFiles'
 import { vaultLoginProblem } from './engineLoginCheck'
 import { createGuestFileAccess, type VaultFileAccess } from './fileAccess'
@@ -252,6 +255,35 @@ function defaultRootPath(userId: string): string {
 
 export { guestRootfs } from './guestImage'
 
+/**
+ * The guest image an unlock boots: the one pinned now, downloaded first when
+ * an update moved the pin (progress on `vault:unlock-progress`; a failed
+ * download is the unlock's error). The vault's own record names the image it
+ * was created with, which the helper could no longer verify. Undefined for
+ * the fake (it boots no image).
+ */
+async function unlockRootfs(backend: VaultBackend, userId: string, agentId: string, vaultId: string): Promise<string | undefined> {
+  // Passed even when main thinks the vault is unlocked: its record may be
+  // stale, and the helper keeps the last image named for its next cold boot.
+  // Present already, ensureGuestImage answers at once.
+  if (backend.kind === 'fake') return undefined
+  let reported = false
+  const progress = (percent: number | null): void => {
+    publishEvent(VAULT_UNLOCK_PROGRESS_CHANNEL, { agentId, vaultId, percent } satisfies VaultUnlockProgressEvent, 'all')
+  }
+  try {
+    return await ensureGuestImage(vaultService.ensureSecureAgentsDir(userId), (percent) => {
+      reported = true
+      progress(percent)
+    })
+  } catch (error) {
+    if (error instanceof VaultError) throw error
+    throw new VaultError('unavailable', error instanceof Error ? error.message : String(error))
+  } finally {
+    if (reported) progress(null)
+  }
+}
+
 /** The default {@link VaultFileAccess}: vaultd, through the shared connection. */
 const guestFileAccess: VaultFileAccess = createGuestFileAccess({
   client: (vaultId) => vaultService.client(vaultId),
@@ -276,6 +308,26 @@ export const vaultService = {
       refreshVaultAgents()
     } catch (error) {
       logger.warn('could not read the vault agents', { error: error instanceof Error ? error.message : String(error) })
+    }
+  },
+
+  /**
+   * Packaged: the guest images in the profile's `SecureAgents/.images/` that
+   * the current pin does not name (an update moved it). Nothing boots them any
+   * more: every unlock passes the pinned image. Never throws; never creates
+   * `SecureAgents/`, nor touches one Cinna did not make.
+   */
+  async pruneGuestImages(userId: string): Promise<string[]> {
+    if (!runtimeHost.isPackaged) return []
+    try {
+      const root = agentsHomeService.rootRows(userId).find((r) => r.isDefault)
+      if (!root || foreignSecureAgentsDir(root.path)) return []
+      const dir = join(root.path, SECURE_AGENTS_DIR)
+      if (!existsSync(join(dir, SECURE_AGENTS_MARKER))) return []
+      return await pruneGuestImages(dir)
+    } catch (error) {
+      logger.warn('could not prune old vault guest images', { error: error instanceof Error ? error.message : String(error) })
+      return []
     }
   },
 
@@ -389,8 +441,14 @@ export const vaultService = {
     let pending = unlocking.get(ref.vaultId)
     if (!pending) {
       pending = (async () => {
+        const backend = vaultBackend()
+        // Read before the image download, which can take minutes on the first
+        // unlock after an update: a lock meanwhile voids the unlock before the
+        // helper prompts, not after.
         const generation = generationOf(ref.vaultId)
-        const state = await vaultBackend().unlock(ref.vaultId, purpose)
+        const rootfsPath = await unlockRootfs(backend, userId, row.id, ref.vaultId)
+        if (generationOf(ref.vaultId) !== generation) return summaries.get(ref.vaultId)?.state ?? 'locked'
+        const state = await backend.unlock(ref.vaultId, purpose, rootfsPath)
         // A lock that landed meanwhile wins: nothing is opened or recorded.
         if (generationOf(ref.vaultId) !== generation) return summaries.get(ref.vaultId)?.state ?? 'locked'
         const known = summaries.get(ref.vaultId)

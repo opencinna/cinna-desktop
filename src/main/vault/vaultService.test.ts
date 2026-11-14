@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -30,6 +33,7 @@ const { installEventPublisher } = await import('../host/events')
 const { installVaultBackend, unavailableBackend } = await import('./backend')
 const { createFakeBackend } = await import('./fakeBackend')
 const { vaultService } = await import('./vaultService')
+const { setGuestPinForTest } = await import('./guestImage')
 const { vaultTranscripts } = await import('./transcriptStore')
 const { isVaultAgent, resetVaultAgentsForTest, vaultChatReadiness } = await import('./isVaultAgent')
 const { agentsHomeService } = await import('../services/localAgents/agentsHomeService')
@@ -67,6 +71,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  setGuestPinForTest(null)
   await vaultService.shutdown()
   vaultService.resetForTest()
   vaultTranscripts.resetForTest()
@@ -356,5 +361,134 @@ describe('vaultService', () => {
     expect(await vaultService.availability(true)).toMatchObject({ availability: { ok: true } })
     installVaultBackend(unavailableBackend('unsupported-hardware'))
     expect(await vaultService.availability()).toMatchObject({ availability: { ok: false, reason: 'unsupported-hardware' }, backend: 'unavailable' })
+  })
+
+  describe('the guest image an unlock boots', () => {
+    /** The fake, posing as the real helper so the image counts; its unlock recorded. */
+    function realLike(): { calls: { vaultId: string; purpose: string; rootfsPath?: string }[] } {
+      const calls: { vaultId: string; purpose: string; rootfsPath?: string }[] = []
+      installVaultBackend({
+        ...backend,
+        kind: 'apple-vz',
+        unlock: (vaultId: string, purpose: string, rootfsPath?: string) => {
+          calls.push({ vaultId, purpose, rootfsPath })
+          return backend.unlock(vaultId, purpose)
+        }
+      })
+      return { calls }
+    }
+
+    it('is the image this build has, not the one the vault was created with (dev: the dev image)', async () => {
+      const { calls } = realLike()
+      mkdirSync(join(home, 'build', 'vault-guest'), { recursive: true })
+      writeFileSync(join(home, 'build', 'vault-guest', 'rootfs.img'), '')
+      expect((await vaultService.unlock(USER, AGENT)).state).toBe('unlocked')
+      expect(calls).toEqual([{ vaultId: VAULT, purpose: 'Use this agent', rootfsPath: join(home, 'build', 'vault-guest', 'rootfs.img') }])
+    })
+
+    it('packaged: downloads the pinned image first, with progress on vault:unlock-progress, then boots it', async () => {
+      const image = Buffer.from('rootfs'.repeat(50_000))
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { 'content-length': String(image.length) })
+        res.end(image)
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      try {
+        const { calls } = realLike()
+        host(true)
+        setGuestPinForTest({
+          published: true, version: '2.0.0-1', rootHash: 'a'.repeat(64), hashOffset: 4096,
+          kernel: { file: 'k', url: '', sha256: '', size: 0 },
+          initrd: { file: 'i', url: '', sha256: '', size: 0 },
+          rootfs: { file: 'vault-guest-2.0.0-1-rootfs.img', url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/r`, sha256: createHash('sha256').update(image).digest('hex'), size: image.length }
+        })
+        expect((await vaultService.unlock(USER, AGENT)).state).toBe('unlocked')
+        const target = join(home, 'SecureAgents', '.images', 'rootfs-2.0.0-1.img')
+        expect(calls.at(-1)?.rootfsPath).toBe(target)
+        expect(readFileSync(target).equals(image)).toBe(true)
+        const progress = published.filter((p) => p.channel === 'vault:unlock-progress').map((p) => p.payload as { agentId: string; vaultId: string; percent: number | null })
+        expect(progress.at(-2)).toEqual({ agentId: AGENT, vaultId: VAULT, percent: 100 })
+        // Done: the label goes back.
+        expect(progress.at(-1)).toEqual({ agentId: AGENT, vaultId: VAULT, percent: null })
+      } finally {
+        server.closeAllConnections()
+        await new Promise((resolve) => server.close(resolve))
+      }
+    })
+
+    it('packaged: a failed download is the unlock\'s error, and nothing is unlocked', async () => {
+      const { calls } = realLike()
+      host(true)
+      setGuestPinForTest({
+        published: true, version: '2.0.0-1', rootHash: 'a'.repeat(64), hashOffset: 4096,
+        kernel: { file: 'k', url: '', sha256: '', size: 0 },
+        initrd: { file: 'i', url: '', sha256: '', size: 0 },
+        rootfs: { file: 'r', url: 'http://127.0.0.1:1/r', sha256: 'b'.repeat(64), size: 10 }
+      })
+      expect(await vaultService.result(() => vaultService.unlock(USER, AGENT))).toMatchObject({ ok: false, code: 'unavailable' })
+      expect(calls).toEqual([])
+      expect(vaultService.stateOf(VAULT)).toBe('locked')
+    })
+
+    it('names the image on every unlock, even of a vault main thinks is unlocked (the helper keeps it for its next cold boot)', async () => {
+      const { calls } = realLike()
+      mkdirSync(join(home, 'build', 'vault-guest'), { recursive: true })
+      writeFileSync(join(home, 'build', 'vault-guest', 'rootfs.img'), '')
+      await vaultService.unlock(USER, AGENT)
+      expect(vaultService.stateOf(VAULT)).toBe('unlocked')
+      await vaultService.unlock(USER, AGENT)
+      expect(calls.map((c) => c.rootfsPath)).toEqual([join(home, 'build', 'vault-guest', 'rootfs.img'), join(home, 'build', 'vault-guest', 'rootfs.img')])
+    })
+
+    it('dev without a guest image: the unlock says which folder and what to run', async () => {
+      const { calls } = realLike()
+      expect(await vaultService.result(() => vaultService.unlock(USER, AGENT))).toEqual({
+        ok: false, code: 'unavailable', message: 'No guest image in build/vault-guest: run make vault-image (or make vault-dev-restart).'
+      })
+      expect(calls).toEqual([])
+    })
+
+    it('packaged: a lock during the image download voids the unlock before the helper is asked', async () => {
+      const image = Buffer.from('rootfs'.repeat(50_000))
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      let asked: () => void = () => {}
+      const requested = new Promise<void>((resolve) => { asked = resolve })
+      const server = createServer((_req, res) => {
+        asked()
+        void gate.then(() => {
+          res.writeHead(200, { 'content-length': String(image.length) })
+          res.end(image)
+        })
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      try {
+        const { calls } = realLike()
+        host(true)
+        setGuestPinForTest({
+          published: true, version: '2.0.0-2', rootHash: 'a'.repeat(64), hashOffset: 4096,
+          kernel: { file: 'k', url: '', sha256: '', size: 0 },
+          initrd: { file: 'i', url: '', sha256: '', size: 0 },
+          rootfs: { file: 'r', url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/r`, sha256: createHash('sha256').update(image).digest('hex'), size: image.length }
+        })
+        const unlocking = vaultService.unlock(USER, AGENT)
+        await requested
+        await vaultService.lock(USER, AGENT)
+        release()
+        expect((await unlocking).state).toBe('locked')
+        expect(calls).toEqual([])
+      } finally {
+        server.closeAllConnections()
+        await new Promise((resolve) => server.close(resolve))
+      }
+    })
+
+    it('the fake boots no image: no path, no download', async () => {
+      const calls: (string | undefined)[] = []
+      installVaultBackend({ ...backend, unlock: (vaultId: string, purpose: string, rootfsPath?: string) => { calls.push(rootfsPath); return backend.unlock(vaultId, purpose) } })
+      host(true)
+      await vaultService.unlock(USER, AGENT)
+      expect(calls).toEqual([undefined])
+    })
   })
 })

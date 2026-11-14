@@ -6,16 +6,15 @@ import {
   ChevronRight,
   ChevronsDownUp,
   Clock,
-  Loader2,
   Lock,
-  LockOpen,
   RefreshCw
 } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { isLiveInputRequest, isSettledInputRequest, useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useAgents } from '../../hooks/useAgents'
-import { useVaultUnlock, vaultErrorText } from '../../hooks/useVault'
+import { useVaultUnlock, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
+import { VaultUnlockLabel } from './VaultUnlockLabel'
 import { SettingsButton } from '../settings/SettingsLayout'
 import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
@@ -2025,6 +2024,8 @@ function LiveUserBubble({ content, animate }: { content: string; animate: boolea
  */
 function LockedVaultChatCard({ agentId }: { agentId: string }): React.JSX.Element {
   const unlock = useVaultUnlock()
+  // The first unlock after an update downloads the pinned guest image first.
+  const unlockPercent = useVaultUnlockPercent(agentId)
   return (
     <div>
       <div
@@ -2046,11 +2047,8 @@ function LockedVaultChatCard({ agentId }: { agentId: string }): React.JSX.Elemen
               unlock.mutate(agentId)
             }}
           >
-            {/* Fixed width: Unlock and Unlocking… swap in place. */}
-            <span className="inline-flex min-w-[6.5rem] items-center justify-center gap-1.5">
-              {unlock.isPending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <LockOpen size={14} aria-hidden="true" />}
-              {unlock.isPending ? 'Unlocking…' : 'Unlock'}
-            </span>
+            {/* Fixed width: Unlock, Unlocking… and the download percent swap in place. */}
+            <VaultUnlockLabel pending={unlock.isPending} percent={unlockPercent} />
           </SettingsButton>
         </div>
         {unlock.error && (

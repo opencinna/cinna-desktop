@@ -143,7 +143,8 @@ export function createAppleVzBackend(options: AppleVzBackendOptions): VaultBacke
     list: async (dir) => (await (await session()).request('vault.list', { dir })).vaults,
     create: async (spec) => (await (await session()).request('vault.create', spec)).vault,
     status: async (vaultId) => (await session()).request('vault.status', { vaultId }),
-    unlock: async (vaultId, purpose) => (await (await session()).request('vault.unlock', { vaultId, purpose }, { timeoutMs: PROMPT_TIMEOUT_MS })).state,
+    unlock: async (vaultId, purpose, rootfsPath) =>
+      (await (await session()).request('vault.unlock', { vaultId, purpose, ...(rootfsPath ? { rootfsPath } : {}) }, { timeoutMs: PROMPT_TIMEOUT_MS })).state,
     lock: async (vaultId) => (await (await session()).request('vault.lock', { vaultId })).state,
     hold: async (vaultId, holdId) => { await (await session()).request('vault.hold', { vaultId, holdId }) },
     release: async (vaultId, holdId) => { await (await session()).request('vault.release', { vaultId, holdId }) },

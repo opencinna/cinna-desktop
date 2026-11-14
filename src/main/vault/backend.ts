@@ -62,8 +62,12 @@ export interface VaultBackend {
   list(dir: string): Promise<VaultSummary[]>
   create(spec: VaultCreateSpec): Promise<VaultSummary>
   status(vaultId: string): Promise<VaultSummary>
-  /** User presence inside the backend's trust base; resolves with the state reached. */
-  unlock(vaultId: string, purpose: string): Promise<VaultState>
+  /**
+   * User presence inside the backend's trust base; resolves with the state
+   * reached. `rootfsPath`: the guest image a cold boot uses (the one pinned
+   * now), else the one the vault was created with.
+   */
+  unlock(vaultId: string, purpose: string, rootfsPath?: string): Promise<VaultState>
   lock(vaultId: string): Promise<VaultState>
   hold(vaultId: string, holdId: string): Promise<void>
   release(vaultId: string, holdId: string): Promise<void>

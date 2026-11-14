@@ -308,11 +308,14 @@ test('afterPack refuses an arm64 mac package without a shippable vault helper; -
   const { root } = fixture(t)
   const appPath = join(root, 'Cinna Desktop.app')
   const helper = join(appPath, 'Contents', 'Library', 'Helpers', 'VaultHelper.app')
-  const arm64 = { appPath, arch: 3, dirOnly: false }
-  assert.throws(() => verifyVaultHelper(arm64, helperTools()), /VaultHelper\.app cannot ship: it is missing\. Build it with FLAVOR=release/)
+  // The repo's pin is unpublished: a present helper must still pass every release check.
+  const arm64 = { appPath, arch: 3, dirOnly: false, projectDir: guestPinProject(t, { published: false }) }
+  // A published pin needs the helper.
+  const published = { ...arm64, projectDir: guestPinProject(t, { published: true }) }
+  assert.throws(() => verifyVaultHelper(published, helperTools()), /VaultHelper\.app cannot ship: it is missing\. Build it with make vault-release/)
   const warnings = []
   t.mock.method(console, 'warn', (line) => warnings.push(line))
-  assert.doesNotThrow(() => verifyVaultHelper({ ...arm64, dirOnly: true }, helperTools()))
+  assert.doesNotThrow(() => verifyVaultHelper({ ...published, dirOnly: true }, helperTools()))
   assert.match(warnings[0], /^WARNING Agent Vault helper .* it is missing/)
 
   mkdirSync(join(helper, 'Contents', 'MacOS'), { recursive: true })
@@ -335,6 +338,61 @@ test('afterPack refuses an arm64 mac package without a shippable vault helper; -
 
   verifyVaultHelper({ appPath, arch: 1, dirOnly: false }, helperTools())
   assert.equal(existsSync(helper), false)
+})
+
+// A runtimePins.ts holding only the VAULT_GUEST block, as vault:pin-guest prints it.
+function guestPinProject(t, { published, version = '1.0.0-7', rootHash = 'a'.repeat(64) }) {
+  const project = mkdtempSync(join(tmpdir(), 'cinna-guest-pin-'))
+  t.after(() => rmSync(project, { recursive: true, force: true }))
+  mkdirSync(join(project, 'src', 'shared'), { recursive: true })
+  const asset = (name) => `{ file: '${name}', url: 'https://example.invalid/${name}', sha256: '${'b'.repeat(64)}', size: 1 }`
+  writeFileSync(join(project, 'src', 'shared', 'runtimePins.ts'), `export {}\nconst VAULT_GUEST: VaultGuestPin = {\n  published: ${published},\n  version: '${version}',\n  rootHash: '${rootHash}',\n  hashOffset: 4096,\n  kernel: ${asset('k')},\n  initrd: ${asset('i')},\n  rootfs: ${asset('r')}\n}\n`)
+  return project
+}
+
+test('afterPack refuses a vault helper built for another guest than the published pin; an unpublished pin asks nothing of it', (t) => {
+  const { root } = fixture(t)
+  const appPath = join(root, 'Cinna Desktop.app')
+  const helper = join(appPath, 'Contents', 'Library', 'Helpers', 'VaultHelper.app')
+  const guest = join(helper, 'Contents', 'Resources', 'guest')
+  mkdirSync(join(helper, 'Contents', 'MacOS'), { recursive: true })
+  mkdirSync(guest, { recursive: true })
+  writeFileSync(join(helper, 'Contents', 'MacOS', 'VaultHelper'), '')
+  writeFileSync(join(helper, 'Contents', 'embedded.provisionprofile'), '')
+  for (const file of ['Image', 'initrd.img']) writeFileSync(join(guest, file), '')
+  const published = guestPinProject(t, { published: true })
+  const arm64 = (projectDir) => ({ appPath, arch: 'arm64', dirOnly: false, projectDir })
+
+  // Unpublished: a helper that is there passes the release checks without a lock…
+  const unpublished = guestPinProject(t, { published: false })
+  assert.doesNotThrow(() => verifyVaultHelper(arm64(unpublished), helperTools()))
+  // …but a test or dev one never ships, pin or no pin.
+  assert.throws(() => verifyVaultHelper(arm64(unpublished), helperTools({ flavor: 'test' })), /flavor is test, not release/)
+  // Published: the bundled lock must be there and name the pinned image.
+  assert.throws(() => verifyVaultHelper(arm64(published), helperTools()), /carries no guest\/guest\.lock\.json/)
+  writeFileSync(join(guest, 'guest.lock.json'), JSON.stringify({ version: '1.0.0-6', rootHash: 'c'.repeat(64), hashOffset: 4096 }))
+  assert.throws(() => verifyVaultHelper(arm64(published), helperTools()), /its guest is 1\.0\.0-6, not the pinned 1\.0\.0-7; its guest root hash is not the pinned one/)
+  writeFileSync(join(guest, 'guest.lock.json'), JSON.stringify({ version: '1.0.0-7', rootHash: 'c'.repeat(64), hashOffset: 4096 }))
+  assert.throws(() => verifyVaultHelper(arm64(published), helperTools()), /root hash is not the pinned one/)
+  writeFileSync(join(guest, 'guest.lock.json'), JSON.stringify({ version: '1.0.0-7', rootHash: 'A'.repeat(64), hashOffset: 8192 }))
+  assert.throws(() => verifyVaultHelper(arm64(published), helperTools()), /its guest hash offset 8192 is not the pinned 4096/)
+  writeFileSync(join(guest, 'guest.lock.json'), JSON.stringify({ version: '1.0.0-7', rootHash: 'A'.repeat(64), hashOffset: 4096 }))
+  assert.doesNotThrow(() => verifyVaultHelper(arm64(published), helperTools()))
+  // --dir only warns, as for every other helper problem.
+  writeFileSync(join(guest, 'guest.lock.json'), JSON.stringify({ version: '1.0.0-6', rootHash: 'a'.repeat(64), hashOffset: 4096 }))
+  t.mock.method(console, 'warn', () => {})
+  assert.doesNotThrow(() => verifyVaultHelper({ ...arm64(published), dirOnly: true }, helperTools()))
+  // Unpublished and no helper at all: the package ships none (Agent Vault unavailable).
+  rmSync(helper, { recursive: true, force: true })
+  const logs = []
+  t.mock.method(console, 'log', (line) => logs.push(line))
+  assert.doesNotThrow(() => verifyVaultHelper(arm64(unpublished), helperTools()))
+  assert.match(logs.join('\n'), /No vault helper: RUNTIME_PINS\.vaultGuest is unpublished/)
+  // A published pin still requires it.
+  assert.throws(() => verifyVaultHelper(arm64(published), helperTools()), /it is missing/)
+  // The repo's own pin parses (and is what the default projectDir reads).
+  const { readVaultGuestPin } = require('./vault/guest-pin.cjs')
+  assert.equal(typeof readVaultGuestPin().published, 'boolean')
 })
 
 test('afterPack requires the pinned vault adapter tar inside app.asar', async (t) => {

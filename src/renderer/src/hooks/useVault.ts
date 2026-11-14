@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import {
   formatVaultCountdown,
   vaultChatFilesSweptText,
+  vaultImageDownloadText,
   type VaultAvailabilityDto,
   type VaultChatFilesSweptEvent,
   type VaultErrorCode,
@@ -210,6 +211,32 @@ function dropAgent(queryClient: QueryClient, agentId: string): void {
   void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
   void queryClient.invalidateQueries({ queryKey: localAgentKey(agentId) })
   void queryClient.invalidateQueries({ queryKey: ['agents'] })
+}
+
+/**
+ * While an unlock of `agentId` first downloads the guest image this version
+ * pins (the first unlock after an update): "Downloading vault image… 40%",
+ * for the label that already says the unlock is pending; null otherwise.
+ * Callers show it only while their unlock is pending.
+ */
+export function useVaultUnlockProgress(agentId: string | null): string | null {
+  const percent = useVaultUnlockPercent(agentId)
+  return percent === null ? null : vaultImageDownloadText(percent)
+}
+
+/** The percent of the guest image an unlock of `agentId` is downloading, or null when none is. */
+export function useVaultUnlockPercent(agentId: string | null): number | null {
+  const [progress, setProgress] = useState<{ agentId: string; percent: number } | null>(null)
+  useEffect(() => {
+    setProgress(null)
+    const api = vaultApi()
+    if (!agentId || !api?.onUnlockProgress) return
+    return api.onUnlockProgress((event) => {
+      if (event.agentId !== agentId) return
+      setProgress(event.percent === null ? null : { agentId, percent: event.percent })
+    })
+  }, [agentId])
+  return progress && progress.agentId === agentId ? progress.percent : null
 }
 
 export function useVaultUnlock() {

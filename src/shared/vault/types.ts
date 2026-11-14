@@ -89,6 +89,24 @@ export interface VaultStateEvent {
 
 export const VAULT_STATE_CHANNEL = 'vault:state'
 
+/**
+ * `vault:unlock-progress` push: an unlock is first downloading the guest image
+ * this version of Cinna pins (the first unlock after an update). `percent`
+ * 0–100 while it downloads, null once it is done or failed.
+ */
+export interface VaultUnlockProgressEvent {
+  agentId: string
+  vaultId: string
+  percent: number | null
+}
+
+export const VAULT_UNLOCK_PROGRESS_CHANNEL = 'vault:unlock-progress'
+
+/** What an unlock's pending label says while it downloads the image. */
+export function vaultImageDownloadText(percent: number): string {
+  return `Downloading vault image… ${percent}%`
+}
+
 /** "4:32", "0:12": a vault's time to its lock, minutes and seconds, rounded up. */
 export function formatVaultCountdown(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000))

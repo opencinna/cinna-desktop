@@ -175,15 +175,37 @@ function gitAsset(plat: string, sha256: string, size: number): RuntimePinAsset {
 }
 
 /**
- * The Agent Vault guest image (D27, D32): the read-only erofs + dm-verity
- * rootfs every vault boots, uploaded as a release asset by `make vault-image`.
- * The helper embeds the kernel, initrd and `rootHash` itself; main downloads
- * `rootfs` into `<SecureAgents>/.images/<version>/` and checks `sha256`.
+ * The Agent Vault guest image (D27, D32): the kernel, initrd and read-only
+ * erofs + dm-verity rootfs every vault boots, and the verity `rootHash` the
+ * helper compiles in.
+ *
+ * - `kernel` / `initrd` go into the release helper's bundle (`make
+ *   vault-release` builds it from exactly these bytes); `rootfs` is what main
+ *   downloads into `<SecureAgents>/.images/rootfs-<version>.img` and checks.
+ * - The four assets live on the GitHub app release that first ships this
+ *   guest version, under fixed names: `vault-guest-<version>-Image`,
+ *   `vault-guest-<version>-initrd.img`, `vault-guest-<version>-rootfs.img`
+ *   and `vault-guest-<version>.lock.json`, so every URL is
+ *   `https://github.com/opencinna/cinna-desktop/releases/download/v<appVersion>/<file>`
+ *   and known before the upload.
  *
  * `published: false` is the explicit placeholder until the first image is
  * released: a packaged build then reports `image-missing` and offers no
  * vault. A dev build reads `CINNA_VAULT_GUEST_DIR` or `build/vault-guest/`.
+ *
+ * `npm run vault:pin-guest -- --app-version <x.y.z>` prints the block below
+ * for a `RELEASE=1` `make vault-image`. Scripts read it by text
+ * (`scripts/vault/guest-pin.cjs`): keep it one `const VAULT_GUEST` object of
+ * plain literals, no comments inside.
  */
+export interface VaultGuestAsset {
+  /** The release asset's name (`vault-guest-<version>-…`). */
+  file: string
+  url: string
+  sha256: string
+  size: number
+}
+
 export interface VaultGuestPin {
   published: boolean
   version: string
@@ -191,19 +213,23 @@ export interface VaultGuestPin {
   rootHash: string
   /** Byte offset of the verity hash tree inside `rootfs`. */
   hashOffset: number
-  rootfs: { file: string; url: string; sha256: string; size: number }
+  kernel: VaultGuestAsset
+  initrd: VaultGuestAsset
+  rootfs: VaultGuestAsset
 }
 
-const VAULT_GUEST_UNPUBLISHED: VaultGuestPin = {
+const VAULT_GUEST: VaultGuestPin = {
   published: false,
   version: 'unpublished',
   rootHash: '',
   hashOffset: 0,
-  rootfs: { file: 'rootfs.img', url: '', sha256: '', size: 0 }
+  kernel: { file: '', url: '', sha256: '', size: 0 },
+  initrd: { file: '', url: '', sha256: '', size: 0 },
+  rootfs: { file: '', url: '', sha256: '', size: 0 }
 }
 
 export const RUNTIME_PINS = {
-  vaultGuest: VAULT_GUEST_UNPUBLISHED,
+  vaultGuest: VAULT_GUEST,
   claude: {
     cli: CLAUDE_CLI,
     /** Exactly what `claude --version` prints for the pin. */

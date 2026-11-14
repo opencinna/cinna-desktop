@@ -25,7 +25,7 @@
 // billing; --no-net skips the two curl probes that reach the internet.
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
-import { chmodSync, openSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { chmodSync, copyFileSync, openSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -659,7 +659,11 @@ try {
 
   // A running vault, then stdin close ⇒ the helper stops it and exits.
   const third = `${vaultId}-c`
-  await call('vault.create', { dir: secureAgents, vaultId: third, agentId: 'folder:c', agentName: 'C', engine: 'claude', sizeBytes: 1024 ** 3, egress: { hosts: [] }, rootfsPath: ROOTFS })
+  // Created with an image an update later deletes (a clone of the real one):
+  // the unlock below boots the current image it names instead.
+  const oldRootfs = join(dir, 'rootfs-old.img')
+  if (spawnSync('cp', ['-c', ROOTFS, oldRootfs]).status !== 0) copyFileSync(ROOTFS, oldRootfs)
+  await call('vault.create', { dir: secureAgents, vaultId: third, agentId: 'folder:c', agentName: 'C', engine: 'claude', sizeBytes: 1024 ** 3, egress: { hosts: [] }, rootfsPath: oldRootfs })
   await step('lock during a pending cold boot (D40)', async () => {
     const pendingUnlock = call('vault.unlock', { vaultId: third, purpose: 'race' }).then((r) => r, (e) => e)
     await new Promise((r) => setTimeout(r, UNLOCK_DELAY_MS / 3))
@@ -668,7 +672,13 @@ try {
     const st = (await call('vault.status', { vaultId: third })).state
     check(r.code === 'locked' && st === 'stopped', 'an unlock pending when the screen locks never boots', `${r.code ?? r.state}: ${r.message ?? ''}; state ${st}`)
   })
-  await step('vault.unlock third vault', () => call('vault.unlock', { vaultId: third, purpose: 'exit test' }))
+  rmSync(oldRootfs)
+  const relRootfs = await call('vault.unlock', { vaultId: third, purpose: 'x', rootfsPath: 'build/vault-guest/rootfs.img' }).catch((e) => e)
+  check(relRootfs.code === 'invalid', 'unlock refuses a relative rootfsPath', relRootfs.message)
+  const dirRootfs = await call('vault.unlock', { vaultId: third, purpose: 'x', rootfsPath: dir }).catch((e) => e)
+  check(dirRootfs.code === 'invalid', 'unlock refuses a rootfsPath that is not a regular file', dirRootfs.message)
+  const current = await step('vault.unlock third vault with the current rootfsPath (its own image is gone)', () => call('vault.unlock', { vaultId: third, purpose: 'exit test', rootfsPath: ROOTFS }))
+  check(current?.state === 'unlocked', 'a vault whose recorded image was deleted boots the rootfsPath its unlock names', JSON.stringify(current))
 
   // A second helper on the same SecureAgents dir: data.img is flock'ed (D40),
   // and a helper whose session reports a locked screen refuses to unlock.

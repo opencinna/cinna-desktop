@@ -22,6 +22,7 @@ import {
   useVaultSetSize,
   useVaultStatus,
   useVaultUnlock,
+  useVaultUnlockProgress,
   useVaultAvailability,
   useVaultUpdateDependencies,
   vaultErrorText
@@ -159,6 +160,8 @@ function VaultStatusCard({
 }): React.JSX.Element {
   const unlock = useVaultUnlock()
   const lock = useVaultLock()
+  // The first unlock after an update downloads the pinned guest image first.
+  const unlockDownload = useVaultUnlockProgress(agentId)
   const state = status?.state ?? fallbackState
   const until = status?.until ?? null
   const lockAfterMs = status?.lockAfterMs
@@ -166,7 +169,7 @@ function VaultStatusCard({
   const now = useNow(state === 'unlocked' && until !== null && !noTimer)
   const label = state === 'unlocked' ? unlockedLabel(until, now, lockAfterMs) : STATE_LABEL[state]
   // One line in every state, so a state change replaces the line and moves nothing.
-  const detail =
+  const stateDetail =
     state === 'error'
       ? (status?.error ?? 'The vault stopped with an error.')
       : state === 'tampered'
@@ -183,6 +186,8 @@ function VaultStatusCard({
             : state === 'locking'
               ? 'Sealing the disk…'
               : 'Unlocking asks for Touch ID or your password.'
+  // An unlock downloading the guest image says so on the same line.
+  const detail = (unlock.isPending && unlockDownload) || stateDetail
   const canLock = state === 'unlocked' || state === 'booting'
   const pending = unlock.isPending || lock.isPending
   const error = unlock.error ?? lock.error ?? loadError

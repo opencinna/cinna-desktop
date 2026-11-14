@@ -9,7 +9,6 @@ import {
   Image as ImageIcon,
   ListTree,
   Loader2,
-  LockOpen,
   SquareTerminal,
   Table2,
   TableOfContents,
@@ -53,7 +52,8 @@ import {
 import { useFileDownloadStore } from '../../stores/fileDownload.store'
 import { MAX_PREVIEW_BYTES } from '../../../../shared/filePreview'
 import { agentFileName, agentFileRefActions, isCredentialFileRef, type AgentFileRef } from '../../../../shared/agentFiles'
-import { useVaultUnlock, vaultErrorText } from '../../hooks/useVault'
+import { useVaultUnlock, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
+import { VaultUnlockLabel } from './VaultUnlockLabel'
 import { SettingsButton } from '../settings/SettingsLayout'
 import { pinnedFilesKey, useIsFilePinned, useTogglePinnedFile } from '../../hooks/usePinnedFiles'
 import { useArtifactsSupport } from '../../hooks/useArtifacts'
@@ -239,6 +239,8 @@ function LockedFileBody({
   onUnlocked: () => void
 }): React.JSX.Element {
   const unlock = useVaultUnlock()
+  // The first unlock after an update downloads the pinned guest image first.
+  const unlockPercent = useVaultUnlockPercent(agentId)
   return (
     <div className="flex flex-col items-start gap-2">
       <p className="text-xs text-[var(--color-text-muted)]">
@@ -257,11 +259,8 @@ function LockedFileBody({
           })
         }}
       >
-        {/* Fixed width: Unlock and Unlocking… swap in place. */}
-        <span className="inline-flex min-w-[6.5rem] items-center justify-center gap-1.5">
-          {unlock.isPending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <LockOpen size={14} aria-hidden="true" />}
-          {unlock.isPending ? 'Unlocking…' : 'Unlock'}
-        </span>
+        {/* Fixed width: Unlock, Unlocking… and the download percent swap in place. */}
+        <VaultUnlockLabel pending={unlock.isPending} percent={unlockPercent} />
       </SettingsButton>
       {unlock.error && (
         <p role="alert" className="text-xs text-[var(--color-danger)]">

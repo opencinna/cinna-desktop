@@ -83,6 +83,17 @@ describe('Apple VZ backend', () => {
     expect(await backend.availability()).toEqual({ ok: false, reason: 'helper-missing' })
   })
 
+  it('degrades cleanly in a package that ships no helper (unpublished guest): nothing spawned, every call refused with a code', async () => {
+    const spawnHelper = vi.fn()
+    const backend = createAppleVzBackend({ helperPath: join(dir, 'nope'), isPackaged: true, spawnHelper: spawnHelper as never })
+    expect(await backend.availability()).toEqual({ ok: false, reason: 'helper-missing' })
+    await expect(backend.hello()).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(backend.list(dir)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(backend.unlock('v', 'chat')).rejects.toMatchObject({ code: 'unavailable' })
+    await backend.shutdown()
+    expect(spawnHelper).not.toHaveBeenCalled()
+  })
+
   it('accepts a test helper in development and reports its flavor', async () => {
     const backend = make('test', false)
     expect(await backend.availability()).toEqual({ ok: true })

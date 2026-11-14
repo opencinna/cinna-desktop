@@ -109,6 +109,7 @@ import {
   VAULT_MOVE_PROGRESS_CHANNEL,
   VAULT_CHAT_FILES_SWEPT_CHANNEL,
   VAULT_STATE_CHANNEL,
+  VAULT_UNLOCK_PROGRESS_CHANNEL,
   type VaultAvailabilityDto,
   type VaultChatFilesSweptEvent,
   type VaultEngineAuthDto,
@@ -122,6 +123,7 @@ import {
   type VaultSecretListDto,
   type VaultStateEvent,
   type VaultStatusDto,
+  type VaultUnlockProgressEvent,
   type VaultTerminalCommand,
   type VaultTerminalEvent,
   type VaultTerminalHandle
@@ -583,6 +585,12 @@ const api = {
       const listener = (_event: IpcRendererEvent, payload: VaultStateEvent): void => cb(payload)
       ipcRenderer.on(VAULT_STATE_CHANNEL, listener)
       return () => { ipcRenderer.removeListener(VAULT_STATE_CHANNEL, listener) }
+    },
+    /** An unlock downloading the pinned guest image first (percent; null when done). */
+    onUnlockProgress: (cb: (event: VaultUnlockProgressEvent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: VaultUnlockProgressEvent): void => cb(payload)
+      ipcRenderer.on(VAULT_UNLOCK_PROGRESS_CHANNEL, listener)
+      return () => { ipcRenderer.removeListener(VAULT_UNLOCK_PROGRESS_CHANNEL, listener) }
     },
     /** A lock deleted the copies of these not-yet-sent attachments (by chat): drafts drop the chips. */
     onChatFilesSwept: (cb: (event: VaultChatFilesSweptEvent) => void): (() => void) => {

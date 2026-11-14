@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { VaultGuestPin } from '../../shared/runtimePins'
+import { RUNTIME_PINS, type VaultGuestPin } from '../../shared/runtimePins'
 
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }),
@@ -17,7 +18,7 @@ vi.mock('../db/client', () => ({
 }))
 
 const { installRuntimeHost } = await import('../host/runtimeHost')
-const { ensureGuestImage, guestHashMismatch, guestImagePath, guestRootfs, setGuestPinForTest } = await import('./guestImage')
+const { ensureGuestImage, guestHashMismatch, guestImagePath, guestRootfs, pruneGuestImages, setGuestPinForTest } = await import('./guestImage')
 const { installVaultBackend, unavailableBackend } = await import('./backend')
 const { vaultService } = await import('./vaultService')
 
@@ -37,6 +38,8 @@ function pin(overrides: Partial<VaultGuestPin> = {}): VaultGuestPin {
     version: '1.0.0-1',
     rootHash: ROOT_HASH,
     hashOffset: 4096,
+    kernel: { file: 'vault-guest-1.0.0-1-Image', url: '', sha256: 'c'.repeat(64), size: 1 },
+    initrd: { file: 'vault-guest-1.0.0-1-initrd.img', url: '', sha256: 'd'.repeat(64), size: 1 },
     rootfs: { file: 'rootfs.img', url: `http://127.0.0.1:${port}/rootfs.img`, sha256: createHash('sha256').update(IMAGE).digest('hex'), size: IMAGE.length },
     ...overrides
   }
@@ -154,5 +157,67 @@ describe('the helper root hash', () => {
     expect((wrong.availability as { detail?: string }).detail).toMatch(/another guest image/)
     installVaultBackend(helper(ROOT_HASH))
     expect((await vaultService.availability(true)).availability).toEqual({ ok: true })
+  })
+})
+
+describe('pruning old guest images', () => {
+  function images(): string[] {
+    return readdirSync(join(secure, '.images')).sort()
+  }
+
+  it('deletes every rootfs-*.img but the pinned one, and partial downloads, and nothing else', async () => {
+    host(true)
+    setGuestPinForTest(pin())
+    const dir = join(secure, '.images')
+    mkdirSync(join(dir, '.staging-1-2-3'), { recursive: true })
+    writeFileSync(join(dir, '.staging-1-2-3', 'rootfs.img'), 'partial')
+    for (const name of ['rootfs-1.0.0-1.img', 'rootfs-0.9.0-1.img', 'rootfs-dev.img', 'notes.txt', 'rootfs-old.img.bak']) writeFileSync(join(dir, name), name)
+    mkdirSync(join(dir, 'rootfs-dir.img'))
+    // Beside .images, in SecureAgents itself: never touched.
+    writeFileSync(join(secure, 'rootfs-0.9.0-1.img'), 'outside')
+    expect((await pruneGuestImages(secure)).sort()).toEqual(['rootfs-0.9.0-1.img', 'rootfs-dev.img'])
+    expect(images()).toEqual(['notes.txt', 'rootfs-1.0.0-1.img', 'rootfs-dir.img', 'rootfs-old.img.bak'])
+    expect(existsSync(join(secure, 'rootfs-0.9.0-1.img'))).toBe(true)
+    // The current image survives a second pass too.
+    expect(await pruneGuestImages(secure)).toEqual([])
+    expect(readFileSync(join(dir, 'rootfs-1.0.0-1.img'), 'utf8')).toBe('rootfs-1.0.0-1.img')
+  })
+
+  it('removes a symlink by that name, never what it points at, and refuses a .images that is a symlink', async () => {
+    host(true)
+    setGuestPinForTest(pin())
+    const elsewhere = join(home, 'elsewhere')
+    mkdirSync(elsewhere)
+    writeFileSync(join(elsewhere, 'rootfs-0.1.img'), 'keep me')
+    mkdirSync(join(secure, '.images'))
+    symlinkSync(join(elsewhere, 'rootfs-0.1.img'), join(secure, '.images', 'rootfs-0.1.img'))
+    expect(await pruneGuestImages(secure)).toEqual(['rootfs-0.1.img'])
+    expect(readFileSync(join(elsewhere, 'rootfs-0.1.img'), 'utf8')).toBe('keep me')
+
+    rmSync(join(secure, '.images'), { recursive: true })
+    symlinkSync(elsewhere, join(secure, '.images'))
+    expect(await pruneGuestImages(secure)).toEqual([])
+    expect(readdirSync(elsewhere)).toEqual(['rootfs-0.1.img'])
+  })
+
+  it('does nothing unpackaged, for an unpublished pin, or without a .images folder', async () => {
+    mkdirSync(join(secure, '.images'))
+    writeFileSync(join(secure, '.images', 'rootfs-0.9.0-1.img'), 'old')
+    host(false)
+    setGuestPinForTest(pin())
+    expect(await pruneGuestImages(secure)).toEqual([])
+    host(true)
+    setGuestPinForTest({ ...pin(), published: false })
+    expect(await pruneGuestImages(secure)).toEqual([])
+    expect(images()).toEqual(['rootfs-0.9.0-1.img'])
+    setGuestPinForTest(pin())
+    expect(await pruneGuestImages(join(home, 'nowhere'))).toEqual([])
+  })
+})
+
+describe('the pin the release scripts read', () => {
+  it('is RUNTIME_PINS.vaultGuest, read from the source by scripts/vault/guest-pin.cjs', () => {
+    const { readVaultGuestPin } = createRequire(import.meta.url)('../../../scripts/vault/guest-pin.cjs') as { readVaultGuestPin: (dir: string) => unknown }
+    expect(readVaultGuestPin(join(__dirname, '..', '..', '..'))).toEqual(RUNTIME_PINS.vaultGuest)
   })
 })

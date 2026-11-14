@@ -9,6 +9,9 @@ Concepts: [Agent Vault](vault.md). Files and IPC: [vault_tech.md](vault_tech.md)
 | Unit + guest contract (vaultd in fake mode, frames, tokens, transcript routing, exclusions, move service, renderer) | `npm test` | nothing | no |
 | Guest image | `make vault-image [RELEASE=1] [VERSION=<x.y.z-n>]` | Apple silicon, `swiftc`, node, network; `RELEASE=1` refuses a placeholder vaultd, so run `npx electron-vite build` first (it bundles `out/main/vaultd.js`) | no |
 | Helper | `make vault-helper [FLAVOR=test\|dev\|release]` (default `test`) | Xcode; `dev` and `release` need the team's Developer ID identity in the login keychain and talk to Apple | no |
+| Release helper | `make vault-release [DRY_RUN=1]` | Developer ID, Xcode, network; built only from the pinned guest (see Release below) | no |
+| Pin a new guest | `npm run vault:pin-guest -- --app-version <x.y.z>` | `build/vault-guest/` from `make vault-image RELEASE=1` | no |
+| Clean up | `make vault-clean` | nothing | no |
 | Helper against the real guest | `make vault-helper-smoke [NO_NET=1]` | builds the test flavor, then needs `build/vault-guest/` | no |
 | Move against a real VM | `make vault-move-smoke` | test helper + image; runs `moveService.moveIn` with the pinned runtime and adapter, **sends no prompt**; `SMOKE_ENGINE=codex\|opencode\|antigravity` moves an agent on that engine instead of Claude; `SMOKE_PYPROJECT=1` adds a rebuild through the proxy (locks inside the vault when there is no `uv.lock`), `SMOKE_KEEP=1` keeps the workshop | no |
 | Live | `make vault-live` | test helper + image; **one Haiku turn** on the repo `.env` `ANTHROPIC_API_KEY`; sandboxed `HOME` and `userData` | **yes** |
@@ -38,16 +41,23 @@ Concepts: [Agent Vault](vault.md). Files and IPC: [vault_tech.md](vault_tech.md)
 
 ## Release
 
-The vault is in a release only when all of this is true; until the first image is published a packaged app reports `image-missing` and offers no vault.
+A release carries vaults only when `RUNTIME_PINS.vaultGuest` is published and the release helper is built from exactly that guest. Until the first image is published a packaged app reports `image-missing` and offers no vault. The full order, with the app's own steps around it, is in [Release & Distribution](../../development/distribution/release.md#agent-vault-in-a-release); this is the vault part.
 
-1. `npx electron-vite build` (it also writes the adapter tars into `out/vault/`), then `make vault-image RELEASE=1 VERSION=<x.y.z-n>` — writes `build/vault-guest/{Image,initrd.img,rootfs.img,guest.lock.json}`.
-2. Upload `rootfs.img` as a **release asset**.
-3. Fill `RUNTIME_PINS.vaultGuest` in `src/shared/runtimePins.ts` from `guest.lock.json`: `published: true`, `version`, `rootHash`, `hashOffset`, and `rootfs` (`file`, `url` of the asset, `sha256` and `size` from `files["rootfs.img"]`). It is `published: false` today.
-4. `make vault-helper FLAVOR=release` **after** step 1, on the release machine (Developer ID identity, Xcode, network for the provisioning profile). It embeds `Image`, `initrd.img` and the root hash and signs the helper with its own profile; the export step must keep `keychain-access-groups` (the script fails if it does not).
-5. `npm run release:mac`. `afterPack` verifies the two adapter tars against their pins and (`verifyVaultHelper` in `scripts/packaged-dependencies.cjs`) fails an arm64 package unless the helper is the **release** flavor, has no test-gate marker in its bytes, carries the provisioning profile and the keychain group, passes `codesign --verify --strict --deep`, and has `Image` and `initrd.img` inside; it removes the helper from the x64 package. `electron-builder.yml` ships it at `Contents/Library/Helpers/VaultHelper.app` and keeps it out of electron-builder's re-signing.
+**A new guest image** — only when vaultd (`native/vault/guest/vaultd/`), the guest (`native/vault/guest/`) or `scripts/vault/build-guest.*` changed since the published one (`git log <last release tag>.. -- native/vault/guest scripts/vault/build-guest.*`):
 
-Publishing the pin is enough for a packaged app: the first move downloads `rootfs.img` into `<SecureAgents>/.images/` (`guestImage.ts:ensureGuestImage`), checks its sha256 against the pin, and keeps it for the next vault. The helper must be built from the **same** image: its compiled-in root hash is compared with the pin's before anything is created, and a mismatch stops the move naming both.
+1. `npx electron-vite build`, then `make vault-image RELEASE=1 VERSION=<x.y.z-n>` → `build/vault-guest/`.
+2. `npm run vault:pin-guest -- --app-version <next app version>`: refuses a placeholder vaultd, stages the four assets as `vault-guest-<version>-{Image,initrd.img,rootfs.img}` and `vault-guest-<version>.lock.json` in `build/vault-guest-release/<version>/`, and prints the `const VAULT_GUEST` block (URLs under `releases/download/v<next app version>/`) and the `gh release upload` line. Paste the block into `src/shared/runtimePins.ts` and commit it **before** `npm version`.
+3. After `npm run release:mac` has created the draft, run the printed `gh release upload` line, so the guest assets sit on the same draft and go public with it.
 
-**Still to do for the first release with vaults:** upload the rootfs as a release asset and fill `RUNTIME_PINS.vaultGuest` (it is `published: false` today, so a packaged app reports `image-missing` and offers no vault).
+**Every release** (new guest or not):
+
+4. `make vault-release` (Developer ID identity, Xcode, network). With an unpublished pin it removes `resources/vault/VaultHelper.app` instead (the release ships no helper; the app reports Agent Vault unavailable). With a published one it uses `build/vault-guest/` if its lock is exactly the pin, otherwise downloads the pinned Image, initrd and rootfs into `build/vault-release-guest/<version>/` and checks their sha256 and size; then builds the **release** helper into `resources/vault/`. `DRY_RUN=1` only picks and checks the guest. `build-helper.sh` refuses a release flavor whose guest lock or Image/initrd hashes differ from the pin, so a dev image left in `build/vault-guest/` can no longer slip into a release helper.
+5. `npm run release:mac`. `afterPack` (`verifyVaultHelper`) fails an arm64 package unless the helper is the release flavor, has no test-gate marker, carries its provisioning profile and keychain group, passes `codesign --verify --strict --deep`, holds `Image`, `initrd.img` and `guest.lock.json`, and — with a published pin — that lock's version, root hash and hash offset equal the pin. x64 packages drop the helper.
+
+**After the release:** `make vault-clean` (removes `build/vault-guest*`, `build/vault-release-guest`, `build/vault-dev-electron` and `resources/vault/VaultHelper.app`), then `make vault-helper` for the test lanes, or `make vault-dev-restart` to keep developing with Touch ID.
+
+**On users' Macs** nothing is left behind: every unlock boots the guest the app pins now (downloaded first if it is missing, "Unlocking… N%"), whatever image a vault was created with, and at start a packaged app deletes the other `rootfs-*.img` files and partial downloads in `<SecureAgents>/.images/`.
+
+**Never delete a GitHub release that hosts the guest assets** the current pin names (its URLs say which), nor one an app version still in use pins: that app could no longer create a vault.
 
 Release-machine details live in [Release & Distribution](../../development/distribution/release.md#agent-vault-helper-and-guest-image).

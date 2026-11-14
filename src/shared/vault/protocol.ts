@@ -149,7 +149,13 @@ export interface HelperRequestMap {
     }
     result: { vault: VaultSummary }
   }
-  'vault.unlock': { params: { vaultId: string; purpose: string }; result: { state: VaultState } }
+  /**
+   * `rootfsPath`: the guest image a cold boot uses instead of the one recorded
+   * at create (absolute, a regular file). The app passes the image it pins now,
+   * so a vault made before an update boots the new one; the helper's
+   * compiled-in verity root hash checks it whatever the path.
+   */
+  'vault.unlock': { params: { vaultId: string; purpose: string; rootfsPath?: string }; result: { state: VaultState } }
   'vault.lock': { params: { vaultId: string }; result: { state: VaultState } }
   'vault.hold': { params: { vaultId: string; holdId: string }; result: Record<string, never> }
   'vault.release': { params: { vaultId: string; holdId: string }; result: Record<string, never> }
