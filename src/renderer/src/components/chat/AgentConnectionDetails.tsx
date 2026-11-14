@@ -3,6 +3,8 @@ import type { AgentData } from '../../../../preload'
 import { canConduct } from '../../../../shared/chatRouting'
 import { DEVELOPMENT_RUNTIME_NAMES } from '../../../../shared/developmentSession'
 import { useLocalAgent } from '../../hooks/useLocalAgents'
+import { useVaultStatus } from '../../hooks/useVault'
+import { VAULT_ENGINE_NAME } from '../agents/local/security/vaultText'
 import { useProviders } from '../../hooks/useProviders'
 import { useAuthStore } from '../../stores/auth.store'
 import { RuntimePanel } from '../agents/local/RuntimePanel'
@@ -43,6 +45,15 @@ function FolderDetails({ agent }: { agent: AgentData }): React.JSX.Element {
     {data ? <RuntimePanel agent={data} compact />
       : <p className="mt-2">{isError ? 'Runtime details unavailable' : 'Loading runtime…'}</p>}
   </>
+}
+
+/** An agent in an Agent Vault: no folder or ACP process on this Mac; its engine runs inside the vault. */
+function VaultDetails({ agent }: { agent: AgentData }): React.JSX.Element {
+  const { data } = useVaultStatus(agent.id)
+  return <Details rows={[
+    ['Runs on', 'Agent Vault on this Mac'],
+    ['Engine', data ? VAULT_ENGINE_NAME[data.engine] : null]
+  ]} />
 }
 
 function AcpDetails({ agent }: { agent: AgentData }): React.JSX.Element {
@@ -97,6 +108,7 @@ export function AgentConnectionDetails({ agent }: { agent: AgentData }): React.J
         ['Runs on', 'This computer'],
         ['Settings', 'Local Development']
       ]} />
+      : agent.source === 'vault' ? <VaultDetails agent={agent} />
       : agent.source === 'folder' ? <FolderDetails agent={agent} />
       : agent.driver === 'acp' ? <AcpDetails agent={agent} />
       : agent.driver === 'managed' ? <ManagedDetails agent={agent} />

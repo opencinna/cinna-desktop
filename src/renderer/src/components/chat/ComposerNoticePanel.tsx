@@ -289,8 +289,9 @@ function NoticeRow({ notice, unfold, leaving, onLeft }: {
 export function StableLabel({ label, pending, pendingLabel }: { label: ReactNode; pending: boolean; pendingLabel: ReactNode }): React.JSX.Element {
   return (
     <span className="grid">
-      <span aria-hidden={pending} className={`col-start-1 row-start-1 flex items-center gap-1 ${pending ? 'invisible' : ''}`}>{label}</span>
-      <span aria-hidden={!pending} className={`col-start-1 row-start-1 flex items-center gap-1 ${pending ? '' : 'invisible'}`}>{pendingLabel}</span>
+      {/* Centred: the cell is as wide as the longer label, and the shorter one sits in its middle. */}
+      <span aria-hidden={pending} className={`col-start-1 row-start-1 flex items-center justify-center gap-1 ${pending ? 'invisible' : ''}`}>{label}</span>
+      <span aria-hidden={!pending} className={`col-start-1 row-start-1 flex items-center justify-center gap-1 ${pending ? '' : 'invisible'}`}>{pendingLabel}</span>
     </span>
   )
 }

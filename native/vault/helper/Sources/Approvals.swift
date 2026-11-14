@@ -3,7 +3,7 @@
 // token = base64url(JSON(claims)) "." base64url(HMAC-SHA256(key, firstPart)),
 // claims = {v:1, vaultId, action, detailSha256, nonce, exp}.
 // Guest-verified actions are signed with the vault's per-boot approval key
-// (vaultd holds it); egress / resize / destroy with this process's own key and
+// (vaultd holds it); egress / resize / destroy / lock-timeout with this process's own key and
 // verified here, single use.
 //
 // Main never supplies prompt text. It names an action and a detail; the helper
@@ -111,6 +111,11 @@ enum Approvals {
       guard let n = parseResizeDetail(detail) else { throw invalid("resize detail must be resize:<bytes>") }
       guard n > sizeBytes else { throw invalid("a vault disk can only grow") }
       return "raise the disk size limit of the vault of agent \(agent) to \(gb(n))"
+    case "lock-timeout":
+      guard let ms = parseLockTimeoutDetail(detail) else { throw invalid("lock-timeout detail must be lock-timeout:<ms>") }
+      return ms == 0
+        ? "keep the vault of agent \(agent) unlocked until Cinna quits"
+        : "keep the vault of agent \(agent) unlocked for \(duration(ms)) after use"
     case "destroy":
       guard detail == "destroy" else { throw invalid("destroy detail must be destroy") }
       return "permanently delete the vault of agent \(agent) and everything in it"
@@ -121,6 +126,21 @@ enum Approvals {
 
   static func egressDetail(_ hosts: [String]) -> String { "egress:" + canonicalHosts(hosts).joined(separator: ",") }
   static func resizeDetail(_ size: Int64) -> String { "resize:\(size)" }
+  /// protocol.ts approvalDetail({method:'vault.setLockTimeout'}).
+  static func lockTimeoutDetail(_ ms: Int64) -> String { "lock-timeout:\(ms)" }
+
+  static func parseLockTimeoutDetail(_ d: String) -> Int64? {
+    guard d.hasPrefix("lock-timeout:"), let n = Int64(d.dropFirst(13)), LOCK_TIMEOUTS.contains(n) else { return nil }
+    return n
+  }
+
+  /// "30 seconds", "5 minutes": the offered timeouts in words.
+  static func duration(_ ms: Int64) -> String {
+    let s = ms / 1000
+    if s % 60 != 0 || s < 60 { return s == 1 ? "1 second" : "\(s) seconds" }
+    let m = s / 60
+    return m == 1 ? "1 minute" : "\(m) minutes"
+  }
 
   static func parseEgressDetail(_ d: String) -> [String]? {
     guard d.hasPrefix("egress:") else { return nil }

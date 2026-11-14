@@ -57,6 +57,18 @@ export function registerVaultHandlers(): void {
     return vaultService.result(() => vaultService.setEgress(getSettingsScopeUserId(), agentId, hosts))
   })
 
+  ipcHandle('vault:set-lock-timeout', (_event, agentId: string, lockAfterMs: unknown): Promise<VaultResult<VaultStatusDto>> => {
+    userActivation.requireActivated()
+    return vaultService.result(() => vaultService.setLockTimeout(getSettingsScopeUserId(), agentId, lockAfterMs))
+  })
+
+  // Fire-and-forget from the composer's keystrokes: nothing comes back, and a
+  // session that is not activated simply does not touch.
+  ipcHandle('vault:touch', (_event, agentId: unknown): void => {
+    if (!userActivation.isActivated() || typeof agentId !== 'string') return
+    vaultService.touch(getSettingsScopeUserId(), agentId)
+  })
+
   ipcHandle('vault:destroy', (_event, agentId: string): Promise<VaultResult<void>> => {
     userActivation.requireActivated()
     return vaultService.result(() => vaultService.destroy(getSettingsScopeUserId(), agentId))

@@ -571,6 +571,10 @@ const api = {
     setSize: (agentId: string, sizeBytes: number): Promise<VaultResult<VaultStatusDto>> => ipcRenderer.invoke('vault:set-size', agentId, sizeBytes),
     /** Gated: prompts. The whole allowlist, host names (`*.example.com` for subdomains). */
     setEgress: (agentId: string, hosts: string[]): Promise<VaultResult<VaultStatusDto>> => ipcRenderer.invoke('vault:set-egress', agentId, hosts),
+    /** 30 000, 300 000 or 0 (until Cinna quits). Shorter: no prompt; longer: the helper prompts. */
+    setLockTimeout: (agentId: string, lockAfterMs: number): Promise<VaultResult<VaultStatusDto>> => ipcRenderer.invoke('vault:set-lock-timeout', agentId, lockAfterMs),
+    /** Typing to a vault agent: restarts its unlocked vault's idle window. Fire-and-forget. */
+    touch: (agentId: string): void => { void ipcRenderer.invoke('vault:touch', agentId).catch(() => {}) },
     /** Gated: prompts. Deletes the vault and the agent with it (no backup). */
     destroy: (agentId: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:destroy', agentId),
     onState: (cb: (event: VaultStateEvent) => void): (() => void) => {

@@ -17,10 +17,12 @@ import {
   useVaultRuntimes,
   useVaultSecrets,
   useVaultSetEgress,
+  useVaultSetLockTimeout,
   useVaultSetSecret,
   useVaultSetSize,
   useVaultStatus,
   useVaultUnlock,
+  useVaultAvailability,
   useVaultUpdateDependencies,
   vaultErrorText
 } from '../../../../hooks/useVault'
@@ -38,15 +40,10 @@ import {
 import { AnimatedCollapse } from '../../../ui/AnimatedCollapse'
 import { TypeNameConfirmDialog, VaultConfirmDialog } from './VaultDialog'
 import { VaultTerminalDialog } from './VaultTerminalDialog'
-import { GB, STATE_LABEL, formatBytes, isHostPattern, isSecretName, sizeLimitProblem, unlockedLabel } from './vaultText'
+import { GB, STATE_LABEL, formatBytes, isHostPattern, isSecretName, lockAfterLabel, sizeLimitProblem, unlockedLabel, VAULT_ENGINE_NAME } from './vaultText'
 
 const APPROVAL = 'Waiting for approval…'
-const ENGINE_NAME: Record<VaultEngine, string> = {
-  claude: 'Claude Code',
-  codex: 'Codex',
-  opencode: 'OpenCode',
-  antigravity: 'Antigravity'
-}
+const ENGINE_NAME = VAULT_ENGINE_NAME
 /** The API key secret each engine reads inside the vault; null where none is offered yet. */
 /**
  * The secret each engine signs in with inside a vault. OpenCode's is its model
@@ -124,6 +121,7 @@ export function VaultOnPanel({
       <VaultStatusCard agentId={agent.id} status={status} fallbackState={vault.state} loadError={statusQuery.error} />
       <HostCopyCard agent={agent} />
       <SettingsRows>
+        <LockAfterRow agentId={agent.id} status={status} forms={forms} />
         <DiskSizeRow agentId={agent.id} status={status} forms={forms} />
         <NetworkRow agentId={agent.id} engine={vault.engine} status={status} forms={forms} />
         <EngineLoginRow agentId={agent.id} engine={vault.engine} open={open} forms={forms} />
@@ -163,8 +161,10 @@ function VaultStatusCard({
   const lock = useVaultLock()
   const state = status?.state ?? fallbackState
   const until = status?.until ?? null
-  const now = useNow(state === 'unlocked' && until !== null)
-  const label = state === 'unlocked' ? unlockedLabel(until, now) : STATE_LABEL[state]
+  const lockAfterMs = status?.lockAfterMs
+  const noTimer = lockAfterMs === 0
+  const now = useNow(state === 'unlocked' && until !== null && !noTimer)
+  const label = state === 'unlocked' ? unlockedLabel(until, now, lockAfterMs) : STATE_LABEL[state]
   // One line in every state, so a state change replaces the line and moves nothing.
   const detail =
     state === 'error'
@@ -172,9 +172,12 @@ function VaultStatusCard({
       : state === 'tampered'
         ? 'Its disk image changed outside the vault helper. Nothing was unlocked.'
         : state === 'unlocked'
-          ? until === null
-            ? 'A turn is running; it stays open until the turn ends.'
-            : 'Locks a minute after the last turn, or when this Mac locks.'
+          // One short line at any width: the timeout itself is the Lock after row's (rules 7, 12).
+          ? noTimer
+            ? 'Until Cinna quits or this Mac locks.'
+            : until === null
+              ? 'Open while a turn runs.'
+              : 'Also locks when this Mac locks.'
           : state === 'booting'
             ? 'Waiting for the vault helper…'
             : state === 'locking'
@@ -351,6 +354,66 @@ const DANGER_TEXT =
 
 function RowError({ error }: { error: string | null }): React.JSX.Element | null {
   return error ? <p role="alert" className="mt-2 text-[13px] text-[var(--color-danger)]">{error}</p> : null
+}
+
+/**
+ * How long the vault stays unlocked after its last use. A shorter choice is
+ * set at once; a longer one waits on the vault helper's own prompt, and the
+ * picker shows the value being asked for until it answers. A refusal leaves
+ * the old value and says so under the row.
+ */
+function LockAfterRow({ agentId, status, forms }: { agentId: string; status: VaultStatusDto | null; forms: FormSlot }): React.JSX.Element | null {
+  const setLockAfter = useVaultSetLockTimeout()
+  // The choices are the backend's: a backend that keeps no timeouts has no row.
+  const choices = useVaultAvailability().data?.capabilities.lockTimeouts ?? []
+  const current = status?.lockAfterMs ?? null
+  const shown = setLockAfter.isPending && setLockAfter.variables ? setLockAfter.variables.lockAfterMs : current
+  if (choices.length === 0) return null
+  return (
+    <VaultRow
+      label="Lock after"
+      info={
+        <p>
+          How long the vault stays unlocked after the agent’s last turn or your last keystroke in its chat. It
+          still locks at once when the screen locks or the Mac sleeps. A longer time asks for your approval.
+        </p>
+      }
+      value={
+        setLockAfter.isPending
+          ? APPROVAL
+          : current === null
+            ? 'Reading…'
+            // What only this line can say: the select already names the time.
+            : current === 0
+              ? 'Still locks when this Mac locks or sleeps'
+              : 'After its last turn or your last keystroke'
+      }
+      control={
+        <select
+          aria-label="Lock after"
+          value={shown === null ? '' : String(shown)}
+          disabled={!status || setLockAfter.isPending || forms.active !== null}
+          aria-busy={setLockAfter.isPending || undefined}
+          onChange={(event) => {
+            const lockAfterMs = Number(event.target.value)
+            if (lockAfterMs === current) return
+            setLockAfter.reset()
+            setLockAfter.mutate({ agentId, lockAfterMs })
+          }}
+          className={`${settingsInputClass.replace('w-full ', '')} min-w-[10.5rem] shrink-0 !py-1`}
+        >
+          {shown === null && <option value="" disabled>Reading…</option>}
+          {/* A value the backend no longer offers is still shown as what is set. */}
+          {shown !== null && !choices.includes(shown) && <option value={String(shown)}>{lockAfterLabel(shown)}</option>}
+          {choices.map((ms) => (
+            <option key={ms} value={String(ms)}>{lockAfterLabel(ms)}</option>
+          ))}
+        </select>
+      }
+    >
+      <RowError error={setLockAfter.error ? vaultErrorText(setLockAfter.error) : null} />
+    </VaultRow>
+  )
 }
 
 function DiskSizeRow({ agentId, status, forms }: { agentId: string; status: VaultStatusDto | null; forms: FormSlot }): React.JSX.Element {

@@ -6,12 +6,17 @@ import {
   ChevronRight,
   ChevronsDownUp,
   Clock,
+  Loader2,
+  Lock,
+  LockOpen,
   RefreshCw
 } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { isLiveInputRequest, isSettledInputRequest, useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useAgents } from '../../hooks/useAgents'
+import { useVaultUnlock, vaultErrorText } from '../../hooks/useVault'
+import { SettingsButton } from '../settings/SettingsLayout'
 import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { CINNA_REAUTH_REQUIRED_CODE } from '../../../../shared/cinnaErrors'
@@ -1054,10 +1059,14 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
     >
       <div data-sidebar-band-limit ref={contentRef} className="max-w-3xl mx-auto space-y-3">
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
-          <div className="text-center text-[var(--color-text-muted)] py-16">
-            {/* Locked, the transcript is not on this Mac: "Start a conversation" would say the chat is empty. */}
-            <p className="text-sm">{vaultLocked ? 'This chat is kept in the vault. Unlock it to see the conversation.' : 'Start a conversation'}</p>
-          </div>
+          // Locked, the transcript is not on this Mac: "Start a conversation" would say the chat is empty.
+          vaultLocked && chatData?.agentId ? (
+            <LockedVaultChatCard agentId={chatData.agentId} />
+          ) : (
+            <div className="text-center text-[var(--color-text-muted)] py-16">
+              <p className="text-sm">Start a conversation</p>
+            </div>
+          )
         )}
 
         {(() => {
@@ -1999,4 +2008,49 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
 function LiveUserBubble({ content, animate }: { content: string; animate: boolean }): React.JSX.Element {
   const [animateOnMount] = useState(animate)
   return <MessageBubble role="user" content={content} animate={animateOnMount} />
+}
+
+/**
+ * A vault chat while its vault is locked: the transcript is inside the vault,
+ * so the empty transcript says so and offers Unlock (the vault helper's own
+ * prompt). A refusal stays in the card; the unlock that lands refetches the chat.
+ */
+function LockedVaultChatCard({ agentId }: { agentId: string }): React.JSX.Element {
+  const unlock = useVaultUnlock()
+  return (
+    <div className="py-16">
+      <div
+        data-testid="vault-locked-chat"
+        className="mx-auto flex max-w-sm flex-col items-center gap-2 rounded-xl border border-[var(--color-border)]
+          bg-[var(--color-bg-secondary)] px-6 py-5 text-center"
+      >
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]">
+          <Lock size={16} aria-hidden="true" />
+        </span>
+        <p className="text-sm font-semibold text-[var(--color-text)]">This chat is in a locked vault</p>
+        <p className="text-[13px] text-[var(--color-text-muted)]">Unlock it to see the conversation.</p>
+        <div className="mt-1">
+          <SettingsButton
+            aria-busy={unlock.isPending}
+            aria-disabled={unlock.isPending || undefined}
+            onClick={() => {
+              unlock.reset()
+              unlock.mutate(agentId)
+            }}
+          >
+            {/* Fixed width: Unlock and Unlocking… swap in place. */}
+            <span className="inline-flex min-w-[6.5rem] items-center justify-center gap-1.5">
+              {unlock.isPending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <LockOpen size={14} aria-hidden="true" />}
+              {unlock.isPending ? 'Unlocking…' : 'Unlock'}
+            </span>
+          </SettingsButton>
+        </div>
+        {unlock.error && (
+          <p role="alert" className="text-[13px] text-[var(--color-danger)]">
+            {vaultErrorText(unlock.error, 'Unlock was cancelled at the prompt.')}
+          </p>
+        )}
+      </div>
+    </div>
+  )
 }

@@ -64,6 +64,7 @@ import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
 import { useActiveSessionNotices, useComposerNotices, useComposerReadiness } from './ComposerReadiness'
+import { useVaultAvailability, useVaultStatus, useVaultTouch } from '../../hooks/useVault'
 import { vaultOtherChatNotice } from './VaultOtherChatNotice'
 import { ComposerNoticePanel, useNoticePanelPresence } from './ComposerNoticePanel'
 import { useSkillLinkNotice } from './SkillLinkNotice'
@@ -1224,9 +1225,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // Sending to an agent in a locked vault asks to unlock it: the row's own
   // Unlock, so the helper's prompt is the one the button raises. The draft is
   // left where it is, like any refusal.
-  const vaultUnlockRef = useRef<(() => void) | null>(null)
+  const vaultUnlockRef = useRef<(() => Promise<boolean>) | null>(null)
+  const vaultLockedRefusal = readiness.refusal?.state === 'vault_locked'
   vaultUnlockRef.current =
-    readiness.refusal?.state === 'vault_locked' && readiness.action && !readiness.action.pending ? readiness.action.run : null
+    vaultLockedRefusal && readiness.action && !readiness.action.pending
+      ? readiness.action.runAsync ?? (async () => { readiness.action?.run(); return true })
+      : null
+  // An Enter that asked to unlock remembers to send once the vault is open
+  // (see the effect after `handleSend`); `watchFailed` when it joined an unlock
+  // already in flight, whose outcome it can only read from the row.
+  const sendAfterUnlockRef = useRef<{ draftKey: string; agentId: string; watchFailed: boolean } | null>(null)
+  const vaultLockedAgentRef = useRef<string | null>(null)
+  vaultLockedAgentRef.current = vaultLockedRefusal ? directTarget?.id ?? null : null
+  // Typing to an agent whose vault is unlocked keeps it open (throttled, no
+  // visible change, ux_rules rule 1).
+  const vaultAgentId = directTarget?.source === 'vault' ? directTarget.id : null
+  const { data: vaultStatus } = useVaultStatus(vaultAgentId)
+  const touchVault = useVaultTouch()
+  // Only a backend that keeps an idle window takes a touch (its capabilities say so).
+  const { data: vaultAvailability } = useVaultAvailability()
+  const vaultIdleTouch = !!vaultAgentId && vaultAvailability?.capabilities.idleTouch === true
+  const vaultTouchAgentId = vaultIdleTouch && vaultStatus?.state === 'unlocked' ? vaultAgentId : null
   const readinessReasonId = useId()
   // The readiness answer, and what the folder agent's own state adds to it —
   // findings, missing credentials, its AI credential — with Finish setup
@@ -1835,7 +1854,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // note paste above on purpose: that sends nothing, so a refusal must not
     // stop it.
     if (blocksSendRef.current) {
-      vaultUnlockRef.current?.()
+      // A locked vault: unlock, and the message goes once it is open.
+      const vaultAgent = vaultLockedAgentRef.current
+      if (vaultAgent) {
+        const unlock = vaultUnlockRef.current
+        const intent = { draftKey, agentId: vaultAgent, watchFailed: !unlock }
+        sendAfterUnlockRef.current = intent
+        void unlock?.().then((ok) => {
+          if (!ok && sendAfterUnlockRef.current === intent) sendAfterUnlockRef.current = null
+        })
+      }
       return
     }
 
@@ -1962,6 +1990,34 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     saveQueuedEdit,
     clearEditTooLate
   ])
+  const handleSendRef = useRef(handleSend)
+  handleSendRef.current = handleSend
+
+  // Send after unlock: once the vault an Enter asked to open is open and
+  // nothing else blocks the send, what is in the composer goes, once. Another
+  // chat or agent, an emptied composer, another refusal (a login after the
+  // unlock) or an unlock that failed or was cancelled drops the intent.
+  const unlockPending = vaultLockedRefusal && !!readiness.action?.pending
+  const unlockFailed = vaultLockedRefusal && !!readiness.action?.failed
+  const refusalState = readiness.refusal?.state ?? null
+  const draftHasContent =
+    input.trim().length > 0 || pathRefs.length > 0 || pastes.length > 0 ||
+    (chatId !== null && (pendingAttachments.length > 0 || pendingNotes.length > 0))
+  const directTargetId = directTarget?.id ?? null
+  useEffect(() => {
+    const intent = sendAfterUnlockRef.current
+    if (!intent) return
+    if (intent.draftKey !== draftKey || intent.agentId !== directTargetId || !draftHasContent ||
+        (refusalState !== null && refusalState !== 'vault_locked') ||
+        (intent.watchFailed && unlockFailed && !unlockPending)) {
+      sendAfterUnlockRef.current = null
+      return
+    }
+    if (refusalState === null && !blocksSend) {
+      sendAfterUnlockRef.current = null
+      void handleSendRef.current()
+    }
+  }, [draftKey, directTargetId, draftHasContent, refusalState, blocksSend, unlockFailed, unlockPending])
 
   const handleCancel = useCallback(() => {
     if (chatId && (hasPortStream || chatData?.activeRunId)) {
@@ -1991,6 +2047,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           : 0
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (vaultTouchAgentId) touchVault(vaultTouchAgentId)
     if (liveDictation && !e.nativeEvent.isComposing) {
       if (e.key === 'Escape') {
         e.preventDefault()

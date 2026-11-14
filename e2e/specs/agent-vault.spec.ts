@@ -224,6 +224,11 @@ test('V3 a locked vault unlocks from the composer, answers, and keeps its chat o
   const page = cinna.page
   await openSecurity(cinna)
 
+  // Lock after: the backend's timeouts, 5 minutes for a new vault.
+  const lockAfter = page.getByRole('combobox', { name: 'Lock after' })
+  await expect(lockAfter).toHaveValue('300000')
+  await expect(lockAfter.locator('option')).toHaveText(['30 seconds', '5 minutes', 'Until Cinna quits'])
+
   await page.getByRole('button', { name: 'Lock now' }).click()
   await expect(page.getByRole('button', { name: 'Unlock', exact: true })).toBeVisible()
   await expect(page.locator('[data-vault-state="locked"]')).toHaveText('Locked')
@@ -232,12 +237,15 @@ test('V3 a locked vault unlocks from the composer, answers, and keeps its chat o
   await expect(page.getByText(VAULT_LOCKED, { exact: true })).toBeVisible()
   const box = page.getByRole('combobox', { name: 'Type a message...' })
   await box.fill('Say hello in one word.')
-  // Enter on a locked vault unlocks it and keeps the draft; the next Enter sends.
+  // Enter on a locked vault unlocks it, and the message goes once it is open.
   await box.press('Enter')
   await expect(page.getByText(VAULT_LOCKED, { exact: true })).toHaveCount(0, { timeout: 30_000 })
-  await expect(box).toHaveValue('Say hello in one word.')
-  await box.press('Enter')
   await expect(page.getByText(REPLY, { exact: true })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText('Say hello in one word.', { exact: true })).toHaveCount(1)
+  await expect(box).toHaveValue('')
+  // The router badge wears the safe and says when the vault locks.
+  await page.getByRole('status', { name: 'Local agent connection' }).hover()
+  await expect(page.getByTestId('vault-lock-line')).toHaveText(/^Locks in \d:\d\d$|^Kept open while the agent works$/)
 
   const chats = await page.evaluate(() => window.api.chat.list())
   const chat = chats.find((c) => c.agentId === agent.id)
@@ -248,9 +256,10 @@ test('V3 a locked vault unlocks from the composer, answers, and keeps its chat o
 
   // Locked: the transcript says where the conversation is; unlocked: it is back.
   await page.evaluate((id) => window.api.vault.lock(id), agent.id)
-  await expect(page.getByText('This chat is kept in the vault. Unlock it to see the conversation.', { exact: true })).toBeVisible()
+  const lockedCard = page.getByTestId('vault-locked-chat')
+  await expect(lockedCard.getByText('This chat is in a locked vault', { exact: true })).toBeVisible()
   await expect(page.getByText(REPLY, { exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: 'Unlock', exact: true }).click()
+  await lockedCard.getByRole('button', { name: 'Unlock', exact: true }).click()
   await expect(page.getByText(REPLY, { exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByText('Say hello in one word.', { exact: true })).toBeVisible()
   expect((await sqliteMessageCount(cinna, chat.id)).messages).toBe(0)
@@ -349,6 +358,6 @@ test('V6 a chat from before the move keeps showing its own transcript while the 
   // chat bound to the vault (`vaultId`) is hidden while it is locked.
   test.setTimeout(MOVE_TIMEOUT + 120_000)
   await reopenPreMoveChat(cinna)
-  await expect(cinna.page.getByText('This chat is kept in the vault. Unlock it to see the conversation.', { exact: true })).toHaveCount(0)
+  await expect(cinna.page.getByTestId('vault-locked-chat')).toHaveCount(0)
   await expect(cinna.page.getByText(REPLY, { exact: true })).toBeVisible()
 })

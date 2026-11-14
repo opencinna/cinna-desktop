@@ -53,12 +53,16 @@ struct VaultDoc {
   var pendingGrowTo: Int64?
   var formatted: Bool
   var rootfsPath: String
+  /// How long the vault stays unlocked after its last use (LOCK_TIMEOUTS); 0 = until Cinna
+  /// quits (still locked on screen lock, sleep and logout, D21). Absent in an older file ⇒ the default.
+  var lockAfterMs: Int64 = DEFAULT_LOCK_AFTER_MS
 
   func json() -> [String: Any] {
     var o: [String: Any] = [
       "v": 1, "vaultId": vaultId, "agentId": agentId, "agentName": agentName, "engine": engine,
       "sizeBytes": sizeBytes, "egress": ["hosts": egress], "createdAt": createdAt,
       "imageVersion": imageVersion, "wrappedKey": wrappedKey, "formatted": formatted, "rootfsPath": rootfsPath,
+      "lockAfterMs": lockAfterMs,
     ]
     if let g = pendingGrowTo { o["pendingGrowTo"] = g }
     return o
@@ -73,10 +77,13 @@ struct VaultDoc {
           let imageVersion = o["imageVersion"] as? String, let wrappedKey = o["wrappedKey"] as? String,
           let formatted = o["formatted"] as? Bool, let rootfsPath = o["rootfsPath"] as? String
     else { return nil }
+    // A value this build does not offer (a newer build's?) reads as the default rather than as tampering.
+    let lockAfter = (o["lockAfterMs"] as? NSNumber)?.int64Value
     return VaultDoc(vaultId: vaultId, agentId: agentId, agentName: agentName, engine: engine, sizeBytes: size,
                     egress: egress, createdAt: createdAt, imageVersion: imageVersion, wrappedKey: wrappedKey,
                     pendingGrowTo: (o["pendingGrowTo"] as? NSNumber)?.int64Value, formatted: formatted,
-                    rootfsPath: rootfsPath)
+                    rootfsPath: rootfsPath,
+                    lockAfterMs: lockAfter.flatMap { LOCK_TIMEOUTS.contains($0) ? $0 : nil } ?? DEFAULT_LOCK_AFTER_MS)
   }
 }
 

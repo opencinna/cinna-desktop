@@ -122,6 +122,13 @@ export interface ReadinessAction {
   pendingLabel: string
   pending: boolean
   run: () => void
+  /**
+   * The same action, resolving with whether it succeeded — Unlock only, so
+   * Enter on a locked vault agent can send once the vault opens (ChatInput).
+   */
+  runAsync?: () => Promise<boolean>
+  /** The last run failed (or its prompt was cancelled) — Unlock only. */
+  failed?: boolean
   /** Offered beside the pending button — a login waiting on a browser can be stopped. */
   cancel?: () => void
   /** The button's glyph; Log in's by default, Check again's when it checks. */
@@ -218,7 +225,10 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
         pendingLabel: 'Unlocking…',
         pending: unlock.isPending,
         icon: LockOpen,
-        run: () => unlock.mutate(target.id)
+        run: () => unlock.mutate(target.id),
+        // Opened, not merely answered: an unlock that a lock overtook resolves with `locked`.
+        runAsync: () => unlock.mutateAsync(target.id).then((status) => status?.state === 'unlocked', () => false),
+        failed: unlock.isError
       }
     : loginEngine
     ? {

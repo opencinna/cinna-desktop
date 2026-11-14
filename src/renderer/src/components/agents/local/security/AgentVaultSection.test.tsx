@@ -13,7 +13,7 @@ import { useVaultWatch } from '../../../../hooks/useVault'
  * unlocked with its countdown — with the row heights a state change keeps.
  */
 
-const CAPS = { separateKernel: true, hardwareKey: true, perActionPresence: true }
+const CAPS = { separateKernel: true, hardwareKey: true, perActionPresence: true, lockTimeouts: [30_000, 300_000, 0], idleTouch: true }
 let availability: VaultAvailabilityDto
 let status: VaultStatusDto
 let stateListener: ((event: VaultStateEvent) => void) | null
@@ -28,6 +28,7 @@ const vault = {
   runtimes: vi.fn(async () => ({ ok: true, data: [{ engine: 'claude', version: '2.0.1', kind: 'executable', pinned: '2.0.1' }] })),
   listFiles: vi.fn(async () => ({ ok: true, data: [{ name: 'AGENT.md', type: 'file', size: 120, mtime: 0 }] })),
   setSize: vi.fn(async () => ({ ok: true, data: status })),
+  setLockTimeout: vi.fn(async (_agentId: string, lockAfterMs: number): Promise<unknown> => ({ ok: true, data: { ...status, lockAfterMs } })),
   setSecret: vi.fn(async () => ({ ok: true, data: undefined })),
   deleteSecret: vi.fn(async () => ({ ok: true, data: undefined })),
   onState: vi.fn((cb: (event: VaultStateEvent) => void) => {
@@ -46,6 +47,7 @@ beforeEach(() => {
     engine: 'claude',
     state: 'locked',
     until: null,
+    lockAfterMs: 300_000,
     sizeBytes: 10 * 1024 ** 3,
     usedBytes: 2.4 * 1024 ** 3,
     egress: { hosts: ['api.anthropic.com'] },
@@ -154,11 +156,11 @@ describe('AgentVaultSection — on', () => {
     renderSection(inVault())
     const button = await screen.findByRole('button', { name: /^Unlock$/ })
     const row = button.closest('.flex.items-start') as HTMLElement
-    act(() => stateListener?.({ agentId: 'folder:alpha', vaultId: 'v1', state: 'unlocked', until: Date.now() + 42_000, error: null }))
+    act(() => stateListener?.({ agentId: 'folder:alpha', vaultId: 'v1', state: 'unlocked', until: Date.now() + 42_000, lockAfterMs: 300_000, error: null }))
     expect(await screen.findByRole('button', { name: /Lock now/ })).toBeTruthy()
     // The same button element and row: the label swapped in place.
     expect(screen.getByRole('button', { name: /Lock now/ })).toBe(button)
-    expect(within(row).getByText(/Unlocked · locks in 4[12]s/)).toBeTruthy()
+    expect(within(row).getByText(/Unlocked · locks in 0:4[12]/)).toBeTruthy()
     // Unlocked, the guest-side rows read.
     expect(await screen.findByText('Signed in with an API key')).toBeTruthy()
     expect(await screen.findByText('DB_URL')).toBeTruthy()
@@ -196,9 +198,9 @@ describe('AgentVaultSection — on', () => {
   })
 
   const unlockNow = (): void =>
-    act(() => stateListener?.({ agentId: 'folder:alpha', vaultId: 'v1', state: 'unlocked', until: Date.now() + 60_000, error: null }))
+    act(() => stateListener?.({ agentId: 'folder:alpha', vaultId: 'v1', state: 'unlocked', until: Date.now() + 60_000, lockAfterMs: 300_000, error: null }))
   const lockNow = (): void =>
-    act(() => stateListener?.({ agentId: 'folder:alpha', vaultId: 'v1', state: 'locked', until: null, error: null }))
+    act(() => stateListener?.({ agentId: 'folder:alpha', vaultId: 'v1', state: 'locked', until: null, lockAfterMs: 300_000, error: null }))
 
   it('leaves the engine’s key out of Secrets; Engine login removes it behind a confirm that says it signs out', async () => {
     vault.secrets.mockResolvedValue({ ok: true, data: { names: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'DB_URL'] } })
@@ -274,5 +276,38 @@ describe('AgentVaultSection — on', () => {
     expect(await screen.findByText(/^Claude Code 2\.1\.318 · adapter 0\.101\.0$/)).toBeTruthy()
     const badge = screen.getByText('Update available')
     expect(badge.getAttribute('title')).toBe('Update dependencies installs Claude Code 2.1.319.')
+  })
+})
+
+describe('AgentVaultSection — Lock after', () => {
+  it('offers the backend’s timeouts, sets one, and says the new value', async () => {
+    renderSection(inVault())
+    const select = await screen.findByRole('combobox', { name: 'Lock after' }) as HTMLSelectElement
+    await waitFor(() => expect(select.value).toBe('300000'))
+    expect([...select.options].map((o) => o.textContent)).toEqual(['30 seconds', '5 minutes', 'Until Cinna quits'])
+    expect(screen.getByText('After its last turn or your last keystroke')).toBeTruthy()
+    fireEvent.change(select, { target: { value: '0' } })
+    await waitFor(() => expect(vault.setLockTimeout).toHaveBeenCalledWith('folder:alpha', 0))
+    expect(await screen.findByText('Still locks when this Mac locks or sleeps')).toBeTruthy()
+    expect(select.value).toBe('0')
+  })
+
+  it('shows a refused prompt under the row and keeps the old value', async () => {
+    vault.setLockTimeout.mockResolvedValueOnce({ ok: false, code: 'denied', message: 'the user did not approve' })
+    renderSection(inVault())
+    const select = await screen.findByRole('combobox', { name: 'Lock after' }) as HTMLSelectElement
+    await waitFor(() => expect(select.value).toBe('300000'))
+    fireEvent.change(select, { target: { value: '0' } })
+    expect((await screen.findByRole('alert')).textContent).toBe('Cancelled at the prompt — nothing changed.')
+    expect(select.value).toBe('300000')
+  })
+
+  it('has no row when the backend keeps no lock timeouts', async () => {
+    availability = { ...availability, capabilities: { ...CAPS, lockTimeouts: [] } }
+    renderSection(inVault())
+    expect(await screen.findByText('Disk size limit')).toBeTruthy()
+    await waitFor(() => expect(vault.availability).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(screen.queryByRole('combobox', { name: 'Lock after' })).toBeNull()
   })
 })

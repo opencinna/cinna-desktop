@@ -183,6 +183,23 @@ describe('vaultService', () => {
     expect(chatRepo.listMessages(chat.id)).toEqual([])
   })
 
+  it('a shorter lock timeout picked while an unlock waits at its prompt does not void that unlock', async () => {
+    await vaultService.unlock(USER, AGENT)
+    await vaultService.lock(USER, AGENT)
+    const realUnlock = backend.unlock.bind(backend)
+    const spy = vi.spyOn(backend, 'unlock').mockImplementation(async (vaultId, purpose) => {
+      // The prompt is up; the Security tab's "Lock after" changes meanwhile (no prompt: it is shorter).
+      await vaultService.setLockTimeout(USER, AGENT, 30_000)
+      return realUnlock(vaultId, purpose)
+    })
+    try {
+      expect((await vaultService.unlock(USER, AGENT)).state).toBe('unlocked')
+    } finally {
+      spy.mockRestore()
+    }
+    expect(vaultTranscripts.isOpen(VAULT)).toBe(true)
+  })
+
   it('only talks to vaultd while the vault is unlocked (transcript.read and kv.get are gated by the unlock alone)', async () => {
     await expect(vaultService.client(VAULT)).rejects.toMatchObject({ code: 'locked' })
     await vaultService.unlock(USER, AGENT)
@@ -239,6 +256,64 @@ describe('vaultService', () => {
     await vaultService.refresh(USER)
     const status = await vaultService.setEgress(USER, AGENT, ['PyPI.org', '*.githubusercontent.com', 'pypi.org'])
     expect(status.egress).toEqual({ hosts: ['*.githubusercontent.com', 'pypi.org'] })
+  })
+
+  it('sets a shorter lock timeout without a prompt and asks for a longer one, refusing anything not offered', async () => {
+    const approve = vi.spyOn(backend, 'approve')
+    const set = vi.spyOn(backend, 'setLockTimeout')
+    expect(await vaultService.result(() => vaultService.setLockTimeout(USER, AGENT, 60_000))).toMatchObject({ ok: false, code: 'invalid' })
+    expect(set).not.toHaveBeenCalled()
+    await vaultService.refresh(USER)
+    expect(vaultService.list(USER)[0].lockAfterMs).toBe(300_000)
+
+    // Shorter (5 min → 30 s): no approval, no token.
+    expect((await vaultService.setLockTimeout(USER, AGENT, 30_000)).lockAfterMs).toBe(30_000)
+    expect(approve).not.toHaveBeenCalled()
+    expect(set).toHaveBeenLastCalledWith(VAULT, 30_000, undefined)
+
+    // Longer (30 s → until Cinna quits): the helper's lock-timeout approval for exactly this value.
+    expect((await vaultService.setLockTimeout(USER, AGENT, 0)).lockAfterMs).toBe(0)
+    expect(approve).toHaveBeenCalledWith(VAULT, 'lock-timeout', 'lock-timeout:0')
+    expect(set).toHaveBeenLastCalledWith(VAULT, 0, expect.any(String))
+    expect((await backend.status(VAULT)).lockAfterMs).toBe(0)
+
+    // The same value again changes nothing and asks nothing.
+    approve.mockClear()
+    set.mockClear()
+    await vaultService.setLockTimeout(USER, AGENT, 0)
+    expect(approve).not.toHaveBeenCalled()
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('refuses a lock timeout the backend’s capabilities do not list, and never touches where it keeps no idle window', async () => {
+    await vaultService.refresh(USER)
+    vi.spyOn(backend, 'capabilities').mockReturnValue({ ...backend.capabilities(), lockTimeouts: [300_000], idleTouch: false })
+    const set = vi.spyOn(backend, 'setLockTimeout')
+    expect(await vaultService.result(() => vaultService.setLockTimeout(USER, AGENT, 30_000))).toMatchObject({ ok: false, code: 'invalid' })
+    expect(set).not.toHaveBeenCalled()
+    await vaultService.unlock(USER, AGENT)
+    const touch = vi.spyOn(backend, 'touch')
+    vaultService.touch(USER, AGENT)
+    expect(touch).not.toHaveBeenCalled()
+  })
+
+  it('answers a refused prompt for a longer lock timeout as denied, and keeps the old one', async () => {
+    await vaultService.refresh(USER)
+    await vaultService.setLockTimeout(USER, AGENT, 30_000)
+    vi.spyOn(backend, 'approve').mockRejectedValueOnce(Object.assign(new (await import('./backend')).VaultBackendError('denied', 'the user did not approve')))
+    expect(await vaultService.result(() => vaultService.setLockTimeout(USER, AGENT, 300_000))).toMatchObject({ ok: false, code: 'denied' })
+    expect((await backend.status(VAULT)).lockAfterMs).toBe(30_000)
+  })
+
+  it('touches only an unlocked vault, and never throws', async () => {
+    const touch = vi.spyOn(backend, 'touch')
+    vaultService.touch(USER, AGENT)
+    vaultService.touch(USER, 'folder:not-a-vault-agent')
+    expect(touch).not.toHaveBeenCalled()
+    await vaultService.unlock(USER, AGENT)
+    touch.mockRejectedValueOnce(new Error('helper gone'))
+    expect(() => vaultService.touch(USER, AGENT)).not.toThrow()
+    expect(touch).toHaveBeenCalledWith(VAULT)
   })
 
   it('files a Claude login by its prefix: a setup-token token as CLAUDE_CODE_OAUTH_TOKEN, a key as ANTHROPIC_API_KEY, one at a time', async () => {

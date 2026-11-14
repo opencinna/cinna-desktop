@@ -16,6 +16,8 @@ import {
   type ContextHealth
 } from '../../../../shared/aiSpendingLevel'
 import { useAppSettings } from '../../hooks/useAppSettings'
+import { VAULT_COUNTDOWN_PILL_MS, formatVaultCountdown, useVaultCountdown, type VaultCountdown } from '../../hooks/useVault'
+import { SafeIcon } from '../ui/SafeIcon'
 import { useToastStore } from '../../stores/toast.store'
 import { useUIStore } from '../../stores/ui.store'
 import { formatTokens } from '../../utils/telemetryFormat'
@@ -182,7 +184,9 @@ function RouterBadgeView({
     }
   }, [focused])
   const location = router === 'direct' && connectionAgent ? agentLocation(connectionAgent) : null
-  const face = location ? { ...FACE.direct, label: location, icon: location === 'Local' ? SquareTerminal : Waypoints } : router === 'coordinator' && conductorName ? { ...FACE.coordinator, label: `${conductorName} routes` } : FACE[router]
+  // An agent in a vault wears the safe; its lock is in the popover and, near the end, a pill.
+  const vaultAgentId = router === 'direct' && connectionAgent?.source === 'vault' ? connectionAgent.id : null
+  const face = location ? { ...FACE.direct, label: location, icon: vaultAgentId ? SafeIcon : location === 'Local' ? SquareTerminal : Waypoints } : router === 'coordinator' && conductorName ? { ...FACE.coordinator, label: `${conductorName} routes` } : FACE[router]
   const Icon = face.icon
   const who = agentName ? `“${agentName}”` : 'the agent'
   const next = answererName ? `“${answererName}”` : 'the agent you last wrote to'
@@ -223,6 +227,7 @@ function RouterBadgeView({
           />
         )}
       </div>
+      {vaultAgentId && <VaultCountdownPill agentId={vaultAgentId} />}
 
       {open && (
         <div
@@ -243,6 +248,7 @@ function RouterBadgeView({
             </>
           )}
           {router === 'direct' && connectionAgent && <AgentConnectionDetails agent={connectionAgent} />}
+          {vaultAgentId && <VaultLockLine agentId={vaultAgentId} />}
           {router === 'direct' && !connectionAgent && (
             <>
               <p className="text-[var(--color-text)] font-semibold mb-1">Direct agent connection</p>
@@ -296,5 +302,54 @@ function RouterBadgeView({
         </div>
       )}
     </div>
+  )
+}
+
+/** The popover's line about a vault agent's lock; mounted only while it is open, so it ticks only then. */
+export function vaultLockText(countdown: VaultCountdown): string | null {
+  switch (countdown.kind) {
+    case 'counting':
+      return `Locks in ${formatVaultCountdown(countdown.remainingMs)}`
+    case 'held':
+      return 'Kept open while the agent works'
+    case 'no-timer':
+      return 'Stays unlocked until Cinna quits'
+    case 'locked':
+      return 'Locked'
+    case 'none':
+      return null
+  }
+}
+
+function VaultLockLine({ agentId }: { agentId: string }): React.JSX.Element | null {
+  const text = vaultLockText(useVaultCountdown(agentId, true))
+  if (!text) return null
+  return (
+    <p data-testid="vault-lock-line" className="mt-2 flex items-center gap-1.5 text-[var(--color-text)] tabular-nums">
+      <SafeIcon size={11} className="shrink-0" aria-hidden="true" />
+      {text}
+    </p>
+  )
+}
+
+/**
+ * The last seconds before a vault locks, on the badge's top-right corner.
+ * Absolutely placed, so neither the badge nor its neighbours move when it
+ * comes or goes; gone when the timer resets or the vault locks.
+ */
+function VaultCountdownPill({ agentId }: { agentId: string }): React.JSX.Element | null {
+  const countdown = useVaultCountdown(agentId)
+  if (countdown.kind !== 'counting' || countdown.remainingMs > VAULT_COUNTDOWN_PILL_MS || countdown.remainingMs <= 0) return null
+  const text = formatVaultCountdown(countdown.remainingMs)
+  return (
+    <span
+      data-testid="vault-countdown-pill"
+      // Visual only: the popover's lock line says the same to a screen reader.
+      aria-hidden="true"
+      className="pointer-events-none absolute -top-2 -right-1.5 z-10 rounded-full border border-[var(--color-warning)]
+        bg-[var(--color-bg)] px-1 text-[9px] font-semibold leading-[13px] tabular-nums text-[var(--color-warning)]"
+    >
+      {text}
+    </span>
   )
 }

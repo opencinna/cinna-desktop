@@ -17,8 +17,10 @@ import { publishEvent } from '../host/events'
 import { createLogger } from '../logger/logger'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import {
+  VAULT_DEFAULT_LOCK_AFTER_MS,
   VAULT_ENGINES,
-  VAULT_SECRET_NAME, vaultSecretStorable, VAULT_ENGINE_LOGIN, vaultEngineLoginSecret,
+  VAULT_SECRET_NAME,
+  vaultLockTimeoutShorter, vaultSecretStorable, VAULT_ENGINE_LOGIN, vaultEngineLoginSecret,
   approvalDetail,
   type EgressPolicy,
   type GatedAction,
@@ -137,6 +139,7 @@ function publishState(vaultId: string): void {
   const event: VaultStateEvent = {
     agentId, vaultId, state: summary.state,
     until: summary.state === 'unlocked' ? summary.until ?? null : null,
+    lockAfterMs: summary.lockAfterMs ?? VAULT_DEFAULT_LOCK_AFTER_MS,
     error: summary.error ?? null
   }
   publishEvent(VAULT_STATE_CHANNEL, event, 'all')
@@ -160,6 +163,9 @@ function onLeftUnlocked(vaultId: string, locked = true): void {
   void client?.then((c) => c.close('vault locked')).catch(() => {})
 }
 
+/** The last state each vault's own `vault.state` events reported (status polls do not write it). */
+const eventStates = new Map<string, VaultState>()
+
 function onBackendEvent(event: VaultBackendEvent): void {
   if (event.event === 'log') {
     logger[event.level === 'debug' ? 'debug' : event.level === 'error' ? 'error' : event.level === 'warn' ? 'warn' : 'info']('helper', { message: event.message })
@@ -168,9 +174,17 @@ function onBackendEvent(event: VaultBackendEvent): void {
   if (event.event !== 'vault.state') return
   const known = summaries.get(event.vaultId)
   if (known) {
-    summaries.set(event.vaultId, { ...known, state: event.state, until: event.until ?? null, error: event.error ?? null })
+    summaries.set(event.vaultId, {
+      ...known, state: event.state, until: event.until ?? null, error: event.error ?? null,
+      ...(event.lockAfterMs !== undefined ? { lockAfterMs: event.lockAfterMs } : {})
+    })
   }
-  if (event.state !== 'unlocked') onLeftUnlocked(event.vaultId, event.state !== 'booting')
+  // Only a change of state leaves "unlocked": a repeat of a state the last
+  // event already said (or main already knew) must not bump the lock
+  // generation, which would void an unlock in flight and sweep staged files.
+  const previous = eventStates.get(event.vaultId) ?? known?.state
+  eventStates.set(event.vaultId, event.state)
+  if (event.state !== 'unlocked' && previous !== event.state) onLeftUnlocked(event.vaultId, event.state !== 'booting')
   publishState(event.vaultId)
   refreshReadiness(event.vaultId)
 }
@@ -215,6 +229,7 @@ function toStatus(row: AgentRow, ref: VaultRef): VaultStatusDto {
     engine: summary?.engine ?? ref.engine,
     state: summary?.state ?? 'locked',
     until: summary?.state === 'unlocked' ? summary.until ?? null : null,
+    lockAfterMs: summary?.lockAfterMs ?? VAULT_DEFAULT_LOCK_AFTER_MS,
     sizeBytes: summary?.sizeBytes ?? 0,
     usedBytes: summary?.usedBytes ?? null,
     egress: summary?.egress ?? { hosts: [] },
@@ -422,6 +437,46 @@ export const vaultService = {
     return toStatus(row, ref)
   },
 
+  /**
+   * How long the vault stays unlocked after its last use: 30 s, 5 min, or 0
+   * (until Cinna quits). A shorter one is set without a prompt; a longer one
+   * asks the helper for a `lock-timeout` approval first (its own prompt text).
+   */
+  async setLockTimeout(userId: string, agentId: string, lockAfterMs: unknown): Promise<VaultStatusDto> {
+    const { row, ref } = refFor(userId, agentId)
+    // The backend says which timeouts it can keep; nothing else is asked of it.
+    const offered = vaultBackend().capabilities().lockTimeouts
+    if (typeof lockAfterMs !== 'number' || !offered.includes(lockAfterMs)) {
+      throw new VaultError('invalid', offered.length === 0 ? 'This vault’s lock timeout can’t be changed here.' : 'That lock timeout is not offered.')
+    }
+    if (!summaries.has(ref.vaultId)) await this.refresh(userId)
+    const current = summaries.get(ref.vaultId)?.lockAfterMs ?? VAULT_DEFAULT_LOCK_AFTER_MS
+    if (lockAfterMs === current) return toStatus(row, ref)
+    const token = vaultLockTimeoutShorter(lockAfterMs, current)
+      ? undefined
+      : await vaultBackend().approve(ref.vaultId, 'lock-timeout', approvalDetail({ method: 'vault.setLockTimeout', lockAfterMs }))
+    await vaultBackend().setLockTimeout(ref.vaultId, lockAfterMs, token)
+    const known = summaries.get(ref.vaultId)
+    if (known) summaries.set(ref.vaultId, { ...known, lockAfterMs })
+    return toStatus(row, ref)
+  },
+
+  /**
+   * The user is typing to the vault's agent: restart its idle window. Cheap
+   * and fire-and-forget: only for a vault known to be unlocked, never throws.
+   */
+  touch(userId: string, agentId: string): void {
+    if (!vaultBackend().capabilities().idleTouch) return
+    let vaultId: string
+    try {
+      vaultId = refFor(userId, agentId).ref.vaultId
+    } catch {
+      return
+    }
+    if (this.stateOf(vaultId) !== 'unlocked') return
+    void vaultBackend().touch(vaultId).catch(() => {})
+  },
+
   /** The disk size limit; raising it grows the image at the next unlock (D15). Never below what is used. */
   async setSize(userId: string, agentId: string, sizeBytes: unknown): Promise<VaultStatusDto> {
     const { row, ref } = refFor(userId, agentId)
@@ -452,7 +507,7 @@ export const vaultService = {
     summaries.delete(ref.vaultId)
     agentRepo.delete(userId, agentId)
     refreshVaultAgents()
-    publishEvent(VAULT_STATE_CHANNEL, { agentId, vaultId: ref.vaultId, state: 'stopped', until: null, error: null } satisfies VaultStateEvent, 'all')
+    publishEvent(VAULT_STATE_CHANNEL, { agentId, vaultId: ref.vaultId, state: 'stopped', until: null, lockAfterMs: VAULT_DEFAULT_LOCK_AFTER_MS, error: null } satisfies VaultStateEvent, 'all')
   },
 
   /**
@@ -639,6 +694,7 @@ export const vaultService = {
     journals.clear()
     destroyedVaults.clear()
     lockGenerations.clear()
+    eventStates.clear()
     quitDrain = null
     availabilityCache = null
     detach?.()

@@ -38,6 +38,14 @@ export interface VaultCapabilities {
   hardwareKey: boolean
   /** Each gated action raises its own user-presence prompt. */
   perActionPresence: boolean
+  /**
+   * The lock timeouts this backend can keep, in ms, in the order offered (0 =
+   * no idle timer: until Cinna quits). Empty: the vault's lock timeout cannot
+   * be changed, and the Security tab hides its Lock after row.
+   */
+  lockTimeouts: readonly number[]
+  /** `touch` restarts an unlocked vault's idle window (typing in its chat keeps it open). */
+  idleTouch: boolean
 }
 
 export interface VaultAvailabilityDto {
@@ -56,8 +64,10 @@ export interface VaultStatusDto {
   agentName: string
   engine: VaultEngine
   state: VaultState
-  /** Epoch ms the unlock window ends; null while a turn holds it open. */
+  /** Epoch ms the unlock window ends; null while a turn holds it open, or with no timer (`lockAfterMs` 0). */
   until: number | null
+  /** How long it stays unlocked after its last use (`VAULT_LOCK_TIMEOUTS`); 0 = until Cinna quits. */
+  lockAfterMs: number
   sizeBytes: number
   usedBytes: number | null
   egress: EgressPolicy
@@ -73,10 +83,17 @@ export interface VaultStateEvent {
   vaultId: string
   state: VaultState
   until: number | null
+  lockAfterMs: number
   error: string | null
 }
 
 export const VAULT_STATE_CHANNEL = 'vault:state'
+
+/** "4:32", "0:12": a vault's time to its lock, minutes and seconds, rounded up. */
+export function formatVaultCountdown(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
 
 /**
  * `vault:chat-files-swept` push: the vault locked and the `userData` copies of

@@ -8,8 +8,9 @@
  * `CINNA_VAULT_FAKE=1` in an unpackaged build. It protects nothing.
  *
  * It emulates the helper's state machine (D13): unlock opens a window that
- * closes `windowMs` after the last hold is released; a lock stops the vaultd
- * process (a cold stop, where the real helper would pause the VM).
+ * closes the vault's `lockAfterMs` (or the `windowMs` override) after the last
+ * hold is released, gated action or touch; 0 keeps it open; a lock stops the
+ * vaultd process (a cold stop, where the real helper would pause the VM).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
@@ -20,7 +21,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Duplex } from 'node:stream'
 import {
-  VAULT_UNLOCK_WINDOW_MS,
+  VAULT_DEFAULT_LOCK_AFTER_MS,
+  VAULT_LOCK_TIMEOUTS,
+  approvalDetail,
+  isVaultLockTimeout,
+  vaultLockTimeoutShorter,
   type EgressPolicy,
   type GatedAction,
   type HelperEvent,
@@ -28,7 +33,7 @@ import {
   type VaultState,
   type VaultSummary
 } from '../../shared/vault/protocol'
-import { readApprovalToken, signApprovalToken } from './approvalTokens'
+import { readApprovalToken, sha256Hex, signApprovalToken } from './approvalTokens'
 import { VaultBackendError, type VaultBackend, type VaultChannel, type VaultCreateSpec, type VaultHello } from './backend'
 
 /** `vault.json` of a fake vault. Unsigned: the fake guards nothing. */
@@ -41,6 +46,8 @@ interface FakeVaultFile {
   egress: EgressPolicy
   createdAt: number
   imageVersion: string
+  /** Absent in a file written before the setting existed ⇒ the default. */
+  lockAfterMs?: number
   flavor: 'fake'
 }
 
@@ -63,7 +70,7 @@ export interface FakeBackendOptions {
   vaultdPath: string
   /** How to run Node: the host's child runtime (`runtimeHost.nodeRuntime()`). */
   nodeRuntime: () => { command: string; args: string[]; env: Record<string, string> }
-  /** Unlock window; defaults to `CINNA_VAULT_FAKE_WINDOW_MS` or 60 s. */
+  /** Overrides every vault's lock timeout (like the test helper's `CINNA_VAULT_TEST_WINDOW_MS`); defaults to `CINNA_VAULT_FAKE_WINDOW_MS`, else none. */
   windowMs?: number
   /** How long to wait for vaultd's socket. */
   startTimeoutMs?: number
@@ -72,9 +79,13 @@ export interface FakeBackendOptions {
 
 const FILE = 'vault.json'
 
-function windowFromEnv(): number {
+function windowFromEnv(): number | null {
   const raw = Number(process.env['CINNA_VAULT_FAKE_WINDOW_MS'])
-  return Number.isFinite(raw) && raw > 0 ? raw : VAULT_UNLOCK_WINDOW_MS
+  return Number.isFinite(raw) && raw > 0 ? raw : null
+}
+
+function lockAfterOf(file: FakeVaultFile): number {
+  return isVaultLockTimeout(file.lockAfterMs) ? file.lockAfterMs : VAULT_DEFAULT_LOCK_AFTER_MS
 }
 
 /** A unix socket path short enough for macOS (104 bytes), unique per vault and process. */
@@ -106,7 +117,8 @@ function socketChannel(socket: Socket): VaultChannel {
 export function createFakeBackend(options: FakeBackendOptions): VaultBackend {
   const vaults = new Map<string, FakeVault>()
   const listeners = new Set<(event: HelperEvent) => void>()
-  const windowMs = options.windowMs ?? windowFromEnv()
+  const windowOverride = options.windowMs ?? windowFromEnv()
+  const windowOf = (vault: FakeVault): number => windowOverride ?? lockAfterOf(vault.file)
   const now = options.now ?? Date.now
   const startTimeoutMs = options.startTimeoutMs ?? 10_000
 
@@ -114,6 +126,7 @@ export function createFakeBackend(options: FakeBackendOptions): VaultBackend {
     const event: HelperEvent = {
       event: 'vault.state', vaultId: vault.file.vaultId, state: vault.state,
       ...(vault.state === 'unlocked' ? { until: vault.until } : {}),
+      lockAfterMs: lockAfterOf(vault.file),
       ...(vault.error ? { error: vault.error } : {})
     }
     for (const listener of listeners) {
@@ -131,6 +144,7 @@ export function createFakeBackend(options: FakeBackendOptions): VaultBackend {
     agentName: vault.file.agentName,
     state: vault.state,
     ...(vault.state === 'unlocked' ? { until: vault.until } : {}),
+    lockAfterMs: lockAfterOf(vault.file),
     sizeBytes: vault.file.sizeBytes,
     egress: vault.file.egress,
     engine: vault.file.engine,
@@ -185,11 +199,12 @@ export function createFakeBackend(options: FakeBackendOptions): VaultBackend {
     }
   }
 
-  /** (Re)arm the window: open while held, else closes `windowMs` from now. */
+  /** (Re)arm the window: open while held or with no timer, else closes the vault's window from now. */
   const arm = (vault: FakeVault): void => {
     clearTimer(vault)
     if (vault.state !== 'unlocked') return
-    if (vault.holds.size > 0) {
+    const windowMs = windowOf(vault)
+    if (vault.holds.size > 0 || windowMs === 0) {
       vault.until = null
       return
     }
@@ -247,9 +262,10 @@ export function createFakeBackend(options: FakeBackendOptions): VaultBackend {
     return vault.starting
   }
 
-  const verify = (vault: FakeVault, token: string, action: GatedAction): void => {
+  const verify = (vault: FakeVault, token: string, action: GatedAction, detail?: string): void => {
     const claims = readApprovalToken(vault.key, token, now())
-    if (!claims || claims.vaultId !== vault.file.vaultId || claims.action !== action) {
+    if (!claims || claims.vaultId !== vault.file.vaultId || claims.action !== action ||
+        (detail !== undefined && claims.detailSha256 !== sha256Hex(detail))) {
       throw new VaultBackendError('bad_token', 'The approval is not valid for this change.')
     }
   }
@@ -258,7 +274,7 @@ export function createFakeBackend(options: FakeBackendOptions): VaultBackend {
 
   return {
     kind: 'fake',
-    capabilities: () => ({ separateKernel: false, hardwareKey: false, perActionPresence: false }),
+    capabilities: () => ({ separateKernel: false, hardwareKey: false, perActionPresence: false, lockTimeouts: VAULT_LOCK_TIMEOUTS, idleTouch: true }),
     hello: async () => hello,
     availability: async () => existsSync(options.vaultdPath)
       ? { ok: true }
@@ -292,7 +308,8 @@ export function createFakeBackend(options: FakeBackendOptions): VaultBackend {
       await mkdir(join(spec.dir, spec.vaultId), { recursive: true })
       const file: FakeVaultFile = {
         vaultId: spec.vaultId, agentId: spec.agentId, agentName: spec.agentName, engine: spec.engine,
-        sizeBytes: spec.sizeBytes, egress: spec.egress, createdAt: now(), imageVersion: 'fake', flavor: 'fake'
+        sizeBytes: spec.sizeBytes, egress: spec.egress, createdAt: now(), imageVersion: 'fake',
+        lockAfterMs: VAULT_DEFAULT_LOCK_AFTER_MS, flavor: 'fake'
       }
       const vault = adopt(spec.dir, file)
       await writeFile_(vault)
@@ -362,6 +379,30 @@ export function createFakeBackend(options: FakeBackendOptions): VaultBackend {
       verify(vault, token, 'egress')
       vault.file = { ...vault.file, egress: { hosts: [...policy.hosts] } }
       await writeFile_(vault)
+    },
+
+    async setLockTimeout(vaultId, lockAfterMs, token) {
+      const vault = need(vaultId)
+      if (!isVaultLockTimeout(lockAfterMs)) throw new VaultBackendError('invalid', 'lockAfterMs must be 30000, 300000 or 0.')
+      // Like the helper: only a strictly shorter timeout goes without an approval.
+      if (!vaultLockTimeoutShorter(lockAfterMs, lockAfterOf(vault.file))) {
+        if (!token) throw new VaultBackendError('bad_token', 'A longer lock timeout needs approval.')
+        verify(vault, token, 'lock-timeout', approvalDetail({ method: 'vault.setLockTimeout', lockAfterMs }))
+      }
+      vault.file = { ...vault.file, lockAfterMs }
+      await writeFile_(vault)
+      // Like the helper: only an unlocked vault's window changes and is announced.
+      if (vault.state === 'unlocked') {
+        arm(vault)
+        emit(vault)
+      }
+    },
+
+    async touch(vaultId) {
+      const vault = need(vaultId)
+      if (vault.state !== 'unlocked' || vault.holds.size > 0 || windowOf(vault) === 0) return
+      arm(vault)
+      emit(vault)
     },
 
     async resize(vaultId, sizeBytes, token) {

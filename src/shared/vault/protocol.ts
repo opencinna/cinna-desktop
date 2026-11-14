@@ -28,7 +28,8 @@ export const GATED_ACTIONS = [
   'egress',
   'terminal',
   'resize',
-  'destroy'
+  'destroy',
+  'lock-timeout'
 ] as const
 export type GatedAction = (typeof GATED_ACTIONS)[number]
 
@@ -77,8 +78,29 @@ export const VAULT_ENGINE_HOSTS: Record<VaultEngine, readonly string[]> = {
 }
 
 export const VAULT_DEFAULT_SIZE_BYTES = 10 * 1024 ** 3
-/** D13: the unlock window outlives the last turn or gated action by this much. */
-export const VAULT_UNLOCK_WINDOW_MS = 60_000
+/**
+ * D13: how long a vault stays unlocked after its last turn, gated action or
+ * keystroke in its chat, per vault (`lockAfterMs` in the helper's signed
+ * `vault.json`). `0` = no idle timer: it locks when Cinna quits, and on screen
+ * lock, sleep and logout as always (D21).
+ */
+export const VAULT_LOCK_TIMEOUTS = [30_000, 300_000, 0] as const
+export type VaultLockTimeout = (typeof VAULT_LOCK_TIMEOUTS)[number]
+/** New vaults, and a `vault.json` written before the setting existed. */
+export const VAULT_DEFAULT_LOCK_AFTER_MS: VaultLockTimeout = 300_000
+
+export function isVaultLockTimeout(value: unknown): value is VaultLockTimeout {
+  return typeof value === 'number' && (VAULT_LOCK_TIMEOUTS as readonly number[]).includes(value)
+}
+
+/**
+ * True when `next` closes the vault strictly sooner than `current` (0, no
+ * timer, is the longest): such a change needs no approval.
+ */
+export function vaultLockTimeoutShorter(next: number, current: number): boolean {
+  const rank = (ms: number): number => (ms === 0 ? Number.POSITIVE_INFINITY : ms)
+  return rank(next) < rank(current)
+}
 /** D33: a locked (paused) VM is stopped cold after this long. */
 export const VAULT_PAUSED_STOP_MS = 30 * 60_000
 
@@ -87,8 +109,10 @@ export interface VaultSummary {
   agentId: string
   agentName: string
   state: VaultState
-  /** Epoch ms the unlock window ends; null while a hold keeps it open. Only for `unlocked`. */
+  /** Epoch ms the unlock window ends; null while a hold keeps it open, or with no timer (`lockAfterMs` 0). Only for `unlocked`. */
   until?: number | null
+  /** The vault's lock timeout ({@link VAULT_LOCK_TIMEOUTS}); absent from an older helper ⇒ the default. */
+  lockAfterMs?: number
   sizeBytes: number
   usedBytes?: number
   egress: EgressPolicy
@@ -132,6 +156,10 @@ export interface HelperRequestMap {
   'vault.status': { params: { vaultId: string }; result: VaultSummary }
   'vault.approve': { params: { vaultId: string; action: GatedAction; detail: string }; result: { token: string } }
   'vault.setEgress': { params: { vaultId: string; policy: EgressPolicy; token: string }; result: Record<string, never> }
+  /** A strictly shorter timeout needs no token; anything else a `lock-timeout` token for exactly this value. */
+  'vault.setLockTimeout': { params: { vaultId: string; lockAfterMs: number; token?: string }; result: Record<string, never> }
+  /** Restarts an unlocked, unheld vault's idle window (typing in its chat). No prompt; a no-op otherwise. */
+  'vault.touch': { params: { vaultId: string }; result: Record<string, never> }
   'vault.resize': { params: { vaultId: string; sizeBytes: number; token: string }; result: Record<string, never> }
   'vault.destroy': { params: { vaultId: string; token: string }; result: Record<string, never> }
   'channel.open': { params: { vaultId: string }; result: { channel: number } }
@@ -139,7 +167,7 @@ export interface HelperRequestMap {
 export type HelperMethod = keyof HelperRequestMap
 
 export type HelperEvent =
-  | { event: 'vault.state'; vaultId: string; state: VaultState; until?: number | null; error?: string }
+  | { event: 'vault.state'; vaultId: string; state: VaultState; until?: number | null; lockAfterMs?: number; error?: string }
   | { event: 'egress'; vaultId: string; host: string; verdict: 'allowed' | 'denied' }
   | { event: 'log'; level: 'debug' | 'info' | 'warn' | 'error'; message: string }
 
@@ -184,7 +212,8 @@ export const APPROVAL_TTL_MS: Record<GatedAction, number> = {
   egress: 10 * 60_000,
   terminal: 10 * 60_000,
   resize: 10 * 60_000,
-  destroy: 10 * 60_000
+  destroy: 10 * 60_000,
+  'lock-timeout': 10 * 60_000
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +464,7 @@ export function approvalDetail(
     | { method: 'move-out' }
     | { method: 'vault.setEgress'; policy: EgressPolicy }
     | { method: 'vault.resize'; sizeBytes: number }
+    | { method: 'vault.setLockTimeout'; lockAfterMs: number }
     | { method: 'vault.destroy' }
 ): string {
   switch (call.method) {
@@ -454,6 +484,8 @@ export function approvalDetail(
       return `egress:${[...new Set(call.policy.hosts.map((h) => h.trim().toLowerCase()))].sort().join(',')}`
     case 'vault.resize':
       return `resize:${call.sizeBytes}`
+    case 'vault.setLockTimeout':
+      return `lock-timeout:${call.lockAfterMs}`
     case 'vault.destroy':
       return 'destroy'
   }

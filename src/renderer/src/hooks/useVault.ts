@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import {
+  formatVaultCountdown,
   vaultChatFilesSweptText,
   type VaultAvailabilityDto,
   type VaultChatFilesSweptEvent,
@@ -23,6 +24,8 @@ import { LOCAL_AGENTS_KEY, localAgentKey } from './useLocalAgents'
  * renderer test that mocks only the parts it needs: a hook mounted by the app
  * shell must not crash every such test.
  */
+
+export { formatVaultCountdown }
 
 export const VAULT_KEY = ['vault'] as const
 export const VAULT_AVAILABILITY_KEY = ['vault', 'availability'] as const
@@ -88,7 +91,13 @@ export function useVaultStatus(agentId: string | null) {
 /** A state push folded into the cached status, so the tab moves without a round trip. */
 export function applyVaultState(queryClient: QueryClient, event: VaultStateEvent): void {
   queryClient.setQueryData<VaultStatusDto>(vaultStatusKey(event.agentId), (prev) =>
-    prev ? { ...prev, state: event.state, until: event.until, error: event.error } : prev
+    prev
+      ? {
+          ...prev, state: event.state, until: event.until, error: event.error,
+          // An older main that sends none keeps what the status said.
+          lockAfterMs: event.lockAfterMs ?? prev.lockAfterMs
+        }
+      : prev
   )
 }
 
@@ -181,6 +190,12 @@ export function useVaultSetSize() {
 export function useVaultSetEgress() {
   return useVaultMutation(
     (api, vars: { agentId: string; hosts: string[] }) => api.setEgress(vars.agentId, vars.hosts),
+    storeStatus
+  )
+}
+export function useVaultSetLockTimeout() {
+  return useVaultMutation(
+    (api, vars: { agentId: string; lockAfterMs: number }) => api.setLockTimeout(vars.agentId, vars.lockAfterMs),
     storeStatus
   )
 }
@@ -289,4 +304,82 @@ export async function cancelVaultMove(moveId: string): Promise<void> {
 
 export function onVaultMoveProgress(cb: Parameters<VaultApi['onMoveProgress']>[0]): () => void {
   return vaultApi()?.onMoveProgress?.(cb) ?? (() => {})
+}
+
+/** At most one touch per agent this often: typing keeps the vault open without a call per keystroke. */
+export const VAULT_TOUCH_THROTTLE_MS = 5_000
+
+/**
+ * A throttled `vault.touch` for the composer: `touch(agentId)` restarts the
+ * agent's unlocked vault's idle window, at most once per
+ * {@link VAULT_TOUCH_THROTTLE_MS} per agent. Changes nothing on screen.
+ */
+export function useVaultTouch(now: () => number = Date.now): (agentId: string) => void {
+  const last = useRef<{ agentId: string; at: number } | null>(null)
+  const [touch] = useState(() => (agentId: string) => {
+    const at = now()
+    const prev = last.current
+    if (prev && prev.agentId === agentId && at - prev.at < VAULT_TOUCH_THROTTLE_MS) return
+    last.current = { agentId, at }
+    vaultApi()?.touch?.(agentId)
+  })
+  return touch
+}
+
+/** Under this many ms left, the router badge shows its countdown pill. */
+export const VAULT_COUNTDOWN_PILL_MS = 15_000
+/** Within this many ms of the deadline the countdown ticks every second (and always while `watch`). */
+const VAULT_COUNTDOWN_TICK_MS = 20_000
+
+export type VaultCountdown =
+  | { kind: 'none' }
+  | { kind: 'locked' }
+  | { kind: 'held' }
+  | { kind: 'no-timer' }
+  | { kind: 'counting'; remainingMs: number; until: number }
+
+/** What a vault's lock timer is doing, from its status at `now`. */
+export function vaultCountdown(status: Pick<VaultStatusDto, 'state' | 'until' | 'lockAfterMs'> | null | undefined, now: number): VaultCountdown {
+  if (!status) return { kind: 'none' }
+  if (status.state !== 'unlocked') return status.state === 'booting' ? { kind: 'none' } : { kind: 'locked' }
+  if (status.lockAfterMs === 0) return { kind: 'no-timer' }
+  if (status.until === null) return { kind: 'held' }
+  return { kind: 'counting', remainingMs: Math.max(0, status.until - now), until: status.until }
+}
+
+/**
+ * A vault agent's lock countdown, kept live by the state pushes. It re-renders
+ * once a second only while the deadline is near (within 20 s) or `watch` is on
+ * (a popover showing it); otherwise one timer wakes it when the deadline
+ * comes within reach, so the composer is not re-rendered every second.
+ */
+export function useVaultCountdown(agentId: string | null, watch = false): VaultCountdown {
+  const { data: status } = useVaultStatus(agentId)
+  const [now, setNow] = useState(() => Date.now())
+  const until = status?.state === 'unlocked' && status.lockAfterMs !== 0 ? status.until ?? null : null
+  useEffect(() => {
+    setNow(Date.now())
+    if (until === null) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let interval: ReturnType<typeof setInterval> | null = null
+    const startTicking = (): void => {
+      setNow(Date.now())
+      interval = setInterval(() => {
+        const t = Date.now()
+        setNow(t)
+        if (t >= until && interval) {
+          clearInterval(interval)
+          interval = null
+        }
+      }, 1000)
+    }
+    const away = until - Date.now()
+    if (watch || away <= VAULT_COUNTDOWN_TICK_MS) startTicking()
+    else timer = setTimeout(startTicking, away - VAULT_COUNTDOWN_TICK_MS)
+    return () => {
+      if (timer) clearTimeout(timer)
+      if (interval) clearInterval(interval)
+    }
+  }, [until, watch])
+  return vaultCountdown(status, now)
 }

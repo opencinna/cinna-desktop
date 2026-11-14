@@ -129,6 +129,18 @@ final class VaultManager {
       case "vault.setEgress":
         try setEgress(try entry(params), hosts: try params.hosts("policy"), token: try params.str("token"))
         reply([String: Any](), nil)
+      case "vault.setLockTimeout":
+        let e = try entry(params)
+        var token: String? = nil
+        if let raw = params["token"], !(raw is NSNull) {
+          guard let t = raw as? String else { throw HelperError.invalid("token must be a string") }
+          token = t
+        }
+        try setLockTimeout(e, ms: try params.int64("lockAfterMs"), token: token)
+        reply([String: Any](), nil)
+      case "vault.touch":
+        touch(try entry(params))
+        reply([String: Any](), nil)
       case "vault.resize":
         try resize(try entry(params), size: try params.int64("sizeBytes"), token: try params.str("token"))
         reply([String: Any](), nil)
@@ -166,12 +178,15 @@ final class VaultManager {
     if s != "unlocked" { e.until = nil }
     var ev: [String: Any] = ["event": "vault.state", "vaultId": e.vaultId, "state": s]
     if s == "unlocked" { ev["until"] = e.until.map { NSNumber(value: $0) } ?? NSNull() }
+    if let doc = e.doc { ev["lockAfterMs"] = doc.lockAfterMs }
     if let err = error { ev["error"] = err }
     Control.emit(ev)
   }
 
-  /// D13: 60 s after the last hold release or gated action; open-ended while
-  /// held, each hold for at most HOLD_MAX_MS (D40).
+  /// D13: the vault's lockAfterMs after the last hold release, gated action or
+  /// touch (0: no idle timer, until Cinna quits); open-ended while held, each
+  /// hold for at most HOLD_MAX_MS (D40). The screen-lock / sleep / logout
+  /// locks (D21) and the cold stop (D33) do not depend on it.
   private func restartWindow(_ e: VaultEntry) {
     e.windowTimer?.cancel()
     e.windowTimer = nil
@@ -192,18 +207,25 @@ final class VaultManager {
       e.holdTimer = h
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(max(0, next - now)) + 10), execute: h)
     }
-    if e.holds.isEmpty {
-      e.until = nowMs() + Int64(UNLOCK_WINDOW_MS)
+    let windowMs = windowMs(e)
+    if e.holds.isEmpty && windowMs > 0 {
+      e.until = nowMs() + Int64(windowMs)
       let w = DispatchWorkItem { [weak self, weak e] in
         guard let self = self, let e = e, e.state == "unlocked", e.holds.isEmpty else { return }
         self.lock(e, why: "unlock window ended") {}
       }
       e.windowTimer = w
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(UNLOCK_WINDOW_MS), execute: w)
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(windowMs), execute: w)
     } else {
       e.until = nil
     }
     setState(e, "unlocked")
+  }
+
+  /// The idle window in ms; 0 = none. The test override wins over the vault's own setting.
+  private func windowMs(_ e: VaultEntry) -> Int {
+    if let o = TEST_WINDOW_OVERRIDE_MS { return o }
+    return Int(e.doc?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS)
   }
 
   private func reload(_ e: VaultEntry) {
@@ -234,6 +256,7 @@ final class VaultManager {
       "imageVersion": e.doc?.imageVersion ?? (r["imageVersion"] as? String ?? ""),
     ]
     if e.state == "unlocked" { o["until"] = e.until.map { NSNumber(value: $0) } ?? NSNull() }
+    o["lockAfterMs"] = e.doc?.lockAfterMs ?? ((r["lockAfterMs"] as? NSNumber)?.int64Value ?? DEFAULT_LOCK_AFTER_MS)
     return o
   }
 
@@ -663,6 +686,40 @@ final class VaultManager {
     }
     e.doc = doc
     e.vm?.proxy.setHosts(hosts)
+  }
+
+  /// A strictly shorter timeout (0 is the longest) needs no approval: it only
+  /// closes the vault sooner. Anything else needs a helper-verified
+  /// `lock-timeout` token for exactly this value. A running vault's window
+  /// restarts at once with the new value.
+  private func setLockTimeout(_ e: VaultEntry, ms: Int64, token: String?) throws {
+    guard LOCK_TIMEOUTS.contains(ms) else { throw HelperError.invalid("lockAfterMs must be 30000, 300000 or 0") }
+    if e.vm == nil { reload(e) }
+    guard var doc = e.doc else { throw HelperError(code: "tampered", message: e.tamperedWhy ?? "tampered") }
+    if lockTimeoutRank(ms) >= lockTimeoutRank(doc.lockAfterMs) {
+      guard let t = token else { throw ApprovalError(code: "bad_token", message: "a longer lock timeout needs approval") }
+      try Approvals.verifyHelperToken(t, vaultId: e.vaultId, action: "lock-timeout", detail: Approvals.lockTimeoutDetail(ms))
+    }
+    doc.lockAfterMs = ms
+    do {
+      try VaultFiles.save(doc, e.vaultDir)
+    } catch {
+      resyncAfterFailedSave(e)
+      if e.state == "unlocked" { restartWindow(e) }  // the window follows what is on disk
+      throw error
+    }
+    e.doc = doc
+    // Only an unlocked vault's window changes; for any other state the reply
+    // carries the new value and no `vault.state` is sent, since main reads a
+    // non-unlocked state event as "left unlocked" (a lock-generation bump).
+    if e.state == "unlocked" { restartWindow(e) }
+  }
+
+  /// Typing in a chat with the vault's agent: restart the idle window. Only an
+  /// unlocked, unheld vault with a timer; anything else is a no-op. No prompt.
+  private func touch(_ e: VaultEntry) {
+    guard e.state == "unlocked", e.holds.isEmpty, windowMs(e) > 0 else { return }
+    restartWindow(e)
   }
 
   /// M1: a save can fail after vault.json was written (the current digest

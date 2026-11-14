@@ -1,4 +1,5 @@
-import type { VaultAvailability, VaultState } from '../../../../../../shared/vault/types'
+import type { VaultEngine } from '../../../../../../shared/vault/protocol'
+import { formatVaultCountdown, type VaultAvailability, type VaultState } from '../../../../../../shared/vault/types'
 import type { VaultUnavailableReason } from '../../../../../../shared/vault/protocol'
 
 /** Why this Mac cannot hold a vault, in the user's words (README "Security tab"). */
@@ -28,13 +29,28 @@ export const STATE_LABEL: Record<VaultState, string> = {
 }
 
 /**
- * "Unlocked · locks in 42s", or "Running" while a turn holds the window open
- * (`until` null, D13).
+ * "Unlocked · locks in 4:32"; "Running" while a turn holds the window open
+ * (`until` null, D13); plain "Unlocked" when the vault has no timer
+ * (`lockAfterMs` 0: until Cinna quits).
  */
-export function unlockedLabel(until: number | null, now: number): string {
+export function unlockedLabel(until: number | null, now: number, lockAfterMs?: number): string {
+  if (lockAfterMs === 0) return 'Unlocked'
   if (until === null) return 'Running'
-  const seconds = Math.max(0, Math.ceil((until - now) / 1000))
-  return `Unlocked · locks in ${seconds}s`
+  return `Unlocked · locks in ${formatVaultCountdown(until - now)}`
+}
+
+/**
+ * A lock timeout in words — "30 seconds", "5 minutes", "1 hour", "Until Cinna
+ * quits" (0). The values come from the backend's capabilities, so any is said.
+ */
+export function lockAfterLabel(ms: number): string {
+  if (ms === 0) return 'Until Cinna quits'
+  const seconds = Math.round(ms / 1000)
+  const unit = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
+  if (seconds < 60 || seconds % 60 !== 0) return unit(seconds, 'second')
+  const minutes = seconds / 60
+  if (minutes < 60 || minutes % 60 !== 0) return unit(minutes, 'minute')
+  return unit(minutes / 60, 'hour')
 }
 
 export const GB = 1024 ** 3
@@ -74,4 +90,12 @@ export function isHostPattern(text: string): boolean {
 /** An environment-variable name for a secret. */
 export function isSecretName(text: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(text)
+}
+
+/** An engine as the vault UI names it. */
+export const VAULT_ENGINE_NAME: Record<VaultEngine, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  antigravity: 'Antigravity'
 }

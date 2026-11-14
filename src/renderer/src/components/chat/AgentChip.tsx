@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
-import { AtSign, Bot, FolderOpen, Paperclip, SquareArrowOutUpRight, Workflow, X } from 'lucide-react'
+import { AtSign, Bot, FolderOpen, Lock, Paperclip, SquareArrowOutUpRight, Workflow, X } from 'lucide-react'
 import { CONTEXT_MENU_ITEM, ContextMenu, useContextMenuAction } from '../ui/ContextMenu'
 import { hasAgentPage, useOpenAgentPage } from '../../hooks/useOpenAgentPage'
 import { useLocalAgents, useOpenAgentPath, useOpenAgentUploads } from '../../hooks/useLocalAgents'
+import { useVaultLock, useVaultStatus } from '../../hooks/useVault'
 
 /**
  * The width range of a chip under the composer (agent and MCP chips alike).
@@ -232,7 +233,15 @@ function AgentChipContextMenu({
   const { agent, setCoordinator } = menu
   const reason = setCoordinator?.disabledReason ?? null
   const reasonId = useId()
-  const isFolder = !!folders?.agents.some((folder) => folder.id === agent.id)
+  const folder = folders?.agents.find((item) => item.id === agent.id)
+  // A vault agent's folder is inside its VM: Open Agent Folder and Open Uploads
+  // could only fail. It offers Lock now instead, while its vault is open.
+  const isVault = agent.source === 'vault' || !!folder?.vault
+  const isFolder = !!folder && !isVault
+  const { data: vaultStatus } = useVaultStatus(isVault ? agent.id : null)
+  const vaultState = vaultStatus?.state ?? folder?.vault?.state ?? null
+  const canLock = isVault && vaultState === 'unlocked'
+  const lock = useVaultLock()
   return (
     <ContextMenu x={x} y={y} anchor={anchor} label={`Agent ${agent.name}`} error={error} onClose={onClose}>
       {menu.address && (
@@ -280,6 +289,15 @@ function AgentChipContextMenu({
           onClick={() => void run(() => openAgentUploads.mutateAsync(agent.id), 'Could not open the uploads folder.')}>
           <Paperclip size={12} aria-hidden="true" />Open Uploads
         </button>
+      )}
+      {canLock && (
+        <>
+          <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
+          <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM} disabled={busy}
+            onClick={() => void run(() => lock.mutateAsync(agent.id), 'Could not lock the vault.')}>
+            <Lock size={12} aria-hidden="true" />Lock Now
+          </button>
+        </>
       )}
     </ContextMenu>
   )

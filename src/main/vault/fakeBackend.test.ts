@@ -13,11 +13,11 @@ let stub = ''
 let backend: VaultBackend | null = null
 const events: HelperEvent[] = []
 
-function make(windowMs = 60_000): VaultBackend {
+function make(windowMs: number | null = 60_000): VaultBackend {
   backend = createFakeBackend({
     vaultdPath: stub,
     nodeRuntime: () => ({ command: process.execPath, args: [], env: {} }),
-    windowMs
+    ...(windowMs !== null ? { windowMs } : {})
   })
   backend.onEvent((event) => events.push(event))
   return backend
@@ -112,5 +112,65 @@ describe('fake vault backend', () => {
     await b.destroy('vault-1', await b.approve('vault-1', 'destroy', 'Payroll'))
     expect(existsSync(join(dir, 'SecureAgents', 'vault-1'))).toBe(false)
     await expect(b.status('vault-1')).rejects.toMatchObject({ code: 'not_found' })
+  })
+
+  it('keeps each vault’s own lock timeout: 5 minutes by default, shorter freely, longer only with a lock-timeout token', async () => {
+    const b = make(null)
+    await b.create(spec())
+    expect((await b.status('vault-1')).lockAfterMs).toBe(300_000)
+    await b.unlock('vault-1', 'chat')
+    const until = (await b.status('vault-1')).until!
+    expect(until - Date.now()).toBeGreaterThan(290_000)
+
+    await b.setLockTimeout('vault-1', 30_000)
+    const shorter = await b.status('vault-1')
+    expect(shorter.lockAfterMs).toBe(30_000)
+    // Applied to the running vault at once.
+    expect(shorter.until! - Date.now()).toBeLessThanOrEqual(30_000)
+
+    await expect(b.setLockTimeout('vault-1', 300_000)).rejects.toMatchObject({ code: 'bad_token' })
+    const egress = await b.approve('vault-1', 'egress', 'egress:')
+    await expect(b.setLockTimeout('vault-1', 300_000, egress)).rejects.toMatchObject({ code: 'bad_token' })
+    const forZero = await b.approve('vault-1', 'lock-timeout', 'lock-timeout:0')
+    await expect(b.setLockTimeout('vault-1', 300_000, forZero)).rejects.toMatchObject({ code: 'bad_token' })
+    await expect(b.setLockTimeout('vault-1', 60_000)).rejects.toMatchObject({ code: 'invalid' })
+
+    // Until Cinna quits: no timer, until is null with no hold, and the state event says why.
+    await b.setLockTimeout('vault-1', 0, forZero)
+    expect(await b.status('vault-1')).toMatchObject({ state: 'unlocked', until: null, lockAfterMs: 0 })
+    expect(events.at(-1)).toMatchObject({ event: 'vault.state', state: 'unlocked', until: null, lockAfterMs: 0 })
+    expect(JSON.parse(readFileSync(join(dir, 'SecureAgents', 'vault-1', 'vault.json'), 'utf8')).lockAfterMs).toBe(0)
+  })
+
+  it('reads a vault.json written before the setting as 5 minutes', async () => {
+    await make().create(spec())
+    const path = join(dir, 'SecureAgents', 'vault-1', 'vault.json')
+    const file = JSON.parse(readFileSync(path, 'utf8'))
+    delete file.lockAfterMs
+    writeFileSync(path, JSON.stringify(file))
+    await backend!.shutdown()
+    const [listed] = await make().list(join(dir, 'SecureAgents'))
+    expect(listed.lockAfterMs).toBe(300_000)
+  })
+
+  it('a touch restarts an unlocked, unheld window and is a no-op otherwise', async () => {
+    let now = 1_000_000
+    backend = createFakeBackend({ vaultdPath: stub, nodeRuntime: () => ({ command: process.execPath, args: [], env: {} }), now: () => now })
+    backend.onEvent((event) => events.push(event))
+    const b = backend
+    await b.create(spec())
+    await b.touch('vault-1')
+    expect((await b.status('vault-1')).state).toBe('locked')
+    await b.unlock('vault-1', 'chat')
+    expect((await b.status('vault-1')).until).toBe(1_000_000 + 300_000)
+    now += 60_000
+    const before = events.length
+    await b.touch('vault-1')
+    expect((await b.status('vault-1')).until).toBe(1_060_000 + 300_000)
+    expect(events.length).toBe(before + 1)
+    await b.hold('vault-1', 'turn')
+    now += 1000
+    await b.touch('vault-1')
+    expect((await b.status('vault-1')).until).toBeNull()
   })
 })

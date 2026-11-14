@@ -13,7 +13,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { HELPER_PROTOCOL, type HelperEvent, type VaultAvailability, type VaultState } from '../../../../shared/vault/protocol'
+import { HELPER_PROTOCOL, VAULT_LOCK_TIMEOUTS, type HelperEvent, type VaultAvailability, type VaultState } from '../../../../shared/vault/protocol'
 import { VaultBackendError, type VaultBackend, type VaultHello } from '../../../vault/backend'
 import { HelperSession, type HelperDuplex } from '../../../vault/frames'
 import { createLogger } from '../../../logger/logger'
@@ -127,7 +127,7 @@ export function createAppleVzBackend(options: AppleVzBackendOptions): VaultBacke
 
   return {
     kind: 'apple-vz',
-    capabilities: () => ({ separateKernel: true, hardwareKey: true, perActionPresence: true }),
+    capabilities: () => ({ separateKernel: true, hardwareKey: true, perActionPresence: true, lockTimeouts: VAULT_LOCK_TIMEOUTS, idleTouch: true }),
     hello: async () => (await start()).hello,
 
     async availability(): Promise<VaultAvailability> {
@@ -150,6 +150,10 @@ export function createAppleVzBackend(options: AppleVzBackendOptions): VaultBacke
     approve: async (vaultId, action, detail) =>
       (await (await session()).request('vault.approve', { vaultId, action, detail }, { timeoutMs: PROMPT_TIMEOUT_MS })).token,
     setEgress: async (vaultId, policy, token) => { await (await session()).request('vault.setEgress', { vaultId, policy, token }) },
+    setLockTimeout: async (vaultId, lockAfterMs, token) => {
+      await (await session()).request('vault.setLockTimeout', { vaultId, lockAfterMs, ...(token ? { token } : {}) })
+    },
+    touch: async (vaultId) => { await (await session()).request('vault.touch', { vaultId }) },
     resize: async (vaultId, sizeBytes, token) => { await (await session()).request('vault.resize', { vaultId, sizeBytes, token }) },
     destroy: async (vaultId, token) => { await (await session()).request('vault.destroy', { vaultId, token }, { timeoutMs: PROMPT_TIMEOUT_MS }) },
     open: async (vaultId) => (await session()).openChannel(vaultId),

@@ -44,14 +44,22 @@ func testEnvMs(_ name: String, min: Int = 100) -> Int? {
 }
 #endif
 
-/// D13: the unlock window outlives the last hold release or gated action by this much.
-/// The test flavor alone lets CINNA_VAULT_TEST_WINDOW_MS shorten it for the smoke run.
-let UNLOCK_WINDOW_MS: Int = {
+/// D13: how long a vault stays unlocked after its last hold release or gated action is the
+/// vault's own `lockAfterMs` (vault.json). The test flavor alone lets
+/// CINNA_VAULT_TEST_WINDOW_MS override every vault's for the smoke run; nil = no override.
+let TEST_WINDOW_OVERRIDE_MS: Int? = {
   #if VAULT_TEST_GATE
   if let s = ProcessInfo.processInfo.environment["CINNA_VAULT_TEST_WINDOW_MS"], let v = Int(s), v >= 100 { return v }
   #endif
-  return 60_000
+  return nil
 }()
+/// protocol.ts VAULT_LOCK_TIMEOUTS: 30 s, 5 min, or 0 = no idle timer (locks when Cinna quits,
+/// and on screen lock / sleep / logout as always).
+let LOCK_TIMEOUTS: Set<Int64> = [30_000, 300_000, 0]
+/// protocol.ts VAULT_DEFAULT_LOCK_AFTER_MS: new vaults, and files written before the setting existed.
+let DEFAULT_LOCK_AFTER_MS: Int64 = 300_000
+/// Orders timeouts by how long they keep a vault open: 0 (no timer) is the longest.
+func lockTimeoutRank(_ ms: Int64) -> Int64 { ms == 0 ? Int64.max : ms }
 /// D40: a hold keeps the window open for at most this long.
 let HOLD_MAX_MS: Int = {
   #if VAULT_TEST_GATE
@@ -71,12 +79,13 @@ let PAUSED_STOP_MS: Int = {
 let APPROVAL_TTL_MS: [String: Int64] = [
   "move-in": 30 * 60_000, "install": 30 * 60_000, "export": 10 * 60_000, "move-out": 30 * 60_000,
   "egress": 10 * 60_000, "terminal": 10 * 60_000, "resize": 10 * 60_000, "destroy": 10 * 60_000,
+  "lock-timeout": 10 * 60_000,
 ]
 let GATED_ACTIONS: Set<String> = Set(APPROVAL_TTL_MS.keys)
 /// Tokens the guest (vaultd) verifies with the per-boot approval key.
 let GUEST_VERIFIED_ACTIONS: Set<String> = ["move-in", "install", "export", "move-out", "terminal"]
 /// Tokens the helper verifies itself with its per-process key.
-let HELPER_VERIFIED_ACTIONS: Set<String> = ["egress", "resize", "destroy"]
+let HELPER_VERIFIED_ACTIONS: Set<String> = ["egress", "resize", "destroy", "lock-timeout"]
 
 let VAULT_ENGINES: Set<String> = ["claude", "codex", "opencode", "antigravity"]
 /// protocol.ts VAULT_INSTALL_HOSTS: open in the proxy while a move-in/install approval is live.

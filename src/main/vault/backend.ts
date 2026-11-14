@@ -69,6 +69,13 @@ export interface VaultBackend {
   /** A fresh presence prompt for one gated action; the token the guest or helper verifies. */
   approve(vaultId: string, action: GatedAction, detail: string): Promise<string>
   setEgress(vaultId: string, policy: EgressPolicy, token: string): Promise<void>
+  /**
+   * The vault's lock timeout (`VAULT_LOCK_TIMEOUTS`). A strictly shorter one
+   * needs no token; anything else a `lock-timeout` token for exactly this value.
+   */
+  setLockTimeout(vaultId: string, lockAfterMs: number, token?: string): Promise<void>
+  /** Restarts an unlocked, unheld vault's idle window; a no-op otherwise. No prompt. */
+  touch(vaultId: string): Promise<void>
   resize(vaultId: string, sizeBytes: number, token: string): Promise<void>
   destroy(vaultId: string, token: string): Promise<void>
   /** A new connection to cinna-vaultd; the vault must be unlocked. */
@@ -96,7 +103,7 @@ export class VaultBackendError extends Error {
   }
 }
 
-const NO_CAPABILITIES: VaultCapabilities = { separateKernel: false, hardwareKey: false, perActionPresence: false }
+const NO_CAPABILITIES: VaultCapabilities = { separateKernel: false, hardwareKey: false, perActionPresence: false, lockTimeouts: [], idleTouch: false }
 
 /** A backend that answers every call with the reason it cannot serve vaults. */
 export function unavailableBackend(reason: VaultUnavailableReason, detail?: string): VaultBackend {
@@ -118,6 +125,8 @@ export function unavailableBackend(reason: VaultUnavailableReason, detail?: stri
     release: refuse,
     approve: refuse,
     setEgress: refuse,
+    setLockTimeout: refuse,
+    touch: refuse,
     resize: refuse,
     destroy: refuse,
     open: refuse,

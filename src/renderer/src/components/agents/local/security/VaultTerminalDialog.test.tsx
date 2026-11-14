@@ -56,7 +56,7 @@ const vault = {
 
 beforeEach(() => {
   status = {
-    agentId: 'folder:alpha', vaultId: 'v1', agentName: 'Alpha', engine: 'claude', state: 'unlocked', until: Date.now() + 60_000,
+    agentId: 'folder:alpha', vaultId: 'v1', agentName: 'Alpha', engine: 'claude', state: 'unlocked', until: Date.now() + 60_000, lockAfterMs: 300_000,
     sizeBytes: 10 * 1024 ** 3, usedBytes: null, egress: { hosts: [] }, createdAt: 0, imageVersion: '', error: null
   }
   emit = null
