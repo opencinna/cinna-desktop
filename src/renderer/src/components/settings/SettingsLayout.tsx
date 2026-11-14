@@ -426,8 +426,8 @@ export function SettingsBadge({
 }: {
   children: ReactNode
   title?: string
-  /** `danger` for a tag that warns (the vault's Test helper). */
-  tone?: 'neutral' | 'danger'
+  /** `danger` for a tag that warns (the vault's Test helper); `warning` for a caution (Experimental). */
+  tone?: 'neutral' | 'warning' | 'danger'
 }): React.JSX.Element {
   return (
     <span
@@ -435,7 +435,9 @@ export function SettingsBadge({
       className={`shrink-0 rounded px-1.5 py-px text-[11px] ${
         tone === 'danger'
           ? 'bg-[var(--color-danger)]/15 font-medium text-[var(--color-danger)]'
-          : 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]'
+          : tone === 'warning'
+            ? 'bg-[var(--color-warning)]/15 font-medium text-[var(--color-warning)]'
+            : 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]'
       }`}
     >
       {children}

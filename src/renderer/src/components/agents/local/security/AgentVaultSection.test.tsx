@@ -113,6 +113,11 @@ describe('AgentVaultSection — off', () => {
     expect(screen.getByRole('heading', { name: 'Agent Vault' })).toBeTruthy()
   })
 
+  it('marks the feature as experimental', async () => {
+    renderSection(agent())
+    expect((await screen.findByText('Experimental')).getAttribute('title')).toContain('may not work correctly')
+  })
+
   it('marks a helper that is not the release build as a test helper', async () => {
     availability = { ...availability, flavor: 'fake' }
     renderSection(agent())

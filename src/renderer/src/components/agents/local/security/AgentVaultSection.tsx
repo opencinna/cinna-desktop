@@ -48,6 +48,12 @@ export function AgentVaultSection({
               Cinna, and lasts one minute after the last turn. Locking the Mac locks every vault.
             </p>
           </SettingsInfoTip>
+          <SettingsBadge
+            tone="warning"
+            title="Agent Vault is experimental and may not work correctly. Keep copies of files you can’t lose."
+          >
+            Experimental
+          </SettingsBadge>
           {/* Anything but the signed release helper: a build that must not hold real secrets. */}
           {flavor && flavor !== 'release' && (
             <SettingsBadge
