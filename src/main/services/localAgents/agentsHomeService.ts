@@ -68,6 +68,7 @@ import { configuredHomePath, defaultHomePath } from './homePath'
 import { assertUsableRoot, isWithin } from './pathRules'
 import { scannerService } from './scannerService'
 import { scaffoldService } from './scaffoldService'
+import { foreignSecureAgentsDir, foreignSecureAgentsReason } from '../../vault/secureAgentsDir'
 
 const logger = createLogger('local-agents-home')
 
@@ -779,6 +780,7 @@ export const agentsHomeService = {
     if (existing) return toDto(existing)
 
     this.assertNotOverlapping(userId, path)
+    if (foreignSecureAgentsDir(path)) throw new LocalAgentError('invalid_path', foreignSecureAgentsReason())
     this.installRoot(path)
     const row = agentRootRepo.create(userId, {
       path,
@@ -814,6 +816,7 @@ export const agentsHomeService = {
     if (existing) return toDto(existing)
 
     this.assertNotOverlapping(userId, path)
+    if (foreignSecureAgentsDir(path)) throw new LocalAgentError('invalid_path', foreignSecureAgentsReason())
     const row = agentRootRepo.create(userId, {
       path,
       label: label?.trim() || basename(path),

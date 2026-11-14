@@ -77,6 +77,7 @@ import { isWithin } from './pathRules'
 import { turnLock } from './turnLock'
 import { HANDOVERS_DIR } from '../../../shared/handovers'
 import { FOLDER_TASKS_DIR } from '../../../shared/folderTasks'
+import { isSecureAgentsName } from '../../../shared/vault/types'
 
 const logger = createLogger('local-agent-watch')
 
@@ -247,6 +248,8 @@ export function classifyEvent(rootPath: string, filename: string | null): WatchT
   // Dot-entries: the scaffolder's staging directory, editor bookkeeping,
   // `.DS_Store`. None of them is an agent.
   if (slug.startsWith('.')) return { kind: 'ignore' }
+  // `SecureAgents/` is Agent Vault's (disk images); never an agent, never scanned.
+  if (segments.some(isSecureAgentsName)) return { kind: 'ignore' }
 
   // `app-data/` is the agent's own runtime storage — `update_status.py` and
   // `desktop.json` churn there constantly while a turn runs. Scanning on that
@@ -333,6 +336,8 @@ export function classifyExternalEvent(rootPath: string, filename: string | null)
   const normalized = filename.replace(/\\/g, sep)
   const segments = normalized.split(sep).filter((s) => s !== '' && s !== '.')
   if (segments.length === 0) return { kind: 'root' }
+  // `SecureAgents/` is Agent Vault's (disk images); never an agent, never scanned.
+  if (segments.some(isSecureAgentsName)) return { kind: 'ignore' }
   const last = segments[segments.length - 1]
   // A `.cinna-kit` appearing or going decides whether that folder's `AGENTS.md`
   // and `CLAUDE.md` count, so it is the one dot-entry acted on — and only as

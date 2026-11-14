@@ -103,6 +103,13 @@ export const ACP_STDERR_TAIL_LINES = 40
 export interface AcpLaunchSpec {
   /** When set, connect remotely; command/env/cwd are unused. Credentials never enter key. */
   remote?: import('../../../../shared/customAgents').RemoteAcpConfig & { accessToken?: string }
+  /**
+   * When set, the engine runs inside an Agent Vault: `engine.spawn` in the
+   * guest, ACP over the attached vaultd stream (`vaultAcpConnection.ts`).
+   * command/args/env are unused; `cwd` is the guest's agent folder. Holds no
+   * secret: vaultd adds the vault's own credentials inside.
+   */
+  vault?: AcpVaultLaunch
   command: string
   args: string[]
   /** The whole child environment — nothing is inherited that is not named here. */
@@ -133,6 +140,25 @@ export interface AcpLaunchSpec {
    */
   authFingerprint?: string
 }
+
+/** {@link AcpLaunchSpec.vault}: which vault, which engine, and the allowlisted env (`VAULT_ENGINE_EXTRA_ENV`). */
+export interface AcpVaultLaunch {
+  agentId: string
+  vaultId: string
+  engine: import('../../../../shared/vault/protocol').VaultEngine
+  extraEnv: Partial<Record<import('../../../../shared/vault/protocol').VaultEngineExtraEnv, string>>
+  /** The approval mode a new session opens in (the row's), so none starts in the engine's own default. */
+  mode?: import('../../../../shared/vault/protocol').VaultEngineMode
+  /**
+   * An ACP `authenticate` method the connection sends right after `initialize`,
+   * once per process (Antigravity's `gemini-api-key`, which reads the key vaultd
+   * put in its environment). Absent: none.
+   */
+  authMethod?: string
+}
+
+/** The agent folder inside every vault guest (`/vault/agent`): the cwd of a vault agent's sessions. */
+export const VAULT_AGENT_CWD = '/vault/agent'
 
 /** What one process exit looked like. */
 export interface AcpExit {

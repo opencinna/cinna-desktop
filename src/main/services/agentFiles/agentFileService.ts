@@ -31,6 +31,7 @@ import { createPathCanonicalizer, type PathCanonicalizer } from './canonicalPath
 import type { ConsentPrompt, ConsentRegistry } from './consent'
 import { chooseOpenStrategy } from './openStrategy'
 import { homeDisplayPath, resolveFileRefs } from './resolver'
+import { isVaultAgent, VaultAgentRefused } from '../../vault/isVaultAgent'
 
 const logger = createLogger('agent-files')
 
@@ -153,6 +154,8 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
 
   function locate(agentId: unknown): string | AgentFileFailure {
     if (typeof agentId !== 'string' || agentId === '') return fail('invalid_input')
+    // A vault agent's files are not on this computer; none is previewed or opened from here (D6).
+    if (isVaultAgent(agentId)) return fail('agent_not_found', new VaultAgentRefused('File preview').message)
     try {
       return deps.locateAgent(agentId)
     } catch (err) {

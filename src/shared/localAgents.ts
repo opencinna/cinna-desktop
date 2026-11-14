@@ -15,6 +15,7 @@
  *    desktop-owned `app-data/desktop.json` is summarised without its token.
  */
 
+import type { LocalAgentVaultInfo } from './vault/types'
 import type {
   AgentPublication,
   AgentRuntimeRef,
@@ -628,6 +629,12 @@ export interface LocalAgentDto {
   stamps: Record<string, FileStamp | null>
   /** When this snapshot was taken (epoch ms). */
   scannedAt: number
+  /**
+   * Set for an agent moved into an Agent Vault. Such an agent has no folder
+   * here: `path` is `''`, `manifest` is empty, and everything read from files
+   * (commands, credentials, skills, validation) is empty too.
+   */
+  vault?: LocalAgentVaultInfo
 }
 
 /**
@@ -784,7 +791,8 @@ export interface LocalAgentChangedPayload {
   rootId: string
   /** The agent that changed, or null when the whole root was rescanned. */
   agentId: string | null
-  reason: 'watch' | 'rescan' | 'create'
+  /** `vault`: the agent moved into or out of an Agent Vault; its chats' detail (their vault readiness) changed too. */
+  reason: 'watch' | 'rescan' | 'create' | 'vault'
 }
 
 /** What a rescan did, for the caller's log line. */

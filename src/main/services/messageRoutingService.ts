@@ -38,7 +38,8 @@ function fireTitleGenInBackground(userId: string, chatId: string): void {
         const expected =
           err.code === 'feature_disabled' ||
           err.code === 'not_first_message' ||
-          err.code === 'chat_renamed_initial'
+          err.code === 'chat_renamed_initial' ||
+          err.code === 'vault_chat'
         if (expected) {
           logger.debug('chat-title autogen skipped', { chatId, code: err.code })
           return

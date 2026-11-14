@@ -2,7 +2,7 @@ import { runtimeHost } from '../../host/runtimeHost'
 import { execFile, spawn } from 'node:child_process'
 import { realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, sep } from 'node:path'
 import { createLogger } from '../../logger/logger'
 import { which } from '../../shell/env'
 import { toolDetectionService } from './toolDetectionService'
@@ -17,6 +17,7 @@ import {
   isPathWithinRoots
 } from './terminalCommand'
 import type { DetectedTool, LocalToolId, OpenInRequest } from '../../../shared/localTools'
+import { isSecureAgentsName } from '../../../shared/vault/types'
 
 const logger = createLogger('open-in')
 
@@ -172,6 +173,10 @@ export function createOpenInService(deps: OpenInDeps) {
       }
     }
 
+    // `SecureAgents/` holds vault disk images: nothing opens, reveals or runs there (D6).
+    if (resolved.split(sep).some(isSecureAgentsName)) {
+      throw new LocalToolsError('forbidden_path', 'That folder belongs to Agent Vault.')
+    }
     if (!isPathWithinRoots(resolved, resolvedRoots)) {
       logger.warn('refused a folder outside the agents roots', {
         // Don't log the path itself — a hostile renderer could use the log as

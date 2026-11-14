@@ -39,6 +39,7 @@ import {
   type TaskStatus
 } from '../../shared/taskStatus'
 import type { RunState } from '../../shared/runEvents'
+import { isVaultAgent, VaultAgentRefused } from '../vault/isVaultAgent'
 import {
   parseTaskAssigneeKind,
   parseTaskExecutor,
@@ -696,6 +697,7 @@ export const taskService = {
     if (patch.assignee !== undefined) {
       const refusal = assigneeEditRefusal(userId, task)
       if (refusal) throw new TaskError('invalid_input', refusal)
+      if (isVaultAgent(patch.assignee.agentId)) throw new TaskError('invalid_input', new VaultAgentRefused('A task').message)
       next.assigneeKind = patch.assignee.kind
       next.assigneeAgentId = patch.assignee.agentId
       next.assigneeName = patch.assignee.name

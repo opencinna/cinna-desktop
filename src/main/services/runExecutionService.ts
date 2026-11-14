@@ -27,6 +27,7 @@ import { localAgentService } from './localAgents/localAgentService'
 import { dashboardRepo, isCloudTileRow } from '../db/dashboards'
 import { routingOf, type RoutableChat, type RunTarget } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
+import { vaultChatReadiness } from '../vault/isVaultAgent'
 import type { StreamPort } from './a2aStreamingService'
 import type { RunSendPayload } from '../../shared/ipcPayloads'
 import { isDesktopAuthored, type TurnInputOrigin } from '../../shared/turnOrigin'
@@ -44,6 +45,7 @@ import type { CoordinatorToolProvider } from './coordinatorToolProvider'
 import type { AgentDriver, FollowUpScope, SteerFn } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
 import type { TurnRun } from './a2aStreamingService'
+import { discardVaultChatFiles } from '../vault/vaultChatFiles'
 
 const logger = createLogger('run')
 /**
@@ -605,7 +607,17 @@ interface AgentTurnInput {
   catchUp: boolean
 }
 
-async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<void> {
+function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<void> {
+  const turn = runAgentTurnBody(port, input)
+  // Nothing attached: the very same promise, settling no later than before.
+  if (!input.attachments?.length) return turn
+  // A vault chat's attachments went inline into the vault, or nowhere (a
+  // refusal, an early return, a throw before the driver): their copies here
+  // go either way (D23).
+  return turn.finally(() => discardVaultChatFiles(input.profileUserId, input.chatId, input.attachments))
+}
+
+async function runAgentTurnBody(port: StreamPort, input: AgentTurnInput): Promise<void> {
   const { chatId, profileUserId, settingsUserId, agentId, userContent, attachments, catchUp } = input
   const fileIds = attachments?.map((a) => a.id)
 
@@ -621,6 +633,19 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     return
   }
   const { row: agent, userId: agentOwnerId } = located
+
+  // A vault agent answers only in a chat of its own vault. In any other chat
+  // (one from before it moved in) the user's words would be saved here and
+  // titled from: refused before anything is saved, with no error row either.
+  const vaultRefusal = vaultChatReadiness(agent, chatId)
+  if (vaultRefusal) {
+    const err = vaultRefusal.reason ?? 'This agent is in a vault.'
+    port.postMessage({ type: 'error', error: err })
+    input.finish({ state: 'failed', text: '', error: { message: err } })
+    port.close()
+    input.refusal(chatId, err)
+    return
+  }
 
   // **No kind-specific pre-flight here.** The card check, endpoint and token
   // resolution and the Cinna re-auth mapping all run inside the driver's `run`,
@@ -1017,6 +1042,11 @@ async function resendAgentTurn(port: StreamPort, input: {
   }
   const located = agentService.findAgent(settingsUserId, profileUserId, agentId)
   if (!located) return refuse('Agent not found or not configured')
+  const vaultRefusal = vaultChatReadiness(located.row, chatId)
+  if (vaultRefusal) {
+    port.postMessage({ type: 'error', error: vaultRefusal.reason ?? '' })
+    return fail(vaultRefusal.reason ?? 'This agent is in a vault.')
+  }
   const chat = visibleChat(profileUserId, chatId)
   const messages = chatRepo.listMessages(chatId)
   const row = messages.find((message) => message.id === userMessageId)

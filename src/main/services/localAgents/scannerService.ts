@@ -80,6 +80,7 @@ import {
 import { isWithin } from './pathRules'
 import { pySplitLines, pyStrip } from './envFile'
 import type { BareInstructionsFile } from '../../../shared/localAgents'
+import { isSecureAgentsName } from '../../../shared/vault/types'
 
 const logger = createLogger('local-agent-scan')
 let attachmentMetadata: (path: string) => (ServiceCredentialDto & { state: string })[] = () => []
@@ -825,7 +826,7 @@ export const scannerService = {
     }
     const dirs: string[] = []
     for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue
+      if (entry.name.startsWith('.') || isSecureAgentsName(entry.name)) continue
       const full = join(agentsDir, entry.name)
       // `withFileTypes` reports a symlink as a symlink; stat it so a workshop
       // assembled out of linked folders still scans.

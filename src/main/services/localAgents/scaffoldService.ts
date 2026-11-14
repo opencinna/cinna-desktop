@@ -40,6 +40,7 @@ import {
   type CinnaAgentManifest
 } from '../../../shared/kit/manifest'
 import { AGENTS_SUBDIR, slugifyAgentName } from '../../../shared/localAgents'
+import { isSecureAgentsName, SECURE_AGENTS_DIR } from '../../../shared/vault/types'
 
 const logger = createLogger('local-agent-scaffold')
 
@@ -266,6 +267,9 @@ export const scaffoldService = {
         'invalid_input',
         'The folder name must be lower case and hyphenated, 2–63 characters.'
       )
+    }
+    if (isSecureAgentsName(name) || isSecureAgentsName(slug)) {
+      throw new LocalAgentError('invalid_input', `"${SECURE_AGENTS_DIR}" is reserved for Agent Vault. Choose another name.`)
     }
 
     const agentsDir = join(input.rootPath, AGENTS_SUBDIR)

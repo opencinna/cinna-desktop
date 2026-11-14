@@ -12,7 +12,7 @@ import { desktopStateService } from '../localAgents/desktopStateService'
 import { turnLock } from '../localAgents/turnLock'
 import { createLocalScheduleScheduler } from '../localScheduleScheduler'
 import { rememberCredentialSecrets } from '../../security/serviceCredentialRedaction'
-import { checkCredentialPaths, collectOrphanBareCredentials, compareGeneration, writeCredentials } from './files'
+import { checkCredentialPaths, collectOrphanBareCredentials, compareGeneration, renderFiles, writeCredentials } from './files'
 import { serviceCredentialCloud } from './cloud'
 import { createCredentialTokenServer, type CredentialTokenAnswer, type CredentialTokenRequest } from './tokenServer'
 import type { CinnaSendResult } from '../cinna-http'
@@ -21,6 +21,7 @@ import { autoMatch, isDeadKey, slotCandidates, type SlotSpec } from './slotMatch
 import { collectSkillSlots, judgeSkillSlot, skillSlotSpec, slotClaimed, type SkillSlot } from './skillSlots'
 import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, isGoogleOAuthType, type OAuthConnectFlow, type OAuthCredentialStatus, type SlotOAuthAction, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupOption, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
 import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
+import { refuseVaultAgent } from '../../vault/isVaultAgent'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
 const CHANGED_ERROR = 'The account changed. Start the turn again.'
@@ -204,8 +205,10 @@ function allAgents(): LocalAgentDto[] { return localAgentService.list(LOCAL).age
 function state(a: Pick<LocalAgentDto, 'path' | 'kind'>): ServiceCredentialAttachments { return desktopStateService.read(a.path, a.kind).serviceCredentials ?? emptyAttachments() }
 interface Resolved { ref: string; group: string; origin: 'local' | 'cloud'; account?: Account; available: boolean; row?: ServiceCredentialRow }
 /** Every stored attachment. Ones whose account is not eligible are kept but never delivered. */
-function resolve(a: Pick<LocalAgentDto, 'path' | 'kind'>): Resolved[] {
-  const s = state(a), local = repo.list(LOCAL)
+function resolve(a: Pick<LocalAgentDto, 'path' | 'kind'>): Resolved[] { return resolveState(state(a)) }
+/** {@link resolve} for attachments held elsewhere than a folder's desktop state (a vault agent's, in its vault). */
+function resolveState(s: ServiceCredentialAttachments): Resolved[] {
+  const local = repo.list(LOCAL)
   const out: Resolved[] = s.local.map(({ ref }) => ({ ref, group: 'local', origin: 'local', available: true, row: local.find(r => r.origin === 'local' && r.id === ref) }))
   for (const account of ordered()) {
     const cached = repo.list(account.userId)
@@ -214,7 +217,8 @@ function resolve(a: Pick<LocalAgentDto, 'path' | 'kind'>): Resolved[] {
   for (const [key, list] of Object.entries(s.accounts)) if (!accounts.has(key)) for (const { ref } of list) out.push({ ref, group: key, origin: 'cloud', available: false })
   return out
 }
-function attachedAccounts(a: Pick<LocalAgentDto, 'path' | 'kind'>): Account[] { const s = state(a); return ordered().filter(acc => s.accounts[acc.key]?.length) }
+function attachedAccounts(a: Pick<LocalAgentDto, 'path' | 'kind'>): Account[] { return attachedAccountsOf(state(a)) }
+function attachedAccountsOf(s: ServiceCredentialAttachments): Account[] { return ordered().filter(acc => s.accounts[acc.key]?.length) }
 function attachmentState(row?: ServiceCredentialRow): Exclude<ServiceCredentialAttachmentDto['state'], 'account_unavailable'> {
   if (!row) return 'missing'
   const m = credentialDto(row)
@@ -1383,8 +1387,48 @@ export const serviceCredentialService = {
    * skills (only a kit agent's DTO has `skills`), whose scripts get the skill runtime on `PYTHONPATH`.
    */
   async prepare(id: string) {
+    // A vault agent's credentials go into the vault (`secrets.put`), never into a file here.
+    refuseVaultAgent(id, 'Credential files')
     const a = agent(id), prepared = await materialize(a, true), tokenEndpoint = await tokenEndpointFor(a)
     return { ...prepared, skillRuntime: a.skills !== undefined, ...(tokenEndpoint ? { tokenEndpoint } : {}) }
+  },
+  /**
+   * Agent Vault: the credential attachments of a folder agent as its desktop state holds them, captured
+   * into the vault when the agent moves in (a vault agent has no folder here to read them from later).
+   */
+  attachmentsOf(id: string): ServiceCredentialAttachments {
+    return structuredClone(state(agent(id)))
+  },
+  /**
+   * Agent Vault: what {@link prepare} would write for `attachments`, rendered in memory and never written
+   * here — the files (`credentials.json` and any service-account side file `<id>.json`, whose path names
+   * `directory`, where the vault puts the agent's copy) and the generation, so a caller delivers only a
+   * change. The same refresh as a turn's: a bounded account sync and fresh values. Never a token server:
+   * nothing in a vault can reach this computer.
+   */
+  async vaultFiles(attachments: ServiceCredentialAttachments, directory: string): Promise<{ files: Map<string, string>; generation: string }> {
+    const g = guard(attachedAccountsOf(attachments))
+    check(g)
+    let attached = resolveState(attachments).filter(v => v.available)
+    for (const account of attachedAccountsOf(attachments)) {
+      if ((account.lastAttempt ?? 0) >= Date.now() - TURN_SYNC_AGE || !attached.some(v => v.account === account && v.row && liveKey(v.row))) continue
+      account.lastAttempt = Date.now()
+      await boundedSync(account)
+      check(g)
+    }
+    attached = resolveState(attachments).filter(v => v.available)
+    for (const account of attachedAccountsOf(attachments)) {
+      const stale = attached.flatMap(v => v.account === account && v.row && deliverable(v.row) &&
+        (!v.row.payload_enc || (v.row.expires_at !== null && v.row.expires_at < Date.now() + 600_000) || (v.row.payload_fetched_at ?? 0) < Date.now() - 300_000) ? [v.row] : [])
+      try { await fetchValues(account, stale, g) } catch { check(g) }
+    }
+    attached = resolveState(attachments).filter(v => v.available)
+    check(g)
+    if (!attached.length) return { files: new Map(), generation: 'empty' }
+    secure()
+    const { bundles, identity, generation } = await candidate(attached)
+    check(g)
+    return { files: renderFiles(directory, 'bare', bundles, identity), generation }
   },
   /** New in Attach credential: a Google record of `type` in account `group`, attached once Core reports it ready. */
   createOAuth(id: string, group: string, type: string): Promise<OAuthConnectFlow> { return startFlow(id, group, type, null) },

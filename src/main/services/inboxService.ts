@@ -40,6 +40,7 @@ import type {
 import type { LocalAgentDto } from '../../shared/localAgents'
 import { inboxDismissalRepo } from '../db/inboxDismissals'
 import type { TaskInputRequestStatus } from '../../shared/tasks'
+import { isVaultAgent } from '../vault/isVaultAgent'
 
 const logger = createLogger('inbox')
 
@@ -188,6 +189,11 @@ function taskForChat(ctx: RunEventContext): TaskRow | null {
     logger.debug('an ask arrived in a chat that is not there; it stays in the transcript', {
       chatId: ctx.chatId
     })
+    return null
+  }
+  // A vault chat's ask stays in the vault: no task row would carry its words to the host (D23).
+  if (chat.vaultId || isVaultAgent(ctx.agentId)) {
+    logger.debug('an ask in a vault chat makes no task', { chatId: ctx.chatId })
     return null
   }
   const firstUserMessage = messageRepo.firstByRole(ctx.chatId, 'user')?.content?.trim()

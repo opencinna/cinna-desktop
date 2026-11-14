@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, sql } from 'drizzle-orm'
+import { and, asc, eq, isNotNull, ne, sql } from 'drizzle-orm'
 import { sep } from 'node:path'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
@@ -27,6 +27,13 @@ import {
   type AcpLauncherId
 } from '../../shared/agentDrivers'
 import { DEFAULT_AGENT_ENGINE } from '../../shared/engine'
+
+/**
+ * `agents.source` of a local agent moved into an Agent Vault. Same id
+ * (`folder:<manifestId>`), no `localPath`, `driverConfig.vault = {vaultId,
+ * engine}`. Never written, re-pointed or pruned by the folder index.
+ */
+export const VAULT_AGENT_SOURCE = 'vault'
 
 /** True when `child` is `parent` or sits beneath it, by path segment. */
 function isUnder(parent: string, child: string): boolean {
@@ -416,6 +423,85 @@ export const agentRepo = {
     })
   },
 
+  /** Ids of every vault agent, across profiles (ids are global): what `isVaultAgent` reads. */
+  listVaultAgentIds(): string[] {
+    return getDb().select({ id: agents.id }).from(agents).where(eq(agents.source, VAULT_AGENT_SOURCE)).all().map((row) => row.id)
+  },
+
+  /** Vault agents (`source = 'vault'`) of a user. */
+  listVault(userId: string): AgentRow[] {
+    return getDb()
+      .select()
+      .from(agents)
+      .where(and(eq(agents.userId, userId), eq(agents.source, VAULT_AGENT_SOURCE)))
+      .all()
+  },
+
+  /**
+   * Turn a folder agent's row into a vault agent's: same id, so its chats,
+   * shortcuts and colour stay; no folder path; the vault named in
+   * `driverConfig.vault`. `localRootId` is kept (the vault lives in that
+   * root's `SecureAgents/`). Returns whether a folder row changed.
+   */
+  markVault(userId: string, agentId: string, vault: { vaultId: string; engine: string } & Record<string, unknown>): boolean {
+    const db = getDb()
+    return db.transaction((tx) => {
+      const row = tx.select().from(agents).where(and(eq(agents.id, agentId), eq(agents.userId, userId))).get()
+      if (!row || row.source !== FOLDER_AGENT_SOURCE) return false
+      tx.update(agents)
+        .set({ source: VAULT_AGENT_SOURCE, localPath: null, driverConfig: { ...(row.driverConfig ?? {}), vault: { ...vault } } })
+        .where(and(eq(agents.id, agentId), eq(agents.userId, userId)))
+        .run()
+      return true
+    })
+  },
+
+  /** A vault agent's row by id, whoever owns it (ids are global). */
+  findVault(agentId: string): AgentRow | undefined {
+    return getDb().select().from(agents).where(and(eq(agents.id, agentId), eq(agents.source, VAULT_AGENT_SOURCE))).get()
+  },
+
+  /**
+   * Merge `patch` into a vault agent's `driverConfig.vault` (a `null` value
+   * removes the key). Returns false for a row that is not a vault agent's.
+   */
+  patchVaultConfig(userId: string, agentId: string, patch: Record<string, unknown>): boolean {
+    const db = getDb()
+    return db.transaction((tx) => {
+      const row = tx.select().from(agents).where(and(eq(agents.id, agentId), eq(agents.userId, userId))).get()
+      if (!row || row.source !== VAULT_AGENT_SOURCE) return false
+      const current = (row.driverConfig?.['vault'] ?? {}) as Record<string, unknown>
+      const next: Record<string, unknown> = { ...current }
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete next[key]
+        else next[key] = value
+      }
+      tx.update(agents).set({ driverConfig: { ...(row.driverConfig ?? {}), vault: next } })
+        .where(and(eq(agents.id, agentId), eq(agents.userId, userId))).run()
+      return true
+    })
+  },
+
+  /**
+   * Move out of a vault: the row becomes a folder agent's again, at
+   * `localPath` in root `localRootId`, with `driverConfig.vault` dropped.
+   * Returns whether a vault row changed.
+   */
+  unmarkVault(userId: string, agentId: string, folder: { localPath: string; localRootId: string }): boolean {
+    const db = getDb()
+    return db.transaction((tx) => {
+      const row = tx.select().from(agents).where(and(eq(agents.id, agentId), eq(agents.userId, userId))).get()
+      if (!row || row.source !== VAULT_AGENT_SOURCE) return false
+      const { vault: _vault, ...driverConfig } = (row.driverConfig ?? {}) as Record<string, unknown>
+      void _vault
+      tx.update(agents)
+        .set({ source: FOLDER_AGENT_SOURCE, localPath: folder.localPath, localRootId: folder.localRootId, driverConfig })
+        .where(and(eq(agents.id, agentId), eq(agents.userId, userId)))
+        .run()
+      return true
+    })
+  },
+
   /** Folder agents (`source = 'folder'`) for a user, across every root. */
   listFolder(userId: string): AgentRow[] {
     return getDb()
@@ -473,6 +559,9 @@ export const agentRepo = {
           .where(and(eq(agents.id, entry.id), eq(agents.userId, userId)))
           .get()
 
+        // A vault agent's host copy (still there while it moves in) never
+        // takes the row back: the vault owns it now.
+        if (existing?.source === VAULT_AGENT_SOURCE) continue
         if (existing) {
           tx.update(agents)
             .set({
@@ -559,7 +648,7 @@ export const agentRepo = {
         // Null keeps the row's value — see `FolderIndexEntry.launcher`.
         ...(entry.launcher !== null ? { driverConfig: launcherConfig(entry.launcher) } : {})
       })
-      .where(and(eq(agents.id, entry.id), eq(agents.userId, userId)))
+      .where(and(eq(agents.id, entry.id), eq(agents.userId, userId), ne(agents.source, VAULT_AGENT_SOURCE)))
       .run()
   },
 
@@ -612,7 +701,7 @@ export const agentRepo = {
         .from(agents)
         .where(and(eq(agents.id, oldId), eq(agents.userId, userId)))
         .get()
-      if (!row) return { moved: false, repointed: {} }
+      if (!row || row.source === VAULT_AGENT_SOURCE) return { moved: false, repointed: {} }
       // Astronomically unlikely (the id is a fresh UUID), but a collision here
       // would merge two agents' histories. Refuse and let the caller fall back
       // to the ordinary rescan, which is lossy but never wrong.

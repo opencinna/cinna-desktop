@@ -4267,6 +4267,27 @@ describe('a refusal', () => {
     expect(result.error?.message).toMatch(/^Claude Code could not be started/)
   })
 
+  it('logs a vault engine’s start failure without its stderr tail, which only the error row’s details keep', async () => {
+    const { setLogSink } = await import('../../../logger/logger')
+    const logged: unknown[] = []
+    setLogSink((entry) => void logged.push(entry))
+    try {
+      const failure = "The vault's claude engine exited (code 1) before answering initialize\n--- stderr ---\nprinted inside the vault: sk-ant-from-the-vault"
+      const w = world({
+        launcher: 'claude',
+        spec: { vault: { agentId: 'folder:a', vaultId: 'v1', engine: 'claude', extraEnv: {} } } as never,
+        deps: { pool: createAcpProcessPool({ start: async () => { throw new Error(failure) } }) }
+      })
+      const result = await w.run()
+      expect(result.error?.message).toBe("Claude Code could not be started for this agent: The vault's claude engine exited (code 1) before answering initialize")
+      expect(result.error?.raw).toBe(failure)
+      expect(JSON.stringify(logged)).toContain('would not start')
+      expect(JSON.stringify(logged)).not.toContain('sk-ant-from-the-vault')
+    } finally {
+      setLogSink(null)
+    }
+  })
+
   it('refuses rather than running under a policy nobody chose when the setup is rejected', async () => {
     // Claude's `session/set_mode` is the only thing that overrides a
     // `defaultMode` from the user's own settings — which can be

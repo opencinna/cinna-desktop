@@ -53,6 +53,8 @@ export type ChatTitleErrorCode =
   | 'chat_renamed_mid_flight'
   | 'llm_failed'
   | 'empty_output'
+  /** A vault chat keeps its stub title ("<agent> · <date>"); its words never reach a title model (D23). */
+  | 'vault_chat'
 
 export class ChatTitleError extends DomainError<ChatTitleErrorCode> {}
 
@@ -118,6 +120,8 @@ export const chatTitleService = {
       // `userId` is the profile; a chat shared across profiles is the default profile's.
       const chat = visibleChat(userId, chatId)
       if (!chat || chat.deletedAt) return false
+      // A vault chat's engine title would carry its words onto the host (D23).
+      if (chat.vaultId) return false
       // Only the chat's root names it: an agent @-addressed in a human-routed
       // chat, or a specialist, answers top-level too, but speaks for itself.
       if (routingOf(chat).rootAgentId !== input.agentId) return false
@@ -163,6 +167,9 @@ export const chatTitleService = {
     const chat = visibleChat(userId, chatId)
     if (!chat) {
       throw new ChatTitleError('chat_not_found', 'Chat not found')
+    }
+    if (chat.vaultId) {
+      throw new ChatTitleError('vault_chat', 'A vault chat keeps its own title')
     }
 
     // COUNT-only early-out so the noisy non-first-send case doesn't

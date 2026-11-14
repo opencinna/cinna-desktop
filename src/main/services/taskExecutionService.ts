@@ -20,6 +20,7 @@ import { canTransition } from '../../shared/taskStatus'
 import { readinessBlocksTurn } from '../../shared/agentDrivers'
 import { TaskError } from '../errors'
 import type { DesktopTaskTarget, TaskAssignee, TaskDto, TaskStartResult } from '../../shared/tasks'
+import { isVaultAgent, VaultAgentRefused } from '../vault/isVaultAgent'
 
 const starting = new Set<string>()
 
@@ -182,6 +183,8 @@ export const taskExecutionService = {
       let assignee: TaskAssignee
       let assertAgentCurrent = (): void => {}
       if (target.kind === 'agent') {
+        // An agent in a vault takes no tasks: its chat would be on this computer (D6).
+        if (isVaultAgent(target.agentId)) throw new TaskError('invalid_input', new VaultAgentRefused('A task').message)
         const readAgent = () => {
           const located = agentService.findAgent(scope.settingsUserId, scope.profileUserId, target.agentId)
           const override = agentOverrideRepo.get(scope.profileUserId, target.agentId)

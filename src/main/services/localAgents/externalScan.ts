@@ -17,6 +17,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { basename, join, relative, sep } from 'node:path'
 import { MANIFEST_FILE } from '../../../shared/kit/manifest'
+import { isSecureAgentsName } from '../../../shared/vault/types'
 import {
   BARE_AGENT_INSTRUCTION_FILES,
   BARE_AGENT_MAX_DEPTH,
@@ -204,7 +205,8 @@ function childDirectories(dir: string): string[] {
   }
   const dirs: string[] = []
   for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
+    // `SecureAgents/` is Agent Vault's: never walked, whatever it holds.
+    if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name) || isSecureAgentsName(entry.name)) continue
     const full = join(dir, entry.name)
     // `withFileTypes` reports a symlink as a symlink rather than as what it
     // points at, so stat it — a folder of agents assembled out of links is

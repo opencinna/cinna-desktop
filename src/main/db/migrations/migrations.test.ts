@@ -1108,3 +1108,19 @@ describe('chats.guided_build', () => {
     raw.close()
   })
 })
+
+describe('chats.vault_id', () => {
+  it('exists on a fresh install, and is added as null to an install that predates it', () => {
+    const fresh = freshDatabase()
+    expect((fresh.prepare("SELECT name FROM pragma_table_info('chats')").all() as { name: string }[]).map((c) => c.name)).toContain('vault_id')
+    fresh.close()
+
+    const raw = freshDatabase()
+    raw.exec('ALTER TABLE chats DROP COLUMN vault_id')
+    raw.exec(`INSERT INTO chats (id, user_id, title, router, hidden_from_list, created_at, updated_at) VALUES ('old', 'u', 'Old', 'direct', 0, 1, 1)`)
+    runAllMigrations(adaptDatabase(raw))
+    runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare("SELECT vault_id FROM chats WHERE id = 'old'").get()).toEqual({ vault_id: null })
+    raw.close()
+  })
+})

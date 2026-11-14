@@ -5,6 +5,7 @@ import { profileServerUrl } from './resolvers'
 import type { RunScope } from '../services/runExecutionService'
 import type { ScriptAgentRef, TaskScript } from '../../shared/taskScript'
 import type { ScriptTarget } from '../tasks/scriptRuntimeTypes'
+import { refuseVaultAgent } from '../vault/isVaultAgent'
 
 function identity(ref: ScriptAgentRef): string {
   return JSON.stringify([agentIdentityKey(ref), 'serverUrl' in ref ? normalizeUrl(ref.serverUrl ?? '') : null])
@@ -27,6 +28,7 @@ export function resolveScriptTargets(scope: RunScope, script: TaskScript): Recor
       ? `Script agent ${alias} matches more than one configured agent. Resolve the duplicate before running.`
       : `Script agent ${alias} is not available on this device for this profile.`)
     const { row } = matches[0]
+    refuseVaultAgent(row.id, `Script agent ${alias}`)
     if (!(agentOverrideRepo.get(scope.profileUserId, row.id)?.enabled ?? row.enabled)) throw new Error(`Enable script agent ${alias} before running.`)
     return [alias, { agentId: row.id, name: row.name, identity: wanted }]
   }))

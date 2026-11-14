@@ -92,6 +92,7 @@ import { runExecutionService } from './runExecutionService'
 import { handoverWake, type HandoverGroupWakeInput, type HandoverWakeInput } from './handoverWake'
 import { handoverRevisions, type HandoverRevisionSendInput } from './handoverRevisions'
 import type { RunScope } from './runExecutionService'
+import { isVaultAgent } from '../vault/isVaultAgent'
 
 /**
  * The part of a `RunOutcome` a handover reads. Narrow on purpose: everything
@@ -660,6 +661,8 @@ export function createHandoverService(deps: HandoverDeps) {
   async function intake(scope: RunScope, agent: HandoverAgent, found: FoundHandover, check: HandoverIgnoreCheck): Promise<void> {
     const brief = found.brief
     if (!brief) return
+    // A vault agent takes no handovers (D6); its folder is not on this computer anyway.
+    if (isVaultAgent(agent.id)) return
     const originProfile = deps.originProfile?.(brief)
     // A folder is visible to every profile. Only its validated origin may pay/run.
     if (originProfile && originProfile !== scope.profileUserId) return
@@ -1900,7 +1903,7 @@ function productionDeps(): HandoverDeps {
     agents: (settingsUserId) =>
       localAgentService
         .list(settingsUserId)
-        .agents.filter((agent) => agent.kind === 'bare' && agent.enabled && agent.path)
+        .agents.filter((agent) => agent.kind === 'bare' && agent.enabled && agent.path && !isVaultAgent(agent.id))
         .map((agent) => ({
           id: agent.id,
           path: agent.path,

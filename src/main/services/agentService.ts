@@ -26,6 +26,7 @@ import { AgentError, CinnaApiError } from '../errors'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { cinnaFetch } from './cinna-http'
+import { isVaultAgent } from '../vault/isVaultAgent'
 import { createLogger } from '../logger/logger'
 import type { AgentCard } from '../agents/a2a-client'
 import type {
@@ -227,7 +228,8 @@ export const agentService = {
     // are properties of this machine, not of the signed-in account.
     const local = agentRepo
       .list(defaultUserId)
-      .filter((a) => (a.source === 'local' || a.source === 'folder') &&
+      // An Agent Vault agent is a folder agent moved into a vault: same scope, same chats.
+      .filter((a) => (a.source === 'local' || a.source === 'folder' || a.source === 'vault') &&
         (!a.driverConfig?.developmentProfileId || a.driverConfig.developmentProfileId === profileUserId))
     if (profileUserId !== defaultUserId) local.push(...agentRepo.list(profileUserId).filter((a) => typeof a.driverConfig?.conductorChatId === 'string'))
     const remoteRows =
@@ -526,6 +528,8 @@ export const agentService = {
    * backing a popup, not a page that should show a fault for it.
    */
   listFolderCliCommands(userId: string, agentId: string): CliCommand[] {
+    // An Agent Vault agent's catalog is inside its vault, and Run commands are off for it (D6).
+    if (isVaultAgent(agentId)) return []
     try {
       const { root, agentDir } = localAgentService.locate(userId, agentId)
       const layout = getLayoutView(root.path)

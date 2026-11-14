@@ -71,7 +71,10 @@ const recordChatResult = vi.fn()
 vi.mock('../db/chatRunResults', () => ({ chatRunResultRepo: { record: (...args: unknown[]) => recordChatResult(...args) } }))
 /** Which user id owns `chatRow`; null = whoever asks (most tests do not care). */
 let chatOwner: string | null = null
+/** `chats.vault_id` of the chat under test (an Agent Vault chat), null for an ordinary one. */
+let chatVault: string | null = null
 vi.mock('../db/chats', () => ({
+  chatVaultId: () => chatVault,
   chatRepo: { listMessageIds: vi.fn(() => []), getOwned: vi.fn((userId: string) => chatOwner === null || userId === chatOwner ? chatRow : undefined), listMessages }
 }))
 let sharedChats = true
@@ -120,7 +123,8 @@ vi.mock('../db/chatAgentCursors', () => ({
 function agentRow(id: string, name: string): AgentRow {
   return { id, name, source: 'remote', driver: 'a2a', cardUrl: 'https://x.test/c' } as AgentRow
 }
-const AGENTS = [agentRow('a-1', 'Research'), agentRow('a-2', 'Builder'), { ...agentRow('a-runtime', 'Chat runtime'), driver: 'acp' as const }]
+const AGENTS = [agentRow('a-1', 'Research'), agentRow('a-2', 'Builder'), { ...agentRow('a-runtime', 'Chat runtime'), driver: 'acp' as const },
+  { ...agentRow('a-vault', 'Ledger'), source: 'vault', driver: 'acp' as const, driverConfig: { vault: { vaultId: 'v-1', engine: 'claude' } } } as AgentRow]
 const bindRuntime = vi.fn((_userId: string, chat: Record<string, unknown>) => { chatRow = { ...chat, agentId: 'a-runtime' }; return chatRow })
 const syncToolPolicy = vi.fn((_userId: string, _chat: Record<string, unknown>) => false)
 vi.mock('../services/chatConductorService', () => ({ chatConductorService: { bind: (...args: Parameters<typeof bindRuntime>) => bindRuntime(...args), syncToolPolicy: (...args: Parameters<typeof syncToolPolicy>) => syncToolPolicy(...args) } }))
@@ -282,8 +286,32 @@ beforeEach(() => {
   attached = []
   chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-1' }
   chatOwner = null
+  chatVault = null
   sharedChats = true
   registerRunHandlers()
+})
+
+describe('run:send — an agent in a vault', () => {
+  it('refuses a chat that started before the agent moved into its vault, before saving, titling or streaming anything', async () => {
+    chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-vault' }
+    const port = await send({ chatId: 'chat-1', content: 'the payroll numbers' })
+    const reason = 'This chat started before Ledger moved into its vault. Start a new chat to talk to it.'
+    expect(port.postMessage).toHaveBeenCalledWith({ type: 'error', error: reason })
+    // prepareAgentSend is what saves the user row and fires the title.
+    expect(prepareAgentSend).not.toHaveBeenCalled()
+    expect(saveUser).not.toHaveBeenCalled()
+    expect(saveError).not.toHaveBeenCalled()
+    expect(streamToAgent).not.toHaveBeenCalled()
+    expect(reportRunCompletion).toHaveBeenCalledWith('chat-1', 'failed', reason)
+  })
+
+  it('lets the same agent answer in a chat of its own vault', async () => {
+    chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-vault' }
+    chatVault = 'v-1'
+    await send({ chatId: 'chat-1', content: 'hello' })
+    expect(prepareAgentSend).toHaveBeenCalled()
+    expect(routedTo()).toBe('a-vault')
+  })
 })
 
 describe('run:send — who answers', () => {

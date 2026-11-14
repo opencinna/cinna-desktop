@@ -54,7 +54,7 @@ export function generatedPath(agentDir: string, kind: LocalAgentKind): string {
 /** Where a generation's files live: the kit's own `credentials/`, or Desktop storage for a bare folder. */
 function generatedDir(agentDir: string, kind: LocalAgentKind, store: string): string { return kind === 'kit' ? join(agentDir, 'credentials') : store }
 /** The exact files a generation consists of, by name. Pure: no filesystem access. */
-function renderFiles(directory: string, kind: LocalAgentKind, bundles: ServiceCredentialBundle[], synthetic: ServiceCredentialEntry[]): Map<string, string> {
+export function renderFiles(directory: string, kind: LocalAgentKind, bundles: ServiceCredentialBundle[], synthetic: ServiceCredentialEntry[]): Map<string, string> {
   const files = new Map<string, string>()
   const entries: ServiceCredentialEntry[] = []
   for (const bundle of bundles) {

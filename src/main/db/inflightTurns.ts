@@ -3,6 +3,8 @@ import { nanoid } from 'nanoid'
 import { getDb } from './client'
 import { inflightTurns, messages } from './schema'
 import { messageRepo } from './messages'
+import { vaultTurnRoute, vaultWriteRoute } from './chats'
+import { vaultTranscripts, type ChatTranscript } from '../vault/transcriptStore'
 import type { MessagePart } from '../../shared/messageParts'
 
 export type InflightTurnRow = typeof inflightTurns.$inferSelect
@@ -80,7 +82,9 @@ type UserRow = { sortOrder: number }
 
 /** The turn's user row, or null when it is no longer a user row of the chat. */
 function userRowOf(input: Pick<TurnRowsOf, 'chatId' | 'userMessageId'>): UserRow | null {
-  const user = messageRepo.getById(input.userMessageId)
+  // The turn's own read: a transcript a lock detached still answers it.
+  const vault = vaultTranscripts.byMessageId(input.userMessageId)
+  const user = vault ? vault.get(input.userMessageId) : messageRepo.getById(input.userMessageId)
   return user && user.chatId === input.chatId && user.role === 'user' ? user : null
 }
 
@@ -90,7 +94,10 @@ function userRowOf(input: Pick<TurnRowsOf, 'chatId' | 'userMessageId'>): UserRow
  * notice rows. `nextUser` is the sort order of that next user row, if any.
  */
 function rowsUnder(input: TurnRowsOf, user: UserRow): { rows: { id: string; ours: boolean; sortOrder: number }[]; nextUser: number | null } {
-  const after = getDb().select({ id: messages.id, role: messages.role, sourceAgentId: messages.sourceAgentId, sortOrder: messages.sortOrder })
+  const vault = vaultTurnRoute(input.chatId)
+  const after = vault
+    ? (vault === 'locked' ? [] : vault.list().filter((row) => row.sortOrder > user.sortOrder))
+    : getDb().select({ id: messages.id, role: messages.role, sourceAgentId: messages.sourceAgentId, sortOrder: messages.sortOrder })
     .from(messages)
     .where(and(eq(messages.chatId, input.chatId), gt(messages.sortOrder, user.sortOrder)))
     .orderBy(asc(messages.sortOrder))
@@ -116,6 +123,11 @@ function errorContent(row: { short: string; detail?: string | null; code?: strin
 
 /** Make room for `count` rows at `at`: every row of the chat from there moves down. */
 function shiftFrom(chatId: string, at: number, count: number): void {
+  const vault = vaultWriteRoute(chatId)
+  if (vault) {
+    vault.shiftFrom(at, count)
+    return
+  }
   getDb().update(messages)
     .set({ sortOrder: sql`${messages.sortOrder} + ${count}` })
     .where(and(eq(messages.chatId, chatId), gte(messages.sortOrder, at)))
@@ -134,30 +146,58 @@ export class TurnUserRowGone extends Error {
  * Durable record of the direct-chat turns that are running right now, and of
  * the one assistant row ("draft") each keeps up to date while it runs.
  */
+/** A vault chat's error row, inserted at `sortOrder` (rows there were shifted first). */
+function vaultErrorRow(vault: ChatTranscript, sortOrder: number, content: string, createdAt: Date) {
+  vault.insert({
+    id: nanoid(), chatId: vault.chatId, role: 'error', content, sortOrder, createdAt,
+    toolCallId: null, toolName: null, toolInput: null, toolCalls: null, toolError: null, toolProvider: null,
+    toolAgentId: null, parts: null, attachments: null, addressedAgentId: null, sourceAgentId: null, telemetry: null
+  })
+}
+
 export const inflightTurnRepo = {
   open(input: OpenInflightTurn): void {
+    // A vault chat's marker is memory-only: no recovery for vault turns (D30).
+    const vault = vaultWriteRoute(input.chatId)
+    if (vault) {
+      vault.markers.set(input.id, { ...input, draftMessageId: null, startedAt: new Date() })
+      return
+    }
     getDb().insert(inflightTurns).values({ ...input, draftMessageId: null, startedAt: new Date() }).run()
   },
 
   get(id: string): InflightTurnRow | null {
+    const vault = vaultTranscripts.byMarkerId(id)
+    if (vault) return { ...vault.markers.get(id)! }
     return getDb().select().from(inflightTurns).where(eq(inflightTurns.id, id)).get() ?? null
   },
 
-  /** Every marker, oldest first — across profiles, for the boot pass. */
+  /** Every marker, oldest first — across profiles, for the boot pass. Never a vault chat's (memory-only, no recovery). */
   list(): InflightTurnRow[] {
     return getDb().select().from(inflightTurns).orderBy(inflightTurns.startedAt).all()
   },
 
   listChatIds(): Set<string> {
-    return new Set(getDb().select({ chatId: inflightTurns.chatId }).from(inflightTurns).all().map((row) => row.chatId))
+    const ids = new Set(getDb().select({ chatId: inflightTurns.chatId }).from(inflightTurns).all().map((row) => row.chatId))
+    for (const chatId of vaultTranscripts.markerChatIds()) ids.add(chatId)
+    return ids
   },
 
   setDraft(id: string, draftMessageId: string | null): void {
+    const vault = vaultTranscripts.byMarkerId(id)
+    if (vault) {
+      vault.markers.get(id)!.draftMessageId = draftMessageId
+      return
+    }
     getDb().update(inflightTurns).set({ draftMessageId }).where(eq(inflightTurns.id, id)).run()
   },
 
   delete(id: string): void {
-    getDb().delete(inflightTurns).where(eq(inflightTurns.id, id)).run()
+    const vault = vaultTranscripts.byMarkerId(id)
+    if (vault) {
+      vault.markers.delete(id)
+      vaultTranscripts.markerDeleted(vault)
+    } else getDb().delete(inflightTurns).where(eq(inflightTurns.id, id)).run()
     liveMarkerIds.delete(id)
   },
 
@@ -199,6 +239,8 @@ export const inflightTurnRepo = {
   hasLaterUserRow(input: Pick<TurnRowsOf, 'chatId' | 'userMessageId'>): boolean {
     const user = userRowOf(input)
     if (!user) return false
+    const vault = vaultTurnRoute(input.chatId)
+    if (vault) return vault !== 'locked' && vault.list().some((row) => row.sortOrder > user.sortOrder && row.role === 'user')
     return !!getDb().select({ id: messages.id }).from(messages)
       .where(and(eq(messages.chatId, input.chatId), gt(messages.sortOrder, user.sortOrder), eq(messages.role, 'user')))
       .get()
@@ -227,6 +269,11 @@ export const inflightTurnRepo = {
     if (nextUser === null) return false
     const at = (rows.filter((row) => row.ours).at(-1)?.sortOrder ?? user.sortOrder) + 1
     shiftFrom(input.chatId, at, 1)
+    const vault = vaultWriteRoute(input.chatId)
+    if (vault) {
+      vaultErrorRow(vault, at, errorContent({ ...notice, detail: null }), new Date())
+      return true
+    }
     getDb().insert(messages).values({
       id: nanoid(), chatId: input.chatId, sortOrder: at, createdAt: new Date(),
       role: 'error', content: errorContent({ ...notice, detail: null })
@@ -244,6 +291,8 @@ export const inflightTurnRepo = {
    * the user row is not in the chat.
    */
   replaceTurnRows(input: ReplaceTurnRows): string[] {
+    const vault = vaultWriteRoute(input.chatId)
+    if (vault) return replaceVaultTurnRows(vault, input)
     const db = getDb()
     return db.transaction(() => {
       const user = userRowOf(input)
@@ -281,6 +330,23 @@ export const inflightTurnRepo = {
    * on the marker) or rewrite it in place. One transaction.
    */
   writeDraft(input: WriteDraft): string {
+    const vault = vaultWriteRoute(input.chatId)
+    if (vault) {
+      // The draft of a vault turn is memory-only: never journaled, gone with a crash or a lock.
+      if (input.draftId && vault.has(input.draftId)) {
+        vault.update(input.draftId, { content: input.content, parts: input.parts }, (row) => row.role === 'assistant')
+        return input.draftId
+      }
+      const id = nanoid()
+      vault.insert({
+        id, chatId: input.chatId, role: 'assistant', content: input.content, parts: input.parts, sourceAgentId: input.agentId,
+        sortOrder: vault.nextSortOrder(), createdAt: new Date(),
+        toolCallId: null, toolName: null, toolInput: null, toolCalls: null, toolError: null, toolProvider: null,
+        toolAgentId: null, attachments: null, addressedAgentId: null, telemetry: null
+      }, { ephemeral: true })
+      if (input.markerId) inflightTurnRepo.setDraft(input.markerId, id)
+      return id
+    }
     return getDb().transaction(() => {
       if (input.draftId) {
         messageRepo.updateAssistantParts(input.draftId, input.content, input.parts)
@@ -306,4 +372,35 @@ export const inflightTurnRepo = {
       write()
     })
   }
+}
+
+/** {@link inflightTurnRepo.replaceTurnRows} for a vault chat, on its in-memory transcript. */
+function replaceVaultTurnRows(vault: ChatTranscript, input: ReplaceTurnRows): string[] {
+  const user = userRowOf(input)
+  if (!user) throw new TurnUserRowGone()
+  for (const row of rowsUnder(input, user).rows) if (row.ours) vault.delete(row.id)
+  const count = input.rows.length
+  if (!count) return []
+  vault.shiftFrom(user.sortOrder + 1, count)
+  const now = new Date()
+  return input.rows.map((row, index) => {
+    const sortOrder = user.sortOrder + 1 + index
+    if (row.role === 'error') {
+      const id = nanoid()
+      vault.insert({
+        id, chatId: input.chatId, role: 'error', content: errorContent(row), sortOrder, createdAt: now,
+        toolCallId: null, toolName: null, toolInput: null, toolCalls: null, toolError: null, toolProvider: null,
+        toolAgentId: null, parts: null, attachments: null, addressedAgentId: null, sourceAgentId: null, telemetry: null
+      })
+      return id
+    }
+    const id = nanoid()
+    vault.insert({
+      id, chatId: input.chatId, role: row.role, content: row.content, parts: row.role === 'assistant' ? row.parts : null,
+      sourceAgentId: input.agentId, sortOrder, createdAt: now,
+      toolCallId: null, toolName: null, toolInput: null, toolCalls: null, toolError: null, toolProvider: null,
+      toolAgentId: null, attachments: null, addressedAgentId: null, telemetry: null
+    })
+    return id
+  })
 }

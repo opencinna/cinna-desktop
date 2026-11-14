@@ -6,6 +6,7 @@ import type { MessageRow } from './messages'
 import type { ChatRouter } from '../../shared/chatRouting'
 import type { ChatOrigin } from '../../shared/chatOrigin'
 import { CONTAINS_FOLDED } from './searchFunctions'
+import { vaultTranscripts, type ChatTranscript } from '../vault/transcriptStore'
 
 export type ChatRow = typeof chats.$inferSelect
 export type { MessageRow }
@@ -56,6 +57,55 @@ export interface ChatMessageStats {
   messageCount: number
 }
 
+/**
+ * `chats.vault_id` per chat id, remembered: it is written once (when the chat
+ * is bound to a vault agent, through {@link chatRepo.bindVault}) and never
+ * changes, and every message read and write asks it.
+ */
+const vaultIds = new Map<string, string | null>()
+
+/** The vault a chat's transcript lives in, or null for an ordinary chat (and for no chat at all). */
+export function chatVaultId(chatId: string): string | null {
+  const known = vaultIds.get(chatId)
+  if (known !== undefined) return known
+  const row = getDb().select({ vaultId: chats.vaultId }).from(chats).where(eq(chats.id, chatId)).get()
+  // An unknown id is not remembered: the chat may be created after this read.
+  if (!row) return null
+  vaultIds.set(chatId, row.vaultId ?? null)
+  return row.vaultId ?? null
+}
+
+/**
+ * The in-memory transcript of a vault chat for a **read**: null for an
+ * ordinary chat, and an empty transcript's worth (`'locked'`) while its vault
+ * is locked — also when a turn that outlived the lock still holds the chat
+ * (detached): those rows are only for that turn's own writes. SQLite is never
+ * read for a vault chat.
+ */
+export function vaultReadRoute(chatId: string): ChatTranscript | 'locked' | null {
+  const vaultId = chatVaultId(chatId)
+  if (!vaultId) return null
+  return vaultTranscripts.readable(chatId, vaultId) ?? 'locked'
+}
+
+/**
+ * {@link vaultReadRoute} for the reads of the turn that is writing the chat
+ * (where its rows go, which row ends it, the catch-up cursor's id): they see
+ * a transcript a lock detached, so the turn can finish. Never for anything
+ * that answers the renderer.
+ */
+export function vaultTurnRoute(chatId: string): ChatTranscript | 'locked' | null {
+  const vaultId = chatVaultId(chatId)
+  if (!vaultId) return null
+  return vaultTranscripts.chat(chatId, vaultId) ?? 'locked'
+}
+
+/** The same for a **write**: throws `VaultTranscriptLocked` rather than fall through to SQLite. */
+export function vaultWriteRoute(chatId: string): ChatTranscript | null {
+  const vaultId = chatVaultId(chatId)
+  return vaultId ? vaultTranscripts.requireChat(chatId, vaultId) : null
+}
+
 export const chatRepo = {
   getOwned(userId: string, chatId: string): ChatRow | undefined {
     return getDb()
@@ -81,6 +131,9 @@ export const chatRepo = {
 
   /** Whether anything has been said or attached in the chat yet. */
   hasContent(chatId: string): boolean {
+    const vault = vaultReadRoute(chatId)
+    // A locked vault chat may well have content; it is just not readable now.
+    if (vault) return vault === 'locked' || vault.list().length > 0
     const db = getDb()
     return !!db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).limit(1).get() ||
       !!db.select({ id: chatFiles.id }).from(chatFiles).where(eq(chatFiles.chatId, chatId)).limit(1).get()
@@ -88,10 +141,14 @@ export const chatRepo = {
 
   /** Load the full message history for an owned chat (caller must pre-verify ownership). */
   listMessageIds(chatId: string): string[] {
+    const vault = vaultReadRoute(chatId)
+    if (vault) return vault === 'locked' ? [] : vault.list().map((row) => row.id)
     return getDb().select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).all().map((row) => row.id)
   },
 
   listMessages(chatId: string): MessageRow[] {
+    const vault = vaultReadRoute(chatId)
+    if (vault) return vault === 'locked' ? [] : vault.list()
     return getDb()
       .select()
       .from(messages)
@@ -276,6 +333,8 @@ export const chatRepo = {
       // Never at insert: main decides it when the chat is bound (`chatService.update`).
       guidedBuild: false,
       originDashboardId: init?.originDashboardId ?? null,
+      // Never at insert: main binds a chat to a vault (`bindVault`).
+      vaultId: null,
       initialTitle: init?.initialTitle ?? null,
       pinnedRank: null,
       sortKey: null,
@@ -338,6 +397,30 @@ export const chatRepo = {
       .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
       .run()
     return result.changes > 0
+  },
+
+  /**
+   * Make a chat a vault chat: its transcript goes to vault `vaultId` from now
+   * on, and its title is the stub `title` ("<agent> · <date>"). Written once,
+   * by the vault service, and only for a chat with no vault yet and nothing in
+   * `messages`, so no row is left behind on the host. Leaves `updatedAt`.
+   */
+  bindVault(userId: string, chatId: string, vaultId: string, title: string): boolean {
+    const db = getDb()
+    const bound = db.transaction((tx) => {
+      const row = tx.select({ vaultId: chats.vaultId }).from(chats).where(and(eq(chats.id, chatId), eq(chats.userId, userId))).get()
+      if (!row || row.vaultId) return false
+      if (tx.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).limit(1).get()) return false
+      return tx.update(chats).set({ vaultId, title, initialTitle: null })
+        .where(and(eq(chats.id, chatId), eq(chats.userId, userId))).run().changes > 0
+    })
+    if (bound) vaultIds.set(chatId, vaultId)
+    return bound
+  },
+
+  /** Every chat of a vault, across profiles: what an unlock rebuilds. */
+  listVaultChatIds(vaultId: string): string[] {
+    return getDb().select({ id: chats.id }).from(chats).where(eq(chats.vaultId, vaultId)).all().map((row) => row.id)
   },
 
   /** Mark a chat as a guided first build. Written once, by `chatService.update`; leaves `updatedAt`. */

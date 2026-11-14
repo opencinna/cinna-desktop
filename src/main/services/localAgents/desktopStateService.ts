@@ -216,6 +216,11 @@ const EMPTY_STATE: DesktopState = {
   handovers: null
 }
 
+/** A fresh empty state: what an agent with no state file (a vault agent, whose state is in the vault) shows. */
+export function emptyDesktopState(): DesktopState {
+  return { ...EMPTY_STATE, sessions: {}, permissionGrants: {} }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }

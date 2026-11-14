@@ -9,6 +9,8 @@ import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopment
 import { installRuntimeHost } from './host/runtimeHost'
 import { installEventPublisher } from './host/events'
 import { createDesktopHost, desktopEventPublisher } from './host/desktop/runtimeHost'
+import { installDesktopVaultBackend } from './host/desktop/vault/installVaultBackend'
+import { vaultService } from './vault/vaultService'
 import { installExtraCaCertificates } from './host/desktop/extraCaCertificates'
 import { recoverExtraCaCertsEnv } from './host/desktop/extraCaRecovery'
 import { taskRuntimeService } from './services/taskRuntimeService'
@@ -490,6 +492,8 @@ function startup(): void {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // The vault backend core will use: VZ helper, the E2E fake, or none (with why).
+  installDesktopVaultBackend()
   initializeHubCore()
   // OS notifications for a turn of the user's that stops while Cinna is in the
   // background: a desktop listener on core's turn notices.
@@ -578,11 +582,26 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('will-quit', () => {
+let quitHeldForVaults = false
+app.on('will-quit', (event) => {
+  // The second pass, after the vault journals drained: let the quit through.
+  if (quitHeldForVaults) return
   localScheduleScheduler.stop()
   // shutdownHubCore persists partial turns and signals children synchronously;
   // Electron does not await the subsequent process-exit promises.
   void shutdownHubCore()
+  // Except one: a vault chat's saved rows are still in its journal queue, and
+  // they exist nowhere else. Hold the quit (≤3 s inside the vault service)
+  // while they are delivered; only when there is something to deliver.
+  const drain = vaultService.pendingQuitDrain()
+  if (!drain) return
+  quitHeldForVaults = true
+  event.preventDefault()
+  const fallback = setTimeout(() => app.exit(0), 5_000)
+  void drain.catch(() => {}).finally(() => {
+    clearTimeout(fallback)
+    app.exit(0)
+  })
 })
 
 export function getMainWindow(): BrowserWindow | null {

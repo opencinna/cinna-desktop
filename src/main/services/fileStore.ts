@@ -3,6 +3,8 @@ import { join, basename, extname } from 'path'
 import { mkdir, readFile, stat, writeFile, unlink } from 'fs/promises'
 import { nanoid } from 'nanoid'
 import { chatFileRepo } from '../db/chatFiles'
+import { chatVaultId } from '../db/chats'
+import { vaultChatFilesDir } from '../vault/vaultChatFiles'
 import { visibleChatFile } from '../auth/chatScope'
 import { createLogger } from '../logger/logger'
 import { DomainError } from '../errors'
@@ -121,6 +123,8 @@ class LocalFileStore implements FileStore {
   }
 
   private resolveChatDir(userId: string, chatId: string): string {
+    // A vault chat's copies live apart, in a directory swept wholesale (D23).
+    if (chatVaultId(chatId)) return vaultChatFilesDir(userId, chatId)
     return join(this.rootDir(), userId, chatId)
   }
 

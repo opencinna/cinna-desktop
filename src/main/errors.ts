@@ -209,6 +209,8 @@ export type FileErrorCode =
   | 'not_allowed'
   /** A folder, or a path that no longer resolves to a file. */
   | 'not_a_file'
+  /** A file a vault chat cannot take (only inline text and images go into a vault). */
+  | 'vault_chat'
 
 export type AppSettingsErrorCode = 'invalid_key' | 'invalid_value'
 
@@ -305,6 +307,12 @@ export type LocalAgentErrorCode =
    * removed.
    */
   | 'adoption_in_progress'
+  /**
+   * The agent is in an Agent Vault: it has no folder on this computer, and
+   * nothing that needs one (the page's files, Open in, credentials files,
+   * commands, schedules) can reach it. See `vault/isVaultAgent.ts`.
+   */
+  | 'vault_agent'
 
 /**
  * The local developer tooling around an agent folder: detecting installed

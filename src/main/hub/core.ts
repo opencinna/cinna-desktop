@@ -49,6 +49,7 @@ import { installScaffoldPrewarm } from '../services/localAgents/scaffoldService'
 import { prewarm, prewarmState, uvPrewarm } from '../services/localAgents/uvPrewarm'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { agentRepo } from '../db/agents'
+import { vaultService } from '../vault/vaultService'
 
 /**
  * Whether this computer has local agents to pre-warm uv and Python for: an
@@ -63,6 +64,9 @@ function hasLocalAgents(userId: string): boolean {
 export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>[0]): void {
   setLogValueRedactor(redactCredentialValues)
   initDatabase(openDatabase)
+  // Which agents are in a vault, before any channel can ask; and the vault
+  // backend's state events (the backend itself is the composition root's).
+  vaultService.init()
   initSession()
   // Notes and Dashboards nobody has turned on or off yet: decided once, from
   // whether any profile holds a note or a dashboard, before the first window
@@ -207,5 +211,10 @@ export async function shutdownHubCore(reason = 'Execution stopped when the app c
   // A `uv python install` the pre-warm started dies with the app.
   uvPrewarm.shutdown()
   watcherService.stopAll()
-  await Promise.all([processes, userCommands, conductor, dashboards, credentialTokens, logins, bootstraps, mcpManager.disconnectAll()])
+  // After `saveInFlight` above: each unlocked vault's queued journal writes
+  // (those turns' rows, which exist nowhere else) are delivered first, for at
+  // most 3 s, then the helper (or the fake's vaultd processes) stops every
+  // vault. The desktop entry holds the quit while that drain runs.
+  const vaults = vaultService.shutdown()
+  await Promise.all([vaults, processes, userCommands, conductor, dashboards, credentialTokens, logins, bootstraps, mcpManager.disconnectAll()])
 }

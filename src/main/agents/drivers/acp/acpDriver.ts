@@ -98,10 +98,12 @@ import {
 } from './acpTelemetry'
 import { CONTEXT_CATEGORIES_KNOWN, type ContextMeasurement, type SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
+import type { VaultEngine } from '../../../../shared/vault/protocol'
 import { antigravityAutoApproves } from './antigravityAutoApproval'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { permissionAsQuestion, permissionQuestionAnswer, toElicitationContent, toInputQuestions, type AcpPermissionQuestion } from './acpQuestions'
 import type { AcpConnection, AcpLauncherId, AcpProcessPool, AcpSessionHandlers } from './types'
+import { withoutStderrTail } from './vaultAcpConnection'
 import { backgroundTaskIds, createSessionActivityRegistry, spawnedSubagent, subagentTaskId, SubagentFrames, type SessionActivityRegistry } from './acpActivity'
 import type { SessionActivityReporter } from '../../../../shared/sessionActivity'
 import { childUpdateOf, opencodeChildrenFor, trackedOpencodeChildren } from './opencodeChildren'
@@ -160,6 +162,12 @@ export const ACP_CANCEL_GRACE_MS = 3_000
 /** Shown when a folder agent's folder is gone — the runners' own sentence. */
 export const ACP_FOLDER_NOT_FOUND = 'This agent’s folder could not be found on disk.'
 
+/** Shown for a vault agent on a build with no vault launcher wired. */
+export const ACP_VAULT_UNSUPPORTED = 'This agent is in a vault, which this build cannot run.'
+
+/** Shown when a vault agent's turn finds its vault locked. */
+export const ACP_VAULT_LOCKED = 'This agent is in a vault that is locked. Unlock it to send a message.'
+
 /** Shown when the folder moved while a turn planned in it waited for the lock. */
 export const ACP_FOLDER_MOVED = 'This agent’s folder was renamed while the turn was starting. Send the message again.'
 
@@ -174,6 +182,22 @@ export interface AcpDriverDeps {
    */
   pluginCommands?(userId: string, agent: AgentRow): { agentKey: string; commands: readonly PluginCommandTemplate[] } | null
   prepareCredentials?(agent: AgentRow, plan: AcpLaunchPlan): Promise<AcpLaunchPlan>
+  /**
+   * Agent Vault: what an agent whose folder view names a vault
+   * (`AcpFolderView.vault`) runs on instead of the host launchers. Absent:
+   * such an agent is refused.
+   */
+  vault?: {
+    /** The launcher for an engine inside a vault, or null when that engine cannot run in one yet. */
+    launcher(engine: VaultEngine): AcpLauncher | null
+    /** The vault agent's readiness (locked, runtime missing, signed out). Must not throw. */
+    readiness(userId: string, agent: AgentRow): Promise<AgentReadiness>
+    /**
+     * Keep the vault unlocked for the turn (D13): resolves with the release,
+     * which the driver calls when the turn ends. Rejects when the vault is locked.
+     */
+    hold(userId: string, agent: AgentRow): Promise<() => Promise<void>>
+  }
   prepareConductor?(userId: string, agent: AgentRow, input: RunInput, plan: AcpLaunchPlan, stop: (outcome: ConductorOutcome) => void, wake: () => boolean): Promise<import('../../../services/conductorBridge').ConductorLease | undefined>
   /** A between-turn follow-up was dropped: conductor tool calls waiting for it must fail, not hang. */
   conductorAbandoned?(chatId: string, agentId: string, reason: string): void
@@ -688,6 +712,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         const runtime = await deps.readRuntime(userId, agent, options)
         if (runtime?.type === 'external') { runtime.validate(); return await runtime.readiness(options) }
         const folder = runtime?.folder ?? null
+        if (folder?.vault) {
+          return deps.vault ? await deps.vault.readiness(userId, agent) : { state: 'invalid', reason: ACP_VAULT_UNSUPPORTED }
+        }
         const state = folderReadiness(folder)
         // Missing credentials only warn (`readinessBlocksTurn`), so the engine
         // is still asked: a logout it would refuse must not hide behind them.
@@ -737,7 +764,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         runtime.type === 'folder'
           ? launcherOfFolder(runtime.folder.runtime, deps.defaultEngine?.())
           : 'custom'
-      const launcher = deps.launcher(launcherId)
+      const vault = folder?.vault
+      const launcher = vault ? deps.vault?.launcher(vault.engine) ?? undefined : deps.launcher(launcherId)
+      if (vault && !launcher) return fail(deps.vault ? `Agents in a vault cannot run on ${vault.engine} yet.` : ACP_VAULT_UNSUPPORTED)
       if (!launcher) {
         logger.warn('an agent names an engine this build cannot run', {
           agentId: agent.id,
@@ -802,7 +831,23 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
           }
           const prepared = deps.prepareCredentials ? await deps.prepareCredentials(agent, plan) : plan
           if (input.signal.aborted) return canceled()
-          return runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? withCredentialPrompt(input, prepared.credentialPrompt) : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null, ...(!input.nested ? { measurable } : {}) })
+          // A vault agent's turn keeps its vault unlocked until it ends (D13).
+          // Only the turn: work the agent goes on with between turns does not
+          // hold it, so the window closes a minute after the turn as promised.
+          let release: (() => Promise<void>) | null = null
+          if (vault) {
+            try {
+              release = await deps.vault!.hold(userId, agent)
+            } catch (error) {
+              logger.info('a vault turn could not hold its vault', { agentId: agent.id, error: error instanceof Error ? error.message : String(error) })
+              return fail(ACP_VAULT_LOCKED)
+            }
+          }
+          try {
+            return await runTurn(deps, { userId, agent, runtime, launcherId, plan: prepared, input: prepared.credentialPrompt ? withCredentialPrompt(input, prepared.credentialPrompt) : input, parkedRuntimes, observers, activity: sessionActivity, titles, steers: [], savedSession: null, ...(!input.nested ? { measurable } : {}) })
+          } finally {
+            await release?.()
+          }
         }, input.queueWhenBusy ? input.signal : undefined, input.signal)
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -1072,6 +1117,14 @@ function denialSubject(params: RequestPermissionRequest, toolName: string | unde
   return text.length > 200 ? `${text.slice(0, 199)}…` : text
 }
 
+/**
+ * An Agent Vault session: nothing it says or does may reach this computer's
+ * log (D23), so a tool call is logged by name only.
+ */
+function vaultSession(runtime: AcpRuntimeView): boolean {
+  return runtime.type === 'folder' && !!runtime.folder.vault
+}
+
 async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentTurnResult> {
   const { agent, runtime, plan, input } = ctx
   const sessionCwd = plan.sessionCwd ?? (runtime.type === 'folder' ? runtime.folder.path : runtime.config.cwd)
@@ -1081,7 +1134,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   const stream = new AcpMessageStream({ launcher: ctx.launcherId })
   const accumulator = new StreamPartsAccumulator({
     onToolCall: ({ name, input: toolInput }) =>
-      logger.info(`tool call → ${name}`, { input: toolInput })
+      logger.info(`tool call → ${name}`, vaultSession(runtime) ? {} : { input: toolInput })
   })
   // What the turn has streamed so far, for a caller that has to persist it
   // before the turn ends — the app quitting mid-turn. Copies, read on demand.
@@ -1593,8 +1646,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       try { runtime.validate(chatId) } catch (error) { deps.pool.retire(agent.id); throw error }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      logger.warn('an ACP agent’s process would not start', { agentId: agent.id, error: message })
-      return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(plan.spec.remote ? `Could not connect to the remote ACP agent: ${message}` : startFailureMessage(ctx.launcherId, message), message)
+      // A vault engine's stderr is the vault's: it goes only into the error
+      // row's details (`raw`), which a vault chat journals into the vault —
+      // never into this computer's log, the sentence or the job run (D23).
+      const said = plan.spec.vault ? withoutStderrTail(message) : message
+      logger.warn('an ACP agent’s process would not start', { agentId: agent.id, error: said })
+      return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(plan.spec.remote ? `Could not connect to the remote ACP agent: ${said}` : startFailureMessage(ctx.launcherId, said), message)
     }
 
     const live = connection
@@ -2399,7 +2456,7 @@ async function runFollowUp(deps: AcpDriverDeps, world: FollowUpWorld, io: TurnIO
   const stream = new AcpMessageStream({ launcher: world.launcherId })
   const accumulator = new StreamPartsAccumulator({
     onToolCall: ({ name, input: toolInput }) =>
-      logger.info(`tool call → ${name}`, { input: toolInput })
+      logger.info(`tool call → ${name}`, vaultSession(world.runtime) ? {} : { input: toolInput })
   })
   io.registerSnapshot?.(() => ({
     parts: accumulator.snapshotParts({ streaming: true }),

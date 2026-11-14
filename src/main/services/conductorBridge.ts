@@ -20,6 +20,7 @@ import { installChatSessionForgetter } from './chatSessionRelease'
 import type { RunInput } from '../agents/drivers/driver'
 import type { AcpLaunchPlan } from '../agents/drivers/acp/acpLaunchers'
 import type { RunEvent } from '../../shared/runEvents'
+import { isVaultAgent } from '../vault/isVaultAgent'
 
 interface Binding {
   input: RunInput; pending: number; calls: number; needsInput?: boolean; handovers?: ToolProvider
@@ -144,6 +145,8 @@ export interface ConductorLease {
 }
 
 async function providers(entry: Entry): Promise<ToolProvider[]> {
+  // A vault agent is offered nothing from the host: no `cinna` tools, no MCP, no agents (D6).
+  if (isVaultAgent(entry.agent.id)) return []
   const chat = visibleChat(entry.scope.profileUserId, entry.chatId)
   if (!chat || chat.deletedAt) return []
   if (isChatConductor(entry.agent) && conductorContext(entry.agent).toolPolicy === 'none') return []
@@ -195,7 +198,8 @@ async function openBetweenTurns(entry: Entry, signal: AbortSignal): Promise<void
 
 export const conductorBridge = {
   async prepare(ownerId: string, agent: AgentRow, input: RunInput, plan: AcpLaunchPlan, stop: (outcome: import('../agents/drivers/acp/acpDriver').ConductorOutcome) => void, wake: () => boolean): Promise<ConductorLease | undefined> {
-    if (!input.runScope || !canConduct(agent) || plan.spec.remote) return undefined
+    // A vault agent gets no conductor server at all, so no loopback URL reaches the vault (D6).
+    if (!input.runScope || !canConduct(agent) || plan.spec.remote || isVaultAgent(agent.id)) return undefined
     const addons = addonIds(agent, input.runScope)
     // A nested run with no addons keeps running with no Cinna server at all.
     const nested = !!input.nested

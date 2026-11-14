@@ -206,6 +206,12 @@ export const chats = sqliteTable('chats', {
    */
   originDashboardId: text('origin_dashboard_id'),
   /**
+   * The Agent Vault this chat's transcript lives in, or null. Set once by
+   * main when the chat is bound to a vault agent; such a chat is a stub here
+   * (title "<agent> · <date>") and its messages never reach SQLite (D23, D30).
+   */
+  vaultId: text('vault_id'),
+  /**
    * A placeholder title main gave the chat at creation (a dashboard panel's
    * "<dashboard> · <agent>"), or null. While `title` still equals it, auto
    * titling treats the title as untouched, as it does `'New Chat'`.

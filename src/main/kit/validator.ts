@@ -58,6 +58,7 @@ import { createLogger } from '../logger/logger'
 import { matchesPattern, type LayoutView } from './layout'
 import { parseFrontmatter, parseWithIssues, type MiniYamlValue } from './miniYaml'
 import { readWithStamp } from './manifestIo'
+import { SECURE_AGENTS_DIR } from '../../shared/vault/types'
 import {
   MAX_VERSION_LENGTH as SKILL_MAX_VERSION_LENGTH,
   SKILL_FILE,
@@ -1358,7 +1359,7 @@ export function readCommandCatalog(agentDir: string, relPath = 'docs/CLI_COMMAND
 }
 
 /** Directories a validator never needs to walk into, whatever they contain. */
-const UNWALKED_DIRS = new Set(['app-data', 'node_modules', '__pycache__', 'venv', 'dist', 'build'])
+const UNWALKED_DIRS = new Set(['app-data', 'node_modules', '__pycache__', 'venv', 'dist', 'build', SECURE_AGENTS_DIR])
 
 function listFilesRecursively(dir: string, relBase = '', includeDotfiles = false): string[] {
   let entries: Dirent[]

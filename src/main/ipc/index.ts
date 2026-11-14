@@ -46,6 +46,7 @@ import { registerMarketplaceSkillHandlers } from './marketplaceSkills.ipc'
 import { registerAddonHandlers } from './addons.ipc'
 import { registerSkillPublishHandlers } from './skillPublish.ipc'
 import { registerBrandThemeHandlers } from './brandTheme.ipc'
+import { registerVaultHandlers } from './vault.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -98,6 +99,8 @@ export function registerAllIpcHandlers(): void {
   registerAddonHandlers()
   registerSkillPublishHandlers()
   registerServiceCredentialHandlers()
+  // Agent Vault: availability, state, unlock/lock and the gated settings.
+  registerVaultHandlers()
   registerAgentFileHandlers()
   // Artifacts: publish a file or folder from an agent's folder to cinna-core, and share it.
   registerArtifactHandlers()

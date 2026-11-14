@@ -33,6 +33,8 @@ import { isTransportDrop } from '../agents/a2aTransport'
 import { createTurnCompletion, type TurnCompletion, type TurnOutcome } from './turnCompletion'
 import { CUT_OFF_NOTICE, REPLY_CUT_OFF_CODE, STILL_RUNNING_NOTICE } from './turnRecoverers'
 import { createLogger } from '../logger/logger'
+import { chatVaultId } from '../db/chats'
+import { vaultTranscripts, VAULT_REPLY_NOT_SAVED } from '../vault/transcriptStore'
 import type { InputQuestion, InputRequest, RunEvent, RunState } from '../../shared/runEvents'
 import type { MessagePart } from '../../shared/messageParts'
 import type { MessageTelemetry } from '../../shared/sessionTelemetry'
@@ -1164,6 +1166,17 @@ export const a2aStreamingService = {
 
       // Notices, then the assistant rows — past whatever a flush already saved.
       save(result)
+      // A vault chat's rows live only in the vault's journal: a reply that
+      // can never get there is a failed turn the user must hear about, not a
+      // log line. Still queued (a locked vault) is fine; it goes in later.
+      // (A lookup that fails cannot be a vault chat: its rows could not have been routed either.)
+      let vaultId: string | null = null
+      try { vaultId = chatVaultId(chatId) } catch { vaultId = null }
+      if (vaultId && await vaultTranscripts.settled(vaultId, chatId) === 'failed') {
+        port.postMessage({ type: 'error', error: VAULT_REPLY_NOT_SAVED })
+        finish({ state: 'failed', text: result.text, error: { message: VAULT_REPLY_NOT_SAVED }, ...turnUsage(result.telemetry) })
+        return
+      }
       port.postMessage({
         type: 'done',
         stopReason: canceled ? 'canceled' : state === 'budget' ? 'budget' : 'end_turn'

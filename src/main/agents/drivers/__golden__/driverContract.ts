@@ -159,7 +159,9 @@ const READINESS_STATES: Record<AgentReadinessState, true> = {
   contract_too_new: true,
   not_installed: true,
   not_logged_in: true,
-  unreachable: true
+  unreachable: true,
+  vault_locked: true,
+  vault_other_chat: true
 }
 
 /**

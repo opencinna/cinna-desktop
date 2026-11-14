@@ -174,7 +174,36 @@ function gitAsset(plat: string, sha256: string, size: number): RuntimePinAsset {
   return { file, sha256, url: `${GIT_RELEASE}/${file}`, size }
 }
 
+/**
+ * The Agent Vault guest image (D27, D32): the read-only erofs + dm-verity
+ * rootfs every vault boots, uploaded as a release asset by `make vault-image`.
+ * The helper embeds the kernel, initrd and `rootHash` itself; main downloads
+ * `rootfs` into `<SecureAgents>/.images/<version>/` and checks `sha256`.
+ *
+ * `published: false` is the explicit placeholder until the first image is
+ * released: a packaged build then reports `image-missing` and offers no
+ * vault. A dev build reads `CINNA_VAULT_GUEST_DIR` or `build/vault-guest/`.
+ */
+export interface VaultGuestPin {
+  published: boolean
+  version: string
+  /** dm-verity root hash of `rootfs`, hex. */
+  rootHash: string
+  /** Byte offset of the verity hash tree inside `rootfs`. */
+  hashOffset: number
+  rootfs: { file: string; url: string; sha256: string; size: number }
+}
+
+const VAULT_GUEST_UNPUBLISHED: VaultGuestPin = {
+  published: false,
+  version: 'unpublished',
+  rootHash: '',
+  hashOffset: 0,
+  rootfs: { file: 'rootfs.img', url: '', sha256: '', size: 0 }
+}
+
 export const RUNTIME_PINS = {
+  vaultGuest: VAULT_GUEST_UNPUBLISHED,
   claude: {
     cli: CLAUDE_CLI,
     /** Exactly what `claude --version` prints for the pin. */
@@ -188,6 +217,17 @@ export const RUNTIME_PINS = {
     adapterSubagentsOriginalSha256: '4417e917642de18b63d2c3de2ddfc849b4995bbdd3de93b18786a9db7e11835f',
     /** The same file after `scripts/patch-claude-agent-acp.cjs` (a SendMessage-resumed subagent keyed by the Agent call its frames name, and not ended by that call's late notification; `subagent_spawned` names the Agent call the child runs under). */
     adapterSubagentsPatchedSha256: '1820e3cabc76e20878ece2a2f33d911f79813cbc6204608ba77ff41c415807c8',
+    /**
+     * Agent Vault (D28): sha256 of the deterministic tar of the patched
+     * adapter's whole runtime closure (`vault/adapterTar.ts`
+     * `deterministicTar`), written once per app build to
+     * `out/vault/claude-adapter.tar` (shipped inside app.asar) and streamed
+     * into a vault. A move refuses any other
+     * closure. Moves with the adapter, its dependencies or the patch;
+     * `npm run vault:pin-adapter` prints the value for this checkout, and
+     * `runtimeInstall.test.ts` fails until it is updated here.
+     */
+    vaultAdapterTarSha256: '0c38d69e8476d78d476c20d6c59e823dd744b5569463338733b68e7ae0aea8f0',
     /**
      * Anthropic's own release bucket — the one `claude`'s installer and updater
      * read. `<release>/manifest.json` lists `platforms.<key>.{binary, checksum,
@@ -218,6 +258,24 @@ export const RUNTIME_PINS = {
     adapterOriginalSha256: '15de6b2dd5203876a48b12861378bcf87040d623ab2159e05052dc9d54c32b16',
     /** The same file after `scripts/patch-codex-acp.cjs` (MCP merge, session instructions, `isAirClient` forced false, the whole command output on the completing update, and a cancel that interrupts the subagent threads too). */
     adapterPatchedSha256: 'f1dc49e2a08c26832c29df4f2fb949715a985c198383f9cfaa1fde76eac8a7da',
+    /**
+     * Agent Vault: sha256 of the deterministic tar (`vault/adapterTar.ts`) of
+     * the patched `@agentclientprotocol/codex-acp` package alone (its bundle
+     * imports only Node builtins), written per app build to
+     * `out/vault/codex-adapter.tar` and streamed into a vault. Moves with the
+     * adapter or its patch; `npm run vault:pin-adapter` prints it, and
+     * `runtimeInstall.test.ts` fails until it is updated here.
+     */
+    vaultAdapterTarSha256: '40ae19a642c9f578918f9bbcb6c6c1b582ba8dcbe14cc7031d94f2d8635e6d12',
+    /**
+     * Agent Vault: sha256 of the deterministic tar of `codex` and
+     * `codex-code-mode-host`, as unpacked from this release's two
+     * `linux-arm64` archives below (each checked against its own row first).
+     * One install in the vault, so the host sits beside the executable as
+     * Codex requires. Computed 2026-11-14 from the pinned archives; a Codex
+     * bump recomputes it (`runtimeInstall.ts` `vaultRuntimeTar`).
+     */
+    vaultRuntimeTarSha256: 'd245ecbd760f0832399ac113085bcd101001d48d3595e68a4769b124be651d7e',
     /**
      * The vendor's unmodified GitHub release archives for `rust-v0.167.0`: the
      * `codex` archive, and beside it the `codex-code-mode-host` archive of the
@@ -276,6 +334,13 @@ export const RUNTIME_PINS = {
   },
   antigravity: {
     cli: ANTIGRAVITY_CLI,
+    /**
+     * Agent Vault: sha256 of the deterministic tar of `agy_acp_server.par` and
+     * `localharness_external` as unpacked from the `linux-arm64` zip below
+     * (the guest takes tar only). Computed 2026-11-14 from the pinned zip; a
+     * bump recomputes it.
+     */
+    vaultRuntimeTarSha256: '783a0b6b4d2611cc1c11ee1a35d851d7c466c0b1123915f9cd321a685c68879a',
     /**
      * Google's own release zips. Each holds `agy_acp_server.par` (the ACP
      * server, installed under that name) and `localharness_external` at the

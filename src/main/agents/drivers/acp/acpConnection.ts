@@ -76,6 +76,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { Readable, Writable } from 'node:stream'
 import { ndJsonStream } from '@agentclientprotocol/sdk'
+import { startVaultAcpConnection } from './vaultAcpConnection'
 import type {
   InitializeRequest,
   InitializeResponse,
@@ -243,6 +244,7 @@ export async function startAcpConnection(
   options: AcpConnectionOptions = {}
 ): Promise<AcpConnection> {
   if (spec.remote) return startAcpWebSocketConnection(spec.remote, init, options)
+  if (spec.vault) return startVaultAcpConnection(spec.vault, init, options)
   if (options.signal?.aborted) throw new Error('The command test was canceled.')
   const startTimeoutMs = options.startTimeoutMs ?? ACP_START_TIMEOUT_MS
   const retry = spec.earlyExitRetry

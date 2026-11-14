@@ -477,6 +477,19 @@ afterEach(() => {
 })
 
 describe('intake', () => {
+  it('takes in no brief for an agent in a vault (D6)', async () => {
+    const { resetVaultAgentsForTest } = await import('../vault/isVaultAgent')
+    resetVaultAgentsForTest([h.agent.id])
+    try {
+      h.write('20260917-1200-retry', 'brief.md', brief(''))
+      await h.service.scanAgent(SCOPE, h.agent)
+      expect(h.rows.size).toBe(0)
+      expect(h.tasks.size).toBe(0)
+    } finally {
+      resetVaultAgentsForTest()
+    }
+  })
+
   it('creates one task per brief, however often the folder is scanned', async () => {
     h.write('20260917-1200-retry', 'brief.md', brief(''))
     await h.service.scanAgent(SCOPE, h.agent)

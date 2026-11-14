@@ -1587,6 +1587,23 @@ describe('adopting an existing folder', () => {
     expect(pick.refusal).toMatch(/overlaps|already registered/i)
   })
 
+  it('refuses a folder inside a SecureAgents folder (Agent Vault disks)', () => {
+    // Cinna's own (marked), wherever it is…
+    const marked = join(outside, 'SecureAgents', 'v1')
+    mkdirSync(marked, { recursive: true })
+    writeFileSync(join(outside, 'SecureAgents', '.cinna-vaults'), 'x')
+    writeFileSync(join(marked, 'AGENT.md'), '# Not an agent\n')
+    const pick = localAgentService.pickedAgentFolder(USER, marked)
+    if (pick.cancelled) throw new Error('unexpected cancel')
+    expect(pick.refusal).toMatch(/SecureAgents.*Agent Vault/)
+    // …and one directly in a registered root, marker or not.
+    const inRoot = join(workshop, 'SecureAgents')
+    mkdirSync(inRoot, { recursive: true })
+    const rootPick = localAgentService.pickedAgentFolder(USER, inRoot)
+    if (rootPick.cancelled) throw new Error('unexpected cancel')
+    expect(rootPick.refusal).toMatch(/SecureAgents.*Agent Vault/)
+  })
+
   it('will not adopt a path the picker did not just return', () => {
     // The whole reason the pick is recorded. Without it, splitting the adopt
     // into two calls would make `folder-add` a channel that registers any

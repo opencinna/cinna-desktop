@@ -6,7 +6,7 @@ import { createLogger } from '../logger/logger'
 import { createReadStream, createWriteStream } from 'fs'
 import { mkdtemp, open, readFile, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { basename, isAbsolute, join } from 'path'
+import { basename, isAbsolute, join, relative } from 'path'
 import { pipeline } from 'stream/promises'
 import type { MessageAttachment, PendingAttachment } from '../../shared/attachments'
 import {
@@ -17,9 +17,18 @@ import {
   decodePreviewText
 } from '../../shared/filePreview'
 import { pathGuard } from './pathGuard'
+import { pastedRoot } from './pastedFiles'
+import { VAULT_FILE_REFUSED, vaultChatAccepts } from '../vault/vaultChatFiles'
 import { runtimeHost } from '../host/runtimeHost'
 
 const logger = createLogger('file-service')
+
+/** Whether `path` is one of the composer's pasted images (`userData/tmp/pasted/`). */
+function isWithinPasted(path: string): boolean {
+  const root = pastedRoot(runtimeHost.getPath('userData'))
+  const rel = relative(root, path)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
 
 export type FileScope = 'cinna' | 'local'
 
@@ -110,10 +119,27 @@ export const fileService = {
       if (!chat) {
         throw new FileError('chat_not_found', 'Chat not found')
       }
+      // A vault chat takes only what goes inline (text, images): anything
+      // else is refused before a byte is stored here (D23).
+      const vaultChat = !!chat.vaultId
+      if (vaultChat && filePaths.some((path) => !vaultChatAccepts(guessLocalMime(basename(path))))) {
+        throw new FileError('vault_chat', VAULT_FILE_REFUSED)
+      }
       const out: MessageAttachment[] = []
-      for (const path of filePaths) {
-        const att = await localFileStore.ingest({ userId: chat.userId, chatId, filePath: path })
-        out.push(att)
+      try {
+        for (const path of filePaths) {
+          const att = await localFileStore.ingest({ userId: chat.userId, chatId, filePath: path })
+          out.push(att)
+          // A pasted image's own copy is not left behind for a vault chat.
+          if (vaultChat && isWithinPasted(path)) await rm(path, { force: true }).catch(() => {})
+        }
+      } catch (error) {
+        // The renderer never hears of the copies made before the failure, so
+        // nothing would send or remove them: a vault chat's go now (D23).
+        if (vaultChat) {
+          for (const att of out) await localFileStore.remove({ userId: chat.userId, attachment: att }).catch(() => {})
+        }
+        throw error
       }
       logger.info('local files ingested', { chatId, count: out.length })
       return out

@@ -405,6 +405,20 @@ describe('applying what a pull brought back', () => {
   })
 })
 
+describe('assigning a task', () => {
+  it('refuses an agent in a vault as the assignee', async () => {
+    const { resetVaultAgentsForTest } = await import('../vault/isVaultAgent')
+    const task = taskService.create(USER, { title: 'Pay the bills', goal: 'Pay them' })
+    resetVaultAgentsForTest(['folder:vaulted'])
+    try {
+      expect(() => taskService.update(USER, task.id, { assignee: { kind: 'agent', agentId: 'folder:vaulted', name: 'Ledger' } })).toThrow('not available for an agent in a vault')
+    } finally {
+      resetVaultAgentsForTest()
+    }
+    expect(taskRepo.getById(USER, task.id)?.assigneeAgentId ?? null).toBeNull()
+  })
+})
+
 describe('create', () => {
   it('starts a task in the server’s create state, owned by the desktop', () => {
     const task = makeTask()

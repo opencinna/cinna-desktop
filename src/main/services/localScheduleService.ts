@@ -25,6 +25,7 @@ import type { LocalScheduleSaveInput, LocalScheduleDeleteInput, LocalScheduleEdi
 import type { TaskScript } from '../../shared/taskScript'
 import { taskRunsHere } from '../../shared/tasks'
 import { notifyScheduleRunCompleted } from './localScheduleEvents'
+import { isVaultAgent, refuseVaultAgent } from '../vault/isVaultAgent'
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -167,6 +168,7 @@ export const localScheduleService = {
   list(scope: RunScope, agentId: string): LocalScheduleItem[] { return rowsFor(scope, agentId) },
 
   enable(scope: RunScope, review: LocalScheduleReview, now = Date.now()): LocalScheduleItem[] {
+    refuseVaultAgent(review?.agentId, 'Schedules')
     if (!review || typeof review.agentId !== 'string' || typeof review.name !== 'string' || typeof review.revision !== 'string' || typeof review.timezone !== 'string') throw new Error('This schedule could not be turned on. Try again.')
     if (review.profileUserId !== scope.profileUserId) throw new Error('The active profile changed. Try again.')
     const rows = rowsFor(scope, review.agentId)
@@ -222,6 +224,7 @@ export const localScheduleService = {
   },
 
   save(scope: RunScope, input: LocalScheduleSaveInput, now = Date.now()): LocalScheduleEditorSnapshot {
+    refuseVaultAgent(input?.agentId, 'Schedules')
     assertProfile(scope, input)
     if (typeof input.enabled !== 'boolean' || typeof input.name !== 'string' || typeof input.cron !== 'string') throw new Error('The schedule form is invalid.')
     const agent = localAgentService.get(scope.settingsUserId, input.agentId)
@@ -314,6 +317,8 @@ export const localScheduleService = {
     const agentIds = [...new Set(agentBindings(scope.profileUserId, true).map(binding => binding.definition.agentId))]
     for (const agentId of agentIds) {
       if (!valid()) return
+      // A binding made before the agent moved into a vault never fires (D6).
+      if (isVaultAgent(agentId)) continue
       const rows = rowsFor(scope, agentId, true)
       for (const binding of agentBindings(scope.profileUserId, true).filter(item => item.definition.agentId === agentId)) {
         if (!valid()) return

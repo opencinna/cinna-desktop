@@ -34,6 +34,9 @@ import { buildChatListSummaries, buildChatWhos } from './chatListSummary'
 import { appSettingsRepo } from '../db/appSettings'
 import { localAgentService } from './localAgents/localAgentService'
 import { decideGuidedChat } from './localAgents/guidedBuild'
+import { isVaultAgent, vaultChatReadiness, VaultAgentRefused } from '../vault/isVaultAgent'
+import type { AgentReadiness } from '../../shared/agentDrivers'
+import { vaultService } from '../vault/vaultService'
 
 const logger = createLogger('chat')
 
@@ -179,6 +182,17 @@ function guidedAgentFor(agentId: string | null): { unbuilt: boolean } | null {
   }
 }
 
+/**
+ * `vault_other_chat` when the chat's agent is in a vault but the chat is not
+ * (it started before the agent moved in): the composer shows it instead of the
+ * agent's own readiness. Null for every other chat.
+ */
+function chatVaultReadiness(chat: ChatRow): AgentReadiness | null {
+  if (!chat.agentId || !isVaultAgent(chat.agentId)) return null
+  const row = agentService.findAgent(getSettingsScopeUserId(), chat.userId, chat.agentId)?.row
+  return row ? vaultChatReadiness(row, chat.id) : null
+}
+
 export const chatService = {
   list(userId: string): (ChatRow & { activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null })[] {
     const owners = listOwners(userId)
@@ -248,12 +262,13 @@ export const chatService = {
     if (chatRunResultRepo.markRead(chatId, runId)) turnNotices.resultRead(chatId, runId)
   },
 
-  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null; workspace: boolean }) | null {
+  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null; taskHeld: boolean; lastRunResult: ChatRunResult | null; workspace: boolean; vaultReadiness: AgentReadiness | null }) | null {
     const chat = visibleChat(userId, chatId)
     if (!chat) return null
     const messages = chatRepo.listMessages(chatId)
     return {
       ...chat,
+      vaultReadiness: chatVaultReadiness(chat),
       messages,
       activeRunId: activeRunId(chatId),
       taskHeld: taskRunnersByChat.has(chatId),
@@ -376,8 +391,18 @@ export const chatService = {
     } else if (next.router === 'direct' && !next.agentId) {
       updates = { ...updates, agentId: chatConductorService.ensure(owner, next).id }
     }
+    // A vault chat stays a direct chat with its one vault agent, and a vault
+    // agent only ever answers in a chat of its own that has nothing on the host.
+    const bindsVault = !chat.vaultId && !!next.agentId && isVaultAgent(next.agentId)
+    if (chat.vaultId && changesRuntime && (next.agentId !== chat.agentId || routerOf(next) !== 'direct')) {
+      throw new ChatError('not_configured', 'A chat with an agent in a vault stays with that agent.')
+    }
+    if (bindsVault && (routerOf(next) !== 'direct' || chatOnDemandAgentRepo.listAgentIds(chatId).length > 0 || chatRepo.hasContent(chatId))) {
+      throw new ChatError('not_configured', 'Start a new chat to talk to an agent in a vault.')
+    }
     const ok = chatRepo.updateMeta(owner, chatId, updates)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
+    if (bindsVault) vaultService.bindChat(getSettingsScopeUserId(), owner, chatId, next.agentId!)
     if (guidedRequested === true) {
       const bound = { ...chat, ...updates }
       const guided = decideGuidedChat({
@@ -519,7 +544,10 @@ export const chatService = {
   },
 
   addOnDemandAgent(userId: string, chatId: string, agentId: string): void {
-    requireOwnedChat(userId, chatId)
+    const chat = requireOwnedChat(userId, chatId)
+    // A vault agent joins no other chat, and no agent joins a vault chat: it would read the transcript (D6).
+    if (isVaultAgent(agentId)) throw new VaultAgentRefused('Adding to another chat')
+    if (chat.vaultId) throw new VaultAgentRefused('Bringing another agent into its chat')
     // Agents live in two scopes: local in default (settings) scope, remote in
     // the active profile. `findAgent` resolves across both.
     const located = agentService.findAgent(getSettingsScopeUserId(), userId, agentId)

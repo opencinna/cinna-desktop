@@ -12,6 +12,7 @@ import { buildResolveIndex, profileServerUrl } from '../../sync/resolvers'
 import { taskService } from '../taskService'
 import { unresolvableAgentLabels } from './dependencies'
 import type { JobExecutor } from './contract'
+import { isVaultAgent, VaultAgentRefused } from '../../vault/isVaultAgent'
 const logger = createLogger('job')
 
 export const desktopJobExecutor: JobExecutor = {
@@ -93,6 +94,10 @@ export const desktopJobExecutor: JobExecutor = {
     const existingAgentIds = agentIds.filter((id) => [scope.settingsUserId, userId].some((owner) => !!agentRepo.getOwned(owner, id)))
     if (existingAgentIds.length !== agentIds.length) {
       throw new JobError('missing_dependency', 'Agent referenced by job no longer exists')
+    }
+    // An agent in a vault runs no jobs: the job's chat would be on this computer (D6).
+    if (existingAgentIds.some((id) => isVaultAgent(id))) {
+      throw new JobError('incomplete_setup', new VaultAgentRefused('A job').message)
     }
 
     const mode = job.modeId

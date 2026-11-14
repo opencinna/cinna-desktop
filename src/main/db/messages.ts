@@ -3,6 +3,8 @@ import { nanoid } from 'nanoid'
 import { and, asc, eq, desc, inArray, isNotNull, lt, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { messages, chats } from './schema'
+import { vaultReadRoute, vaultTurnRoute, vaultWriteRoute } from './chats'
+import { vaultTranscripts, type ChatTranscript } from '../vault/transcriptStore'
 import type { MessagePart } from '../../shared/messageParts'
 import type { MessageAttachment } from '../../shared/attachments'
 import type { MessageTelemetry } from '../../shared/sessionTelemetry'
@@ -95,12 +97,50 @@ function getNextSortOrder(chatId: string): number {
   return last ? last.sortOrder + 1 : 0
 }
 
+/** A whole `messages` row for a vault chat's transcript: every column the SQLite insert would default. */
+function vaultRow(chat: ChatTranscript, values: Partial<MessageRow> & Pick<MessageRow, 'id' | 'role' | 'content'>): MessageRow {
+  return {
+    chatId: chat.chatId,
+    toolCallId: null, toolName: null, toolInput: null, toolCalls: null, toolError: null, toolProvider: null,
+    toolAgentId: null, parts: null, attachments: null, addressedAgentId: null, sourceAgentId: null, telemetry: null,
+    sortOrder: chat.nextSortOrder(),
+    createdAt: new Date(),
+    ...values
+  }
+}
+
+/**
+ * Write a new row: to SQLite for an ordinary chat, to the vault's transcript
+ * for a vault chat (throws while that vault is locked; never falls through).
+ */
+function insertMessage(values: Omit<MessageRow, 'sortOrder' | 'createdAt'> & Partial<Pick<MessageRow, 'createdAt'>>): void {
+  const vault = vaultWriteRoute(values.chatId)
+  if (vault) {
+    vault.insert(vaultRow(vault, values))
+    return
+  }
+  getDb().insert(messages).values({ ...values, sortOrder: getNextSortOrder(values.chatId), createdAt: values.createdAt ?? new Date() }).run()
+}
+
+/** Every nullable column null: the base of a row {@link insertMessage} writes. */
+const NO_COLUMNS = {
+  toolCallId: null, toolName: null, toolInput: null, toolCalls: null, toolError: null, toolProvider: null,
+  toolAgentId: null, parts: null, attachments: null, addressedAgentId: null, sourceAgentId: null, telemetry: null
+} as const
+
+/** The rows of `chatId` a read helper filters, or null to query SQLite. */
+function vaultRows(chatId: string, route: (chatId: string) => ReturnType<typeof vaultReadRoute> = vaultReadRoute): MessageRow[] | null {
+  const vault = route(chatId)
+  if (!vault) return null
+  return vault === 'locked' ? [] : vault.list()
+}
+
 const rawMessageRepo = {
   saveSystem(msg: { chatId: string; content: string; addressedAgentId?: string }, onSaved?: () => void): string {
     return getDb().transaction(() => {
       const id = nanoid()
-      getDb().insert(messages).values({ id, chatId: msg.chatId, role: 'system', content: msg.content,
-        addressedAgentId: msg.addressedAgentId ?? null, sortOrder: getNextSortOrder(msg.chatId), createdAt: new Date() }).run()
+      insertMessage({ ...NO_COLUMNS, id, chatId: msg.chatId, role: 'system', content: msg.content,
+        addressedAgentId: msg.addressedAgentId ?? null })
       onSaved?.()
       return id
     })
@@ -114,39 +154,31 @@ const rawMessageRepo = {
       })
     }
     const id = nanoid()
-    getDb()
-      .insert(messages)
-      .values({
-        id,
-        chatId: msg.chatId,
-        role: 'user',
-        content: msg.content,
-        addressedAgentId: msg.addressedAgentId ?? null,
-        attachments: msg.attachments && msg.attachments.length > 0 ? msg.attachments : null,
-        sortOrder: getNextSortOrder(msg.chatId),
-        createdAt: new Date()
-      })
-      .run()
+    insertMessage({
+      ...NO_COLUMNS,
+      id,
+      chatId: msg.chatId,
+      role: 'user',
+      content: msg.content,
+      addressedAgentId: msg.addressedAgentId ?? null,
+      attachments: msg.attachments && msg.attachments.length > 0 ? msg.attachments : null
+    })
     return id
   },
 
   saveAssistant(msg: SaveAssistantMessage): string {
     const id = nanoid()
-    getDb()
-      .insert(messages)
-      .values({
-        id,
-        chatId: msg.chatId,
-        role: 'assistant',
-        content: msg.content,
-        toolCalls: msg.toolCalls ?? null,
-        parts: msg.parts ?? null,
-        sourceAgentId: msg.sourceAgentId ?? null,
-        telemetry: msg.telemetry ?? null,
-        sortOrder: getNextSortOrder(msg.chatId),
-        createdAt: new Date()
-      })
-      .run()
+    insertMessage({
+      ...NO_COLUMNS,
+      id,
+      chatId: msg.chatId,
+      role: 'assistant',
+      content: msg.content,
+      toolCalls: msg.toolCalls ?? null,
+      parts: msg.parts ?? null,
+      sourceAgentId: msg.sourceAgentId ?? null,
+      telemetry: msg.telemetry ?? null
+    })
     return id
   },
 
@@ -155,6 +187,11 @@ const rawMessageRepo = {
    * Only the running turn's draft row is written this way.
    */
   updateAssistantParts(id: string, content: string, parts: MessagePart[]): void {
+    const vault = vaultTranscripts.byMessageId(id)
+    if (vault) {
+      vault.update(id, { content, parts }, (row) => row.role === 'assistant')
+      return
+    }
     getDb().update(messages).set({ content, parts }).where(and(eq(messages.id, id), eq(messages.role, 'assistant'))).run()
   },
 
@@ -163,69 +200,67 @@ const rawMessageRepo = {
    * turn's last row, when its final pass had no parts left to write).
    */
   updateAssistantTelemetry(id: string, telemetry: MessageTelemetry): void {
+    const vault = vaultTranscripts.byMessageId(id)
+    if (vault) {
+      vault.update(id, { telemetry }, (row) => row.role === 'assistant')
+      return
+    }
     getDb().update(messages).set({ telemetry }).where(and(eq(messages.id, id), eq(messages.role, 'assistant'))).run()
   },
 
   deleteById(id: string): void {
+    const vault = vaultTranscripts.byMessageId(id)
+    if (vault) {
+      vault.delete(id)
+      return
+    }
     getDb().delete(messages).where(eq(messages.id, id)).run()
   },
 
   saveToolCall(msg: SaveToolCallMessage): void {
-    getDb()
-      .insert(messages)
-      .values({
-        id: nanoid(),
-        chatId: msg.chatId,
-        role: 'tool_call',
-        content: msg.content,
-        toolCallId: msg.toolCallId,
-        toolName: msg.toolName,
-        toolInput: msg.toolInput,
-        toolError: msg.toolError,
-        toolProvider: msg.toolProvider ?? null,
-        toolAgentId: msg.toolAgentId ?? null,
-        parts: msg.parts ?? null,
-        sortOrder: getNextSortOrder(msg.chatId),
-        createdAt: new Date()
-      })
-      .run()
+    insertMessage({
+      ...NO_COLUMNS,
+      id: nanoid(),
+      chatId: msg.chatId,
+      role: 'tool_call',
+      content: msg.content,
+      toolCallId: msg.toolCallId,
+      toolName: msg.toolName,
+      toolInput: msg.toolInput,
+      toolError: msg.toolError,
+      toolProvider: msg.toolProvider ?? null,
+      toolAgentId: msg.toolAgentId ?? null,
+      parts: msg.parts ?? null
+    })
   },
 
   saveTransition(msg: SaveTransitionMessage): string {
     const id = nanoid()
-    getDb()
-      .insert(messages)
-      .values({
-        id,
-        chatId: msg.chatId,
-        role: 'agent_transition',
-        content: msg.content,
-        sourceAgentId: msg.sourceAgentId ?? null,
-        sortOrder: getNextSortOrder(msg.chatId),
-        createdAt: new Date()
-      })
-      .run()
+    insertMessage({
+      ...NO_COLUMNS,
+      id,
+      chatId: msg.chatId,
+      role: 'agent_transition',
+      content: msg.content,
+      sourceAgentId: msg.sourceAgentId ?? null
+    })
     return id
   },
 
   saveError(msg: SaveErrorMessage): void {
-    getDb()
-      .insert(messages)
-      .values({
-        id: nanoid(),
-        chatId: msg.chatId,
-        role: 'error',
-        content: JSON.stringify({
-          short: msg.short,
-          ...(msg.detail === null ? {} : { detail: msg.detail ?? msg.short }),
-          ...(msg.code ? { code: msg.code } : {}),
-          ...(msg.title ? { title: msg.title } : {}),
-          ...(msg.retryAfterSec !== undefined ? { retryAfterSec: msg.retryAfterSec } : {})
-        }),
-        sortOrder: getNextSortOrder(msg.chatId),
-        createdAt: new Date()
+    insertMessage({
+      ...NO_COLUMNS,
+      id: nanoid(),
+      chatId: msg.chatId,
+      role: 'error',
+      content: JSON.stringify({
+        short: msg.short,
+        ...(msg.detail === null ? {} : { detail: msg.detail ?? msg.short }),
+        ...(msg.code ? { code: msg.code } : {}),
+        ...(msg.title ? { title: msg.title } : {}),
+        ...(msg.retryAfterSec !== undefined ? { retryAfterSec: msg.retryAfterSec } : {})
       })
-      .run()
+    })
   },
 
   touchChat(chatId: string): void {
@@ -237,23 +272,21 @@ const rawMessageRepo = {
   },
 
   insertRaw(msg: InsertRawMessage): void {
-    getDb()
-      .insert(messages)
-      .values({
-        id: msg.id,
-        chatId: msg.chatId,
-        role: msg.role,
-        content: msg.content,
-        toolCallId: msg.toolCallId,
-        toolName: msg.toolName,
-        toolInput: msg.toolInput,
-        sortOrder: getNextSortOrder(msg.chatId),
-        createdAt: new Date()
-      })
-      .run()
+    insertMessage({
+      ...NO_COLUMNS,
+      id: msg.id,
+      chatId: msg.chatId,
+      role: msg.role,
+      content: msg.content,
+      toolCallId: msg.toolCallId,
+      toolName: msg.toolName,
+      toolInput: msg.toolInput
+    })
   },
 
   getById(id: string): MessageRow | undefined {
+    const vault = vaultTranscripts.readableByMessageId(id)
+    if (vault) return vault === 'locked' ? undefined : vault.get(id)
     return getDb()
       .select()
       .from(messages)
@@ -267,6 +300,8 @@ const rawMessageRepo = {
    * `chatTitleService` to early-out without scanning the full history.
    */
   countByRole(chatId: string, role: string): number {
+    const vault = vaultRows(chatId)
+    if (vault) return vault.filter((row) => row.role === role).length
     const row = getDb()
       .select({ cnt: sql<number>`count(*)` })
       .from(messages)
@@ -281,6 +316,8 @@ const rawMessageRepo = {
    * result when the caller only needs the first hit.
    */
   firstByRole(chatId: string, role: string): MessageRow | undefined {
+    const vault = vaultRows(chatId)
+    if (vault) return vault.find((row) => row.role === role)
     return getDb()
       .select()
       .from(messages)
@@ -292,6 +329,8 @@ const rawMessageRepo = {
 
   /** The newest message of one role in a chat — the agent's last answer, for the adoption session's summary. */
   lastByRole(chatId: string, role: string): MessageRow | undefined {
+    const vault = vaultRows(chatId)
+    if (vault) return vault.findLast((row) => row.role === role)
     return getDb()
       .select()
       .from(messages)
@@ -303,6 +342,8 @@ const rawMessageRepo = {
 
   /** The id of the newest message in a chat — where an agent's catch-up cursor lands. */
   lastId(chatId: string): string | null {
+    const vault = vaultRows(chatId, vaultTurnRoute)
+    if (vault) return vault.at(-1)?.id ?? null
     const row = getDb()
       .select({ id: messages.id })
       .from(messages)
@@ -321,6 +362,13 @@ const rawMessageRepo = {
    * to new input, and that ambiguity resolves to "new input".
    */
   lastInboundIdBefore(chatId: string, at: number): string | null {
+    const vault = vaultRows(chatId, vaultTurnRoute)
+    if (vault) {
+      const before = Math.floor(at / 1000) * 1000
+      // `created_at` is whole seconds in SQLite; compared the same way here.
+      return vault.findLast((row) => (row.role === 'user' || row.role === 'system') &&
+        Math.floor(row.createdAt.getTime() / 1000) * 1000 < before)?.id ?? null
+    }
     const row = getDb()
       .select({ id: messages.id })
       .from(messages)
@@ -346,6 +394,8 @@ const rawMessageRepo = {
    * a second copy of it could disagree with what the user can see.
    */
   lastAddressedAgentId(chatId: string): string | null {
+    const vault = vaultRows(chatId, vaultTurnRoute)
+    if (vault) return vault.findLast((row) => row.role === 'user' && row.addressedAgentId !== null)?.addressedAgentId ?? null
     const row = getDb()
       .select({ agentId: messages.addressedAgentId })
       .from(messages)

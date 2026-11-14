@@ -94,7 +94,7 @@ export function registerLocalAgentHandlers(): void {
     'local-agent:list',
     (): LocalAgentListResult => {
       userActivation.requireActivated()
-      return localAgentService.list(getSettingsScopeUserId())
+      return localAgentService.list(getSettingsScopeUserId(), { includeVault: true })
     }
   )
 
@@ -216,7 +216,8 @@ export function registerLocalAgentHandlers(): void {
     // folder that lost an id fight has no index row, and the page has to say
     // that rather than "your folder is missing", which sends the user looking
     // for the wrong problem.
-    return withCode(() => localAgentService.get(getSettingsScopeUserId(), agentId))
+    // A vault agent answers with its vault entry (the page shows its vault state).
+    return withCode(() => localAgentService.getForPage(getSettingsScopeUserId(), agentId))
   })
 
   ipcHandle('local-agent:create', (_event, data: CreateLocalAgentInput): LocalAgentDto => {

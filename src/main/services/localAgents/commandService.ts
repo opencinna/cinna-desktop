@@ -57,6 +57,7 @@ import type { RunAgentTurnResult, TurnRun } from '../a2aStreamingService'
 import type { AgentCapabilities } from '../../../shared/agentDrivers'
 import type { MessagePart } from '../../../shared/messageParts'
 import { RUN_REFERENCE_PATTERN } from '../../../shared/kit/manifest'
+import { isVaultAgent, refuseVaultAgent, VaultAgentRefused } from '../../vault/isVaultAgent'
 
 const logger = createLogger('local-agent-command')
 /**
@@ -402,6 +403,7 @@ export interface CommandRunOutcome {
 export const commandService = {
   /** Resolve once for review and compare again before scheduled admission. */
   resolve(userId: string, agentId: string, command: string): { localCommand: string; revision: string } {
+    refuseVaultAgent(agentId, 'Run commands')
     if (typeof command !== 'string' || !command.trim() || command.length > 64000 || command.includes('\0')) {
       throw new Error('The schedule command must contain 1–64000 characters and no null bytes.')
     }
@@ -429,6 +431,7 @@ export const commandService = {
     // aborted while still queued for the turn lock never started.
     let started = false
     try {
+      refuseVaultAgent(agentId, 'Run commands')
       const { agentDir } = localAgentService.locate(userId, agentId)
       // A schedule waits behind a chat turn, editor save or another command on
       // this agent rather than failing its occurrence; the signal ends the wait.
@@ -481,6 +484,10 @@ export const commandService = {
      */
     queueWhenBusy: boolean | YieldingAdmission = false
   ): Promise<CommandRunOutcome> {
+    if (isVaultAgent(agentId)) {
+      return { ok: false, name, localCommand: '', output: '', exitCode: null, aborted: false, busy: false,
+        error: new VaultAgentRefused('Run commands').message }
+    }
     let located: ReturnType<typeof localAgentService.locate>
     try {
       located = localAgentService.locate(userId, agentId)

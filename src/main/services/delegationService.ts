@@ -27,6 +27,7 @@ import { taskExecutionService } from './taskExecutionService'
 import type { RunScope } from './runExecutionService'
 import { installTaskRunnerHooks } from './taskRunnerBridge'
 import { createLogger } from '../logger/logger'
+import { isVaultAgent, refuseVaultAgent } from '../vault/isVaultAgent'
 
 export interface DelegationSession {
   scope: RunScope
@@ -132,6 +133,8 @@ function requiredString(value: unknown, name: string, max = 100_000): string {
  * sessions.
  */
 export function validateSession(session: DelegationSession) {
+  // A vault agent neither delegates nor is delegated to (D6).
+  refuseVaultAgent(session.agentId, 'Delegation')
   const { profileUserId, settingsUserId } = session.scope
   userActivation.requireActivated()
   if (getProfileScopeUserId() !== profileUserId) throw new Error('The active profile changed.')
@@ -184,6 +187,7 @@ function requireTarget(value: unknown): Target {
     ? typeof target.adapter !== 'string' || !target.adapter.trim()
     : target.adapter !== undefined
   if (adapterMismatch) throw new Error('Use the exact target returned by tasks_targets.')
+  refuseVaultAgent(target.agentId, 'Delegation')
   return target
 }
 
@@ -344,7 +348,7 @@ export const delegationService = {
     const { source } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
 
-    const local: TargetEntry[] = localAgentService.list(settingsUserId).agents.map((agent) => ({
+    const local: TargetEntry[] = localAgentService.list(settingsUserId).agents.filter((agent) => !isVaultAgent(agent.id)).map((agent) => ({
       target: { kind: agent.kind, agentId: agent.id },
       name: agent.name,
       folder: agent.path,
@@ -402,6 +406,7 @@ export const delegationService = {
    */
   async create(session: DelegationSession, input: Record<string, unknown>, signal?: AbortSignal, options: DelegationCreateOptions = {}): Promise<unknown> {
     signal?.throwIfAborted()
+    refuseVaultAgent((input.target as Partial<Target> | undefined)?.agentId, 'Delegation')
     const { task, parent } = validateSession(session)
     const { profileUserId, settingsUserId } = session.scope
 

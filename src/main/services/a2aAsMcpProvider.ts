@@ -23,6 +23,7 @@ import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { createLogger } from '../logger/logger'
 import { runNestedAgentTurn, SPECIALIST_WAITING } from './nestedAgentTurn'
 import { nanoid } from 'nanoid'
+import { isVaultAgent } from '../vault/isVaultAgent'
 
 const logger = createLogger('agent-tool')
 
@@ -203,6 +204,8 @@ export function buildAgentToolProviders(
 
   for (const agentId of agentIds) {
     if (agentId === excludedAgentId) continue
+    // A vault agent is never a tool of another session (D6).
+    if (isVaultAgent(agentId)) continue
     const located = agentService.findAgent(defaultUserId, profileUserId, agentId)
     // Skipped only when the row lacks what its driver needs. A folder agent
     // legitimately has no card URL (`cardUrl: null` at insert), so a bare

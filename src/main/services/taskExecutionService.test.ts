@@ -32,6 +32,7 @@ const { taskRepo } = await import('../db/tasks')
 const { chatRepo } = await import('../db/chats')
 const { messageRepo } = await import('../db/messages')
 const { agentOverrideRepo } = await import('../db/agents')
+const { resetVaultAgentsForTest } = await import('../vault/isVaultAgent')
 const SCOPE = { profileUserId: 'profile', settingsUserId: '__default__' }
 const TARGET = { kind: 'agent' as const, agentId: 'agent-one' }
 
@@ -67,6 +68,19 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); state.db?.close(); state.db = null })
 
 describe('desktop task start', () => {
+  it('refuses an agent in a vault before anything is created or dispatched', async () => {
+    const task = makeTask()
+    resetVaultAgentsForTest(['agent-one'])
+    try {
+      await expect(taskExecutionService.start(SCOPE, task.id, TARGET)).rejects.toThrow('not available for an agent in a vault')
+    } finally {
+      resetVaultAgentsForTest()
+    }
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(readiness).not.toHaveBeenCalled()
+    expect(chatRepo.list('profile')).toEqual([])
+  })
+
   it('refuses a future script router before model resolution or ordinary agent dispatch', async () => {
     const task = makeTask()
     state.db!.raw.prepare('UPDATE tasks SET router = ?, script = ? WHERE id = ?')

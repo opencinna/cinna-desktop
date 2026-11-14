@@ -95,7 +95,12 @@ import {
 import { isClaudeApproval, type LocalAgentRuntimeInput } from '../../../shared/engine'
 import { allowsAuto, type HandoverIgnoreCheck } from '../../../shared/handovers'
 import { handoverGit } from '../handoverGit'
-import { desktopStatePath, desktopStateService } from './desktopStateService'
+import { desktopStatePath, desktopStateService, emptyDesktopState } from './desktopStateService'
+import { isVaultAgent } from '../../vault/isVaultAgent'
+import { vaultRefOf, vaultService } from '../../vault/vaultService'
+import { hasHostCopy } from '../../vault/hostCopy'
+import { isSecureAgentsName, SECURE_AGENTS_DIR, SECURE_AGENTS_MARKER } from '../../../shared/vault/types'
+import type { AgentRow } from '../../db/agents'
 import { discoverBareAgents, kitFolderShape, resolveBareInstructionsFile } from './externalScan'
 import { isWithin } from './pathRules'
 import { setAllowedRootsProvider } from './openInService'
@@ -670,8 +675,13 @@ export const localAgentService = {
     logger.info('local agents configured')
   },
 
-  /** Every root and every folder agent in them. */
-  list(userId: string): LocalAgentListResult {
+  /**
+   * Every root and every folder agent in them. With `includeVault`, the vault
+   * agents too (`vault` set, `path` `''`): only for the list the renderer
+   * shows. Internal callers keep the default, so every agent they get has a
+   * folder.
+   */
+  list(userId: string, options: { includeVault?: boolean } = {}): LocalAgentListResult {
     // One look at the home, whose answer is reported; the accessors below then
     // read the roots as they stand. Going through `listRootRows` and
     // `listRoots` would look two more times, and only the first answer would
@@ -688,12 +698,17 @@ export const localAgentService = {
       // for as long as the user's largest workshop took to validate — and the
       // renderer refetches on every change push, so the bursts compounded.
       const result = scannerService.scanRootCached(userId, root)
-      agents.push(...result.agents)
+      // A vault agent's host copy (still there after Move to vault…) is not
+      // an agent of its own: same manifest id, and the vault owns the row.
+      agents.push(...result.agents.filter((agent) => !isVaultAgent(agent.id)))
       watcherService.watchRoot(root)
     }
     return {
       roots: agentsHomeService.rootDtos(userId),
-      agents: this.overlayEnabled(userId, agents),
+      // Vault agents come from their rows: they have no folder to scan.
+      agents: options.includeVault
+        ? [...this.overlayEnabled(userId, agents), ...vaultAgentDtos(userId, roots)]
+        : this.overlayEnabled(userId, agents),
       homeAccess,
       homeMissing,
       homePath
@@ -728,6 +743,23 @@ export const localAgentService = {
     return scannerService.scanBareAgentFolder(agentDir, root, rel === '' ? '.' : rel)
   },
 
+  /**
+   * The agent page's read: {@link get} for a folder agent, and for an agent in
+   * an Agent Vault its entry from the row (no folder here, `vault` set). Only
+   * for the renderer: internal callers use {@link get}, which refuses a vault
+   * agent so nothing reads a host path for it.
+   */
+  getForPage(userId: string, agentId: string): LocalAgentDto {
+    const row = typeof agentId === 'string' ? agentRepo.getOwned(userId, agentId) : undefined
+    const ref = row ? vaultRefOf(row) : null
+    if (row && ref) {
+      const roots = agentsHomeService.rootRows(userId)
+      const root = roots.find((candidate) => candidate.id === row.localRootId) ?? roots.find((candidate) => candidate.isDefault) ?? null
+      return vaultAgentDto(row, ref, root)
+    }
+    return this.get(userId, agentId)
+  },
+
   /** One agent, re-read from its folder. */
   get(userId: string, agentId: string): LocalAgentDto {
     const { root, agentDir } = this.locate(userId, agentId)
@@ -746,6 +778,10 @@ export const localAgentService = {
       throw new LocalAgentError('not_found', 'That is not a local agent.')
     }
     const row = agentRepo.getOwned(userId, agentId)
+    // The choke point every host-path consumer funnels through: a vault agent has no folder here.
+    if (row?.source === 'vault' || isVaultAgent(agentId)) {
+      throw new LocalAgentError('vault_agent', 'That agent is in a vault; its files are not on this computer.')
+    }
     if (!row || row.source !== FOLDER_AGENT_SOURCE || !row.localPath || !row.localRootId) {
       throw new LocalAgentError('not_found', 'That agent is no longer in your agents folder.')
     }
@@ -1528,7 +1564,11 @@ export const localAgentService = {
      * "nothing in this folder has an AGENT.md" — the true thing about it.
      */
     let reselecting: { rootId: string; label: string } | null = null
-    for (const root of roots) {
+    // Agent Vault disk images: never an agent folder, whatever is in there.
+    if (insideSecureAgents(path, roots)) {
+      refusal = `This folder is inside "${SECURE_AGENTS_DIR}", where Agent Vault keeps its encrypted disks. Pick a folder outside it.`
+    }
+    for (const root of refusal === null ? roots : []) {
       if (isWithin(root.path, path) || isWithin(path, root.path)) {
         if (root.path === path && root.kind === 'external') {
           reselecting = { rootId: root.id, label: root.label }
@@ -2378,3 +2418,67 @@ export const localAgentService = {
     return result
   }
 }
+
+/**
+ * True when `path` is, or is inside, a `SecureAgents/` folder that Cinna made
+ * (its marker is there) or that sits directly in one of the user's roots.
+ */
+function insideSecureAgents(path: string, roots: readonly AgentRootRow[]): boolean {
+  for (let dir = path; ; dir = dirname(dir)) {
+    if (isSecureAgentsName(basename(dir))) {
+      if (existsSync(join(dir, SECURE_AGENTS_MARKER))) return true
+      if (roots.some((root) => root.path === dirname(dir))) return true
+    }
+    if (dirname(dir) === dir) return false
+  }
+}
+
+/**
+ * The list entries of a user's vault agents, from their rows and the vault
+ * service's last known state. Nothing here reads a file: the agent's folder
+ * is in the vault.
+ */
+function vaultAgentDtos(userId: string, roots: readonly AgentRootRow[]): LocalAgentDto[] {
+  const home = roots.find((root) => root.isDefault) ?? roots[0]
+  return agentRepo.listVault(userId).flatMap((row) => {
+    const ref = vaultRefOf(row)
+    if (!ref) return []
+    const root = roots.find((candidate) => candidate.id === row.localRootId) ?? home
+    return [vaultAgentDto(row, ref, root ?? null)]
+  })
+}
+
+function vaultAgentDto(row: AgentRow, ref: { vaultId: string; engine: LocalAgentVaultEngine }, root: AgentRootRow | null): LocalAgentDto {
+  const manifestId = row.id.startsWith('folder:') ? row.id.slice('folder:'.length) : ''
+  return {
+    id: row.id,
+    manifestId,
+    identity: 'manifest',
+    kind: 'kit',
+    instructionsFile: null,
+    rootId: root?.id ?? row.localRootId ?? '',
+    rootPath: root?.path ?? '',
+    path: '',
+    slug: '',
+    name: row.name,
+    description: row.description ?? '',
+    enabled: row.enabled,
+    readiness: 'ok',
+    readinessReason: null,
+    contractStatus: 'unknown',
+    manifest: {},
+    publications: [],
+    runtime: null,
+    credentials: [],
+    commands: [],
+    status: null,
+    validation: { errors: [], warnings: [], infos: [] },
+    unbuilt: false,
+    desktop: desktopStateService.summarize(emptyDesktopState()),
+    stamps: {},
+    scannedAt: Date.now(),
+    vault: { vaultId: ref.vaultId, engine: ref.engine, state: vaultService.stateOf(ref.vaultId), hostCopy: hasHostCopy(row) }
+  }
+}
+
+type LocalAgentVaultEngine = NonNullable<LocalAgentDto['vault']>['engine']

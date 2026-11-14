@@ -1,0 +1,259 @@
+/**
+ * Agent Vault: what the renderer sees. Types and literals only (no imports
+ * from main); the wire protocols are in `protocol.ts`.
+ */
+import type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultState } from './protocol'
+
+export type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultState }
+
+/**
+ * The reserved folder in the default workshop root that holds every vault
+ * (`<root>/SecureAgents/<vaultId>/`). No walker enters it, no agent may be
+ * scaffolded under that name, and a root that already has one Cinna did not
+ * make is refused.
+ */
+export const SECURE_AGENTS_DIR = 'SecureAgents'
+/** Marker file Cinna writes into its own `SecureAgents/`; a folder without it is someone else's. */
+export const SECURE_AGENTS_MARKER = '.cinna-vaults'
+
+/** True for the reserved name, any case (`secureagents`, `SECUREAGENTS`, …). */
+export function isSecureAgentsName(name: string): boolean {
+  return name.trim().toLowerCase() === SECURE_AGENTS_DIR.toLowerCase()
+}
+
+/** A vault agent as `LocalAgentDto.vault` carries it. */
+export interface LocalAgentVaultInfo {
+  vaultId: string
+  state: VaultState
+  engine: VaultEngine
+  /** The agent's host folder is still there after the move (until **Delete host copy**). */
+  hostCopy?: boolean
+}
+
+/** Which backend serves vaults and what it can promise (README "capabilities"). */
+export interface VaultCapabilities {
+  /** The vault runs under its own kernel (a VM), not as another process of this OS. */
+  separateKernel: boolean
+  /** The disk key is wrapped by hardware (Secure Enclave). */
+  hardwareKey: boolean
+  /** Each gated action raises its own user-presence prompt. */
+  perActionPresence: boolean
+}
+
+export interface VaultAvailabilityDto {
+  availability: VaultAvailability
+  /** `apple-vz`, `fake`, `unavailable`, … */
+  backend: string
+  /** The helper's flavor once it said hello; anything but `release` shows a "Test helper" badge. */
+  flavor: HelperFlavor | null
+  capabilities: VaultCapabilities
+}
+
+/** One vault's status, by agent. */
+export interface VaultStatusDto {
+  agentId: string
+  vaultId: string
+  agentName: string
+  engine: VaultEngine
+  state: VaultState
+  /** Epoch ms the unlock window ends; null while a turn holds it open. */
+  until: number | null
+  sizeBytes: number
+  usedBytes: number | null
+  egress: EgressPolicy
+  createdAt: number
+  imageVersion: string
+  /** Set when `state` is `error`. */
+  error: string | null
+}
+
+/** `vault:state` push. */
+export interface VaultStateEvent {
+  agentId: string
+  vaultId: string
+  state: VaultState
+  until: number | null
+  error: string | null
+}
+
+export const VAULT_STATE_CHANNEL = 'vault:state'
+
+/**
+ * Readiness `vault_other_chat`: a vault agent in a chat that started before it
+ * moved into its vault. The same words in the composer row and in the refusal
+ * of a send there.
+ */
+export function vaultOtherChatReason(agentName: string): string {
+  return `This chat started before ${agentName} moved into its vault. Start a new chat to talk to it.`
+}
+
+/**
+ * Error codes a vault IPC answers with, as data (a thrown code does not cross
+ * IPC). `denied` = the user cancelled the helper's prompt.
+ */
+export type VaultErrorCode =
+  | 'unavailable'
+  | 'not_found'
+  | 'not_vault_agent'
+  | 'locked'
+  | 'denied'
+  | 'busy'
+  | 'invalid'
+  | 'tampered'
+  | 'internal'
+
+export type VaultResult<T> = { ok: true; data: T } | { ok: false; code: VaultErrorCode; message: string }
+
+// ---------------------------------------------------------------------------
+// Open terminal (gated): a shell inside the vault over a MessagePort
+
+/** Main → window: `open` once the shell is attached, its output, then exactly one `exit` or `error`. */
+export type VaultTerminalEvent =
+  | { type: 'open' }
+  | { type: 'data'; data: Uint8Array }
+  | { type: 'exit'; code: number | null }
+  | { type: 'error'; code: VaultErrorCode; message: string }
+
+/** Window → main: keystrokes, and the end of the session. */
+export type VaultTerminalCommand = { type: 'input'; data: string } | { type: 'close' }
+
+export interface VaultTerminalHandle {
+  write(data: string): void
+  close(): void
+}
+
+// ---------------------------------------------------------------------------
+// Move to vault… / Move out / secrets / files (phase 1 + 2 surface)
+
+export const VAULT_MOVE_PROGRESS_CHANNEL = 'vault:move-progress'
+
+/** Steps of Move to vault…, in order (README "Moving an existing agent"). */
+export const VAULT_MOVE_STEPS = [
+  'create',
+  'unlock',
+  'approve',
+  'runtime',
+  'copy',
+  'rebuild',
+  'credentials',
+  'check'
+] as const
+export type VaultMoveStep = (typeof VAULT_MOVE_STEPS)[number]
+
+export type VaultPrecheckKind =
+  | 'unsupported-engine'
+  | 'mac-command'
+  | 'macho-binary'
+  | 'absolute-symlink'
+  | 'host-mcp'
+  | 'schedule'
+  | 'delegation-grant'
+  | 'pending-task'
+  | 'pending-handover'
+  | 'service-credential'
+  | 'env-file'
+  | 'git-remote'
+  | 'time-machine'
+  | 'external-root'
+  | 'too-large'
+  | 'engine-login'
+  | 'python-lock'
+  | 'python-wheels'
+
+/** One finding of the pre-check. A `blocker` disables Move; `warning` and `info` are listed. */
+export interface VaultPrecheckItem {
+  kind: VaultPrecheckKind
+  severity: 'blocker' | 'warning' | 'info'
+  title: string
+  detail?: string
+  /** Folder-relative paths, at most 20. */
+  paths?: string[]
+}
+
+export interface VaultPrecheckDto {
+  agentId: string
+  agentName: string
+  engine: VaultEngine | null
+  folderPath: string
+  /** Bytes and files that would be copied (after exclusions). */
+  copyBytes: number
+  copyFiles: number
+  items: VaultPrecheckItem[]
+  canMove: boolean
+  /** What the engine login inside will use: an API key must be pasted when the host is on subscription login. */
+  needsApiKey: boolean
+  /** The secret that key becomes inside (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`); null when the engine's provider is unknown. */
+  apiKeyName: string | null
+}
+
+export interface VaultMoveOptions {
+  sizeBytes?: number
+  /** Claude: an Anthropic API key delivered with secrets.put (never stored by Cinna). */
+  apiKey?: string
+  /** Extra allowlisted hosts beyond the engine defaults. */
+  extraHosts?: string[]
+}
+
+/** `vault:move-progress` push: one step changed, or a chunk of its output. */
+export interface VaultMoveProgressEvent {
+  moveId: string
+  agentId: string
+  step: VaultMoveStep
+  status: 'running' | 'done' | 'failed' | 'skipped'
+  message?: string
+  /** Output to append under the step (rebuild, check). Never secrets. */
+  output?: string
+  /** On the final event of a failed move: the half-built vault is gone and the host folder untouched. */
+  rolledBack?: boolean
+  /** On success: what to rotate (README step 8). */
+  rotation?: VaultRotationItem[]
+  /**
+   * On a final `done` whose agent did move in but a later step failed (the
+   * list or the transcripts could not be refreshed): what went wrong. The move
+   * itself stands; nothing is rolled back.
+   */
+  warning?: string
+}
+
+export interface VaultRotationItem {
+  kind: 'service-credential' | 'env-key' | 'engine-login' | 'git-history'
+  name: string
+  detail?: string
+  /** Opens Manage for a Core credential record. */
+  credentialId?: string
+}
+
+/** A vault agent whose host folder still exists after a move, until the user deletes it. */
+export interface VaultHostCopyDto {
+  agentId: string
+  folderPath: string
+  inGitRepo: boolean
+  gitRemote: string | null
+  underTimeMachine: boolean
+}
+
+export interface VaultSecretListDto {
+  names: string[]
+}
+
+export interface VaultEngineAuthDto {
+  loggedIn: boolean
+  method: 'api_key' | 'oauth_token' | 'login' | null
+  /** The secret the engine signs in with in this vault (OpenCode's follows the agent's model provider); null: none. */
+  keyName: string | null
+}
+
+export interface VaultRuntimeDto {
+  engine: VaultEngine
+  version: string
+  kind: 'executable' | 'archive' | 'adapter'
+  /** The pinned version this app would install; differs ⇒ Update dependencies offers it. */
+  pinned: string | null
+}
+
+export interface VaultFileEntryDto {
+  name: string
+  type: 'file' | 'dir' | 'link'
+  size: number
+  mtime: number
+}

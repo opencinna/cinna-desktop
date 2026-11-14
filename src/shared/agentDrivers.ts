@@ -124,7 +124,8 @@ export interface AgentCapabilities {
  * The folder states (`credentials_needed`, `invalid`, `contract_too_new`) are
  * `LocalAgentReadiness`'s; the others are what a driver learns by asking:
  * `not_installed` / `not_logged_in` for an agent on a CLI, `unreachable` for
- * one behind a URL.
+ * one behind a URL, `vault_locked` for an agent in a locked Agent Vault,
+ * `vault_other_chat` for one asked in a chat that is not in its vault.
  */
 export type AgentReadinessState =
   | 'ok'
@@ -134,6 +135,16 @@ export type AgentReadinessState =
   | 'not_installed'
   | 'not_logged_in'
   | 'unreachable'
+  /** An Agent Vault agent whose vault is locked: the composer offers **Unlock**. */
+  | 'vault_locked'
+  /**
+   * Per chat, never on the agent list: an Agent Vault agent asked in a chat
+   * that started before it moved into its vault (the chat's words are on this
+   * computer, so the agent never answers there). The composer offers
+   * **Start new chat**. Main answers it on the chat detail (`chat:get`'s
+   * `vaultReadiness`) and refuses a send there before anything is saved.
+   */
+  | 'vault_other_chat'
 
 export interface AgentReadiness {
   state: AgentReadinessState

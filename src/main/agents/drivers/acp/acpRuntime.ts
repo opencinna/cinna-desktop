@@ -20,6 +20,12 @@ export interface AcpFolderView {
   /** `folderReadinessBlocksTurn` of the folder; absent is false. An `invalid` folder whose findings are only findings still runs. */
   blocksTurn?: boolean
   runtime: { engine?: unknown } | null
+  /**
+   * Set for an agent in an Agent Vault: `path` is the guest's agent folder,
+   * nothing of it is on this computer, and the driver takes the vault branch
+   * (`AcpDriverDeps.vault`) for the launcher, readiness and the turn's hold.
+   */
+  vault?: { vaultId: string; engine: import('../../../../shared/vault/protocol').VaultEngine }
 }
 
 /** Captured storage authority. External state never impersonates a folder. */

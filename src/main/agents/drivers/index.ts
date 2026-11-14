@@ -123,6 +123,11 @@ import { addonPolicies } from '../../services/addonDirectory/policy'
 import { pinnedSkillAutoFetch } from '../../services/pinnedSkillAutoFetch'
 import { engineCredentialEnv } from '../../services/skillRuntime'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
+import { isVaultAgent } from '../../vault/isVaultAgent'
+import { vaultAcpRuntime, vaultDriverDeps } from './acp/vaultRuntime'
+import { installVaultMoveDeps } from '../../vault/moveService'
+import { defaultRuntimeSource, hostRuntimeSource } from '../../vault/runtimeInstall'
+import { vaultBackend } from '../../vault/backend'
 
 const logger = createLogger('agent-driver')
 
@@ -1176,6 +1181,7 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
     }
   }
   if (agent.source === 'local' && agent.driverConfig?.launcher === 'custom') return customAgentService.runtime(userId, agent)
+  if (isVaultAgent(agent.id)) return vaultAcpRuntime(agent)
   const folder = readAcpFolder(userId, agent.id)
   if (!folder) return null
   return {
@@ -1186,6 +1192,31 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
     rememberGrant: (request) => { permissionGrantService.remember(folder.path, folder.kind, request); return true }
   }
 }
+
+// What Move to vault… captures from the host agent before its folder is in the vault.
+installVaultMoveDeps({
+  // A fake vault runs on this computer: the Claude this app resolved for itself, never the Linux download.
+  runtimeSource: () => vaultBackend().kind === 'fake'
+    ? hostRuntimeSource(async () => (await claudeBinaryService.ensure()).path)
+    : defaultRuntimeSource(),
+  // OpenCode's prompt is the same assembled kit document (it has no native-engine prompt of its own here).
+  instructions: (userId, agentId, engine) => folderSystemPrompt(engine === 'codex' ? 'codex' : 'claude')(userId, agentId, 'isolated') || null,
+  launchFacts: (userId, agentId) => {
+    const agent = localAgentService.get(userId, agentId)
+    let model: string | null = null
+    let provider: string | null = null
+    try {
+      const resolved = runtimeService.resolve(agent.runtime, providerService.listMerged())
+      model = resolved.modelId
+      provider = resolved.credentialType
+    } catch {
+      model = null
+    }
+    return { model, provider, approval: desktopStateService.read(agent.path, agent.kind).claudeApproval ?? DEFAULT_CLAUDE_APPROVAL }
+  },
+  hostClaudeOnSubscription: async () => (await claudeAuthService.resolve()).mode !== 'api_key',
+  defaultEngine: () => defaultEngineService.current()
+})
 
 /**
  * The agent's workspace root: the folder a turn's folder view names (what
@@ -1291,7 +1322,8 @@ export function acpLauncherFor(id: AcpLauncherId): AcpLauncher | undefined {
  * are on: its attachments go into the chat's own folder.
  */
 export function attachmentUploadsDir({ agent, runtime, plan }: Pick<AcpPromptTurn, 'agent' | 'runtime' | 'plan'>): string | null {
-  if (plan.spec.remote) return null
+  // A vault agent's attachments are never copied to this disk (D23): inlined as text.
+  if (plan.spec.remote || isVaultAgent(agent.id)) return null
   if (isChatConductor(agent)) {
     const context = conductorContext(agent)
     return context.toolPolicy === 'workspace' ? chatUploadsDir(context.path) : null
@@ -1300,7 +1332,10 @@ export function attachmentUploadsDir({ agent, runtime, plan }: Pick<AcpPromptTur
 }
 
 export const acpDriver = createAcpDriver({
+  vault: vaultDriverDeps(),
   prepareCredentials: async (agent, plan) => {
+    // A vault agent's credentials are delivered into the vault, never as a file here.
+    if (isVaultAgent(agent.id)) return plan
     if (agent.source !== 'folder' || isDevelopmentAgent(agent) || isChatConductor(agent) || plan.spec.remote) return plan
     const { serviceCredentialService } = await import('../../services/serviceCredentials/service')
     const prepared = await serviceCredentialService.prepare(agent.id)
@@ -1329,7 +1364,7 @@ export const acpDriver = createAcpDriver({
   // Read again under the turn lock: a kit agent's folder can be renamed while
   // a turn planned in it waits behind the rename.
   currentFolderPath: (userId, agent) => {
-    if (isChatConductor(agent) || isDevelopmentAgent(agent)) return undefined
+    if (isChatConductor(agent) || isDevelopmentAgent(agent) || isVaultAgent(agent.id)) return undefined
     if (agent.source === 'local' && agent.driverConfig?.launcher === 'custom') return undefined
     try {
       return localAgentService.locate(userId, agent.id).agentDir

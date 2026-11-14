@@ -11,6 +11,7 @@ import { migrateChatRouter } from './chat-router'
 import { migrateChatRunResults } from './chat-run-results'
 import { migrateChatOrigin } from './chat-origin'
 import { migrateChatGuidedBuild } from './chat-guided-build'
+import { migrateChatVault } from './chat-vault'
 import { migrateInflightTurns } from './inflight-turns'
 import { migrateRetireChatMirror } from './retire-chat-mirror'
 import { migrateMessages } from './messages'
@@ -158,6 +159,8 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateChatOrigin(sqlite)
   // `chats.guided_build`; a column with a default, no DML.
   migrateChatGuidedBuild(sqlite)
+  // `chats.vault_id` (Agent Vault); a nullable column, no DML.
+  migrateChatVault(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)

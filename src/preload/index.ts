@@ -104,6 +104,25 @@ import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../sh
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
 import {
+  VAULT_MOVE_PROGRESS_CHANNEL,
+  VAULT_STATE_CHANNEL,
+  type VaultAvailabilityDto,
+  type VaultEngineAuthDto,
+  type VaultFileEntryDto,
+  type VaultHostCopyDto,
+  type VaultMoveOptions,
+  type VaultMoveProgressEvent,
+  type VaultPrecheckDto,
+  type VaultResult,
+  type VaultRuntimeDto,
+  type VaultSecretListDto,
+  type VaultStateEvent,
+  type VaultStatusDto,
+  type VaultTerminalCommand,
+  type VaultTerminalEvent,
+  type VaultTerminalHandle
+} from '../shared/vault/types'
+import {
   BRAND_THEME_CHANGED_CHANNEL,
   BRAND_THEME_GET_CHANNEL,
   BRAND_THEME_GET_FOR_PROFILE_CHANNEL,
@@ -345,6 +364,14 @@ export interface ChatData {
   sortKey?: number | null
   /** A blank kit agent's guided first build, fixed when main bound the chat. */
   guidedBuild?: boolean
+  /** The Agent Vault this chat's transcript lives in; null for an ordinary chat. On the wire (the row is spread). */
+  vaultId?: string | null
+  /**
+   * Detail reads only (`chat:get`): `vault_other_chat` when the chat's agent is
+   * in a vault and this chat is not (it started before the agent moved in).
+   * Shown and refused in place of the agent's own readiness; null otherwise.
+   */
+  vaultReadiness?: AgentReadiness | null
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -526,6 +553,87 @@ export interface McpProviderData {
 }
 
 const api = {
+  /**
+   * Agent Vault. Every call answers a `VaultResult` (failures as data with a
+   * code; `denied` = the helper's prompt was cancelled), except
+   * `availability`, which always answers.
+   */
+  vault: {
+    availability: (): Promise<VaultAvailabilityDto> => ipcRenderer.invoke('vault:availability'),
+    list: (): Promise<VaultResult<VaultStatusDto[]>> => ipcRenderer.invoke('vault:list'),
+    status: (agentId: string): Promise<VaultResult<VaultStatusDto>> => ipcRenderer.invoke('vault:status', agentId),
+    /** Raises the helper's own presence prompt. */
+    unlock: (agentId: string): Promise<VaultResult<VaultStatusDto>> => ipcRenderer.invoke('vault:unlock', agentId),
+    lock: (agentId: string): Promise<VaultResult<VaultStatusDto>> => ipcRenderer.invoke('vault:lock', agentId),
+    /** Gated: prompts. Grows the disk at the next unlock; never below what is used. */
+    setSize: (agentId: string, sizeBytes: number): Promise<VaultResult<VaultStatusDto>> => ipcRenderer.invoke('vault:set-size', agentId, sizeBytes),
+    /** Gated: prompts. The whole allowlist, host names (`*.example.com` for subdomains). */
+    setEgress: (agentId: string, hosts: string[]): Promise<VaultResult<VaultStatusDto>> => ipcRenderer.invoke('vault:set-egress', agentId, hosts),
+    /** Gated: prompts. Deletes the vault and the agent with it (no backup). */
+    destroy: (agentId: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:destroy', agentId),
+    onState: (cb: (event: VaultStateEvent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: VaultStateEvent): void => cb(payload)
+      ipcRenderer.on(VAULT_STATE_CHANNEL, listener)
+      return () => { ipcRenderer.removeListener(VAULT_STATE_CHANNEL, listener) }
+    },
+    /** Move to vault… step 1: lists what will not work inside. Changes nothing. */
+    precheck: (agentId: string): Promise<VaultResult<VaultPrecheckDto>> => ipcRenderer.invoke('vault:precheck', agentId),
+    /** Starts the move; progress arrives on `onMoveProgress`. Prompts twice (unlock, move-in). */
+    moveIn: (agentId: string, options: VaultMoveOptions): Promise<VaultResult<{ moveId: string }>> => ipcRenderer.invoke('vault:move-in', agentId, options),
+    cancelMove: (moveId: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:cancel-move', moveId),
+    onMoveProgress: (cb: (event: VaultMoveProgressEvent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: VaultMoveProgressEvent): void => cb(payload)
+      ipcRenderer.on(VAULT_MOVE_PROGRESS_CHANNEL, listener)
+      return () => { ipcRenderer.removeListener(VAULT_MOVE_PROGRESS_CHANNEL, listener) }
+    },
+    /** The host folder left behind by a finished move, or null once deleted. */
+    hostCopy: (agentId: string): Promise<VaultResult<VaultHostCopyDto | null>> => ipcRenderer.invoke('vault:host-copy', agentId),
+    /** Deletes the host folder; `typedName` must equal the agent name. Not reversible. */
+    deleteHostCopy: (agentId: string, typedName: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:delete-host-copy', agentId, typedName),
+    /** Gated: prompts. Exports the whole folder back to the workshop root as a normal local agent and destroys the vault. */
+    moveOut: (agentId: string): Promise<VaultResult<{ folderPath: string }>> => ipcRenderer.invoke('vault:move-out', agentId),
+    secrets: (agentId: string): Promise<VaultResult<VaultSecretListDto>> => ipcRenderer.invoke('vault:secrets', agentId),
+    /** The value goes into the vault; Cinna keeps nothing. */
+    setSecret: (agentId: string, name: string, value: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:set-secret', agentId, name, value),
+    deleteSecret: (agentId: string, name: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:delete-secret', agentId, name),
+    engineAuth: (agentId: string): Promise<VaultResult<VaultEngineAuthDto>> => ipcRenderer.invoke('vault:engine-auth', agentId),
+    runtimes: (agentId: string): Promise<VaultResult<VaultRuntimeDto[]>> => ipcRenderer.invoke('vault:runtimes', agentId),
+    /** Gated: prompts. Installs the pinned runtimes and runs uv sync with the install hosts open. Output on onMoveProgress-like stream: `vault:move-progress` with step 'rebuild'. */
+    updateDependencies: (agentId: string): Promise<VaultResult<{ moveId: string }>> => ipcRenderer.invoke('vault:update-dependencies', agentId),
+    listFiles: (agentId: string, path: string): Promise<VaultResult<VaultFileEntryDto[]>> => ipcRenderer.invoke('vault:list-files', agentId, path),
+    /** Gated: prompts. Saves a file or folder from the vault through a save dialog; resolves with where it went, or null if cancelled. */
+    exportFile: (agentId: string, path: string): Promise<VaultResult<{ savedTo: string } | null>> => ipcRenderer.invoke('vault:export-file', agentId, path),
+    /**
+     * Gated: prompts. A shell inside the vault over a MessagePort: `onEvent`
+     * gets `open`, the shell's output, then one `exit` or `error`, after which
+     * the handle is inert. `close()` ends the shell.
+     */
+    openTerminal: (agentId: string, onEvent: (event: VaultTerminalEvent) => void): VaultTerminalHandle => {
+      const channel = new MessageChannel()
+      let ended = false
+      const end = (): void => {
+        ended = true
+        channel.port1.onmessage = null
+        channel.port1.close()
+      }
+      channel.port1.onmessage = (event) => {
+        if (ended) return
+        const frame = event.data as VaultTerminalEvent
+        if (!frame || typeof frame !== 'object' || typeof frame.type !== 'string') return
+        if (frame.type === 'exit' || frame.type === 'error') end()
+        onEvent(frame)
+      }
+      ipcRenderer.postMessage('vault:open-terminal', agentId, [channel.port2])
+      return {
+        write: (data) => { if (!ended) channel.port1.postMessage({ type: 'input', data } satisfies VaultTerminalCommand) },
+        close: () => {
+          if (ended) return
+          channel.port1.postMessage({ type: 'close' } satisfies VaultTerminalCommand)
+          end()
+        }
+      }
+    }
+  },
   serviceCredentials: {
     helper: (id: string): Promise<ServiceCredentialResult<{ needsUpdate: boolean; stamp: { mtimeMs: number; size: number; hash: string } | null } | null>> => ipcRenderer.invoke('service-credentials:helper', id),
     updateHelper: (id: string, stamp: { mtimeMs: number; size: number; hash: string }): Promise<ServiceCredentialResult<void>> => ipcRenderer.invoke('service-credentials:update-helper', id, stamp),
