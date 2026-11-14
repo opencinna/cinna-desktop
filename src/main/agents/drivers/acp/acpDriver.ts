@@ -113,6 +113,7 @@ import { isSlashCommand, turnContextBlock, turnPromptText } from '../../../servi
 import { expandPluginCommand, type PluginCommandTemplate } from '../../../services/pluginCommandExpansion'
 import { createAcpActivityStopper } from './acpActivityStop'
 import { createToolStallWatch, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage, type ToolStallWatch } from './acpToolStall'
+import { ACP_SILENT_TURN_NOTICE_MS, createSilentTurnWatch, silentTurnEngineName, silentTurnNotice } from './acpSilentTurn'
 import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
 import {
   createSessionObservation,
@@ -300,6 +301,8 @@ export interface AcpDriverDeps {
    * turns the watch on for one that does not. Tests only.
    */
   toolStallMs?: number
+  /** Override the silence before a prompted turn's "no reply yet" notice ({@link ACP_SILENT_TURN_NOTICE_MS}). Tests only. */
+  silentTurnNoticeMs?: number
   /** Override the wait for a `session/cancel` acknowledgement. Tests only. */
   cancelGraceMs?: number
   /** Override the wait for a context measurement ({@link ACP_CONTEXT_USAGE_TIMEOUT_MS}). Tests only. */
@@ -1395,6 +1398,18 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     steeringSettled = true
   }
 
+  // The "no reply yet" notice: only the first prompt's first response, never
+  // stopping anything (see `acpSilentTurn.ts`).
+  const silentMs = deps.silentTurnNoticeMs ?? ACP_SILENT_TURN_NOTICE_MS
+  const silentWatch = createSilentTurnWatch({
+    ms: silentMs,
+    onSilent: () => {
+      if (!turn.open || input.signal.aborted) return
+      const engine = silentTurnEngineName(ctx.launcherId, plan.spec.vault?.engine, runtime.type === 'external' ? runtime.name : agent.name)
+      logger.warn('an ACP agent has sent nothing since its prompt', { agentId: agent.id, chatId, sessionId, launcher: ctx.launcherId, afterMs: silentMs })
+      emit(stream.note(silentTurnNotice(engine, silentMs)).message)
+    }
+  })
   /**
    * Both ways a turn is told to stop, in one signal.
    *
@@ -1437,6 +1452,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    * swallowed rather than reported.
    */
   const askAgentToStop = (): void => {
+    silentWatch.stop()
     closeSteering()
     turn.open = false
     // **Only the user's Stop, not the ceiling.** The ceiling shares this
@@ -1698,6 +1714,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // compare against.
         if (turn.replaying) { aliasReplayChild(notification); return }
         stallWatch.heard()
+        silentWatch.heard()
         // OpenCode child frames held for want of a lane, released by this one: folded after it.
         const released = ctx.launcherId === 'opencode'
           ? opencodeChildrenFor(ctx.activity, live, notification.sessionId, { chatId, agentId: agent.id }).observe(notification)
@@ -1727,10 +1744,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       },
       onPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
         stallWatch.heard()
+        silentWatch.heard()
         return answerPermission(deps, ctx, { stream, emit, turn }, params).finally(stallWatch.heard)
       },
       onElicitation: (params: CreateElicitationRequest): Promise<CreateElicitationResponse> => {
         stallWatch.heard()
+        silentWatch.heard()
         return answerElicitation(deps, ctx, { stream, emit, turn }, params).finally(stallWatch.heard)
       },
       onExtNotification: (method: string, params: Record<string, unknown>): void => {
@@ -1742,7 +1761,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           return
         }
         if (method === AUTH_STATUS_METHOD) noteConnectionAuth(live, params)
-        if (sessionId && params.sessionId === sessionId) liveBackground = backgroundTaskIds(method, params) ?? liveBackground
+        if (sessionId && params.sessionId === sessionId) {
+          silentWatch.heard()
+          liveBackground = backgroundTaskIds(method, params) ?? liveBackground
+        }
         const update = stream.applyExt(method, params)
         // Claude's raw stream: the session's own frames only (a subagent's
         // arrive under the parent's id and say so themselves).
@@ -2004,8 +2026,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         { sessionId, prompt },
         cancelRequested,
         agent.id,
-        () => { ctx.telemetry?.started(); armSteering() }
-      ).finally(settleSteering)
+        () => { ctx.telemetry?.started(); armSteering(); silentWatch.start() }
+      ).finally(() => { silentWatch.stop(); return settleSteering() })
       const answered = (reply: NonNullable<typeof answer>, on: AcpConnection, session: string): void => {
         if (cancelSent) {
           cancelSent = false
@@ -2186,6 +2208,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     conductor?.close()
     clearTimeout(ceiling)
     stallWatch.stop()
+    silentWatch.stop()
     startupController.abort()
     input.signal.removeEventListener('abort', onAbort)
     try { runtime.validate(chatId) } catch { deps.pool.retire(agent.id) }

@@ -35,6 +35,7 @@ import { ACP_FOLDER_MOVED, ACP_FOLLOW_UP_EXITED, ACP_VAULT_ENGINE_CHANGED, DENIA
 import { createAcpProcessPool } from './acpProcessPool'
 import { SHELL_LEAD_IN } from '../../../services/pluginCommandExpansion'
 import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
+import { silentTurnNotice } from './acpSilentTurn'
 import { turnLock } from '../../../services/localAgents/turnLock'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLaunchContext, AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
@@ -5127,4 +5128,141 @@ describe('an Antigravity turn that ends on its exhausted-quota notice', () => {
     expect(result.error?.code).toBeUndefined()
     expect(textOf(result)).toBe('Checking again.')
   })
+})
+
+describe('a prompted turn whose engine sends nothing at all', () => {
+  // Antigravity with its provider unreachable sends no update and never
+  // answers the prompt; the user watched a bare spinner. One notice, never a
+  // stop. Real timers over the fake process, as the stall tests: the silence
+  // is shortened to 300 ms (and the text says so).
+  const SILENT = { silentTurnNoticeMs: 300, turnCeilingMs: 60_000 }
+  const NOTE = silentTurnNotice('Antigravity', 300)
+  const reply = (text: string): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }
+  })
+  /** The notice deltas the turn posted live. */
+  const noted = (w: World, text = NOTE): number =>
+    w.events.filter((event) => event.type === 'delta' && event.kind === 'notice' && event.text === text).length
+  const inNotices = (notices: unknown, text = NOTE): number =>
+    (notices as unknown[]).filter((notice) => JSON.stringify(notice).includes(text)).length
+
+  it('notes once after the silence, does not stop the turn, and a later reply still lands', async () => {
+    // Mutation: drop `silentWatch.start()` → no notice.
+    const w = world({ launcher: 'antigravity', script: { prompt: { emit: [{ kind: 'delay', ms: 900 }, reply('Finally here.')] } }, deps: SILENT })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(result.taskState).not.toBe('canceled')
+    expect(result.text).toContain('Finally here.')
+    expect(noted(w)).toBe(1)
+    expect(inNotices(result.notices)).toBe(1)
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+    expect(w.fake.received('session/prompt')).toHaveLength(1)
+  })
+
+  it('names the turn’s engine', async () => {
+    const w = world({ launcher: 'codex', script: { prompt: { emit: [{ kind: 'delay', ms: 600 }] } }, deps: SILENT })
+    await w.run()
+    expect(noted(w, silentTurnNotice('Codex', 300))).toBe(1)
+  })
+
+  it.each([
+    ['a thought', { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Hmm.' } }],
+    ['a usage update', { sessionUpdate: 'usage_update', used: 10, size: 100 }],
+    ['a plan', { sessionUpdate: 'plan', entries: [] }]
+  ])('never notes once %s was heard, however long the silence after', async (_name, update) => {
+    // Mutation: drop `silentWatch.heard()` from `onUpdate` → the notice comes.
+    const w = world({
+      launcher: 'antigravity',
+      script: { prompt: { emit: [{ kind: 'update', update }, { kind: 'delay', ms: 900 }, reply('Done.')] } },
+      deps: SILENT
+    })
+    const result = await w.run()
+    expect(result.text).toContain('Done.')
+    expect(noted(w)).toBe(0)
+    expect(inNotices(result.notices)).toBe(0)
+  })
+
+  it('takes an extension notification naming the session as heard', async () => {
+    // Mutation: drop `silentWatch.heard()` from `onExtNotification` → the notice comes.
+    const w = world({
+      launcher: 'antigravity',
+      script: { prompt: { emit: [{ kind: 'notify', method: '_probe/status', params: { sessionId: 'ses_fake' } }, { kind: 'delay', ms: 900 }, reply('Done.')] } },
+      deps: SILENT
+    })
+    const result = await w.run()
+    expect(result.text).toContain('Done.')
+    expect(noted(w)).toBe(0)
+  })
+
+  it('takes a parked ask as heard', async () => {
+    // Mutation: drop `silentWatch.heard()` from `onPermission` → the notice comes while the ask waits.
+    const w = world({
+      launcher: 'antigravity',
+      script: { prompt: { emit: [{ kind: 'permission', toolCall: { toolCallId: 'call_p', kind: 'edit', status: 'pending' } }, reply('Written.')] } },
+      deps: SILENT
+    })
+    const running = w.run()
+    const asked = await askedFor(w)
+    await settle(700)
+    w.driver.respond(
+      { requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' },
+      { kind: 'permission', reply: 'once' }
+    )
+    const result = await running
+    expect(result.text).toContain('Written.')
+    expect(noted(w)).toBe(0)
+  })
+
+  it('says nothing for a turn that ends silently before the notice, then or later', async () => {
+    // Mutation: drop the stops on the prompt's end and in the turn's `finally` → the notice posts after the turn.
+    const w = world({ launcher: 'antigravity', script: { prompt: {} }, deps: SILENT })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    await settle(600)
+    expect(noted(w)).toBe(0)
+  })
+
+  it('says nothing after the user’s Stop, while the agent takes its time to stop', async () => {
+    // Mutation: drop the stop in `askAgentToStop` (and the onSilent guard) → the notice posts inside the cancel's grace.
+    const controller = new AbortController()
+    const w = world({
+      launcher: 'antigravity',
+      script: { prompt: { emit: [{ kind: 'awaitCancel' }, { kind: 'delay', ms: 700 }], response: { stopReason: 'cancelled' } } },
+      deps: { ...SILENT, cancelGraceMs: 2_000 }
+    })
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => w.fake.received('session/prompt').length > 0 || undefined, 'the prompt')
+    controller.abort()
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    await settle(600)
+    expect(noted(w)).toBe(0)
+  })
+
+  it('does not watch the stall retry’s prompt', async () => {
+    const bare: FakeAcpStep = { kind: 'update', update: { sessionUpdate: 'tool_call', toolCallId: 'call_w', title: 'write', kind: 'edit', status: 'pending', rawInput: {} } }
+    const w = world({
+      script: { prompt: { sequence: [{ emit: [bare, { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } }, { emit: [{ kind: 'delay', ms: 900 }, reply('Report written.')] }] } },
+      deps: { ...SILENT, toolStallMs: 300 }
+    })
+    const result = await w.run()
+    expect(result.text).toContain('Report written.')
+    expect(w.fake.received('session/prompt')).toHaveLength(2)
+    expect(noted(w, silentTurnNotice('OpenCode', 300))).toBe(0)
+  })
+
+  it('does not watch a turn the agent starts on its own', async () => {
+    const w = followUpWorld({
+      script: thenOnItsOwn([say('Background.', 'background'), { kind: 'delay', ms: 900 }, say(' More.', 'background')]),
+      deps: { ...SILENT, followUpQuietMs: 1_500 }
+    })
+    await w.run({ runScope: RUN_SCOPE })
+    const request = await waitFor(() => w.requests[0], 'the follow-up request')
+    const f = followUpIo()
+    const result = await request.run(f.io)
+    // The silence fell inside the follow-up.
+    expect(textOf(result)).toContain('Background. More.')
+    expect(f.events.filter((event) => event.type === 'delta' && event.kind === 'notice')).toHaveLength(0)
+  }, 10_000)
 })
