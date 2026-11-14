@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, writeFileSync, type Dirent } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync, type Dirent } from 'node:fs'
 import { join, relative } from 'node:path'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { createFolderAgent } from '../fixtures/seed'
@@ -42,11 +42,11 @@ test.use({ env: { CINNA_VAULT_FAKE: '1' } })
  * Skip onboarding, a scripted Claude, and a kit folder agent on the Claude
  * engine in the default agents home, as the scaffold makes it (no `uv.lock`).
  */
-async function arrangeClaudeAgent(cinna: CinnaApp): Promise<LocalAgentDto> {
+async function arrangeClaudeAgent(cinna: CinnaApp, reply = REPLY): Promise<LocalAgentDto> {
   await cinna.skipOnboarding()
   const fake = writeFakeClaudeCli(cinna, {
     models: [{ value: 'default', displayName: 'Default', description: 'fake', supportsAutoMode: true }],
-    reply: REPLY
+    reply
   })
   await cinna.page.evaluate((path) => window.api.settings.set('localAgentsClaudePath', path), fake.path)
   // The default agents home: a vault moves only agents in the main agents folder.
@@ -360,4 +360,43 @@ test('V6 a chat from before the move keeps showing its own transcript while the 
   await reopenPreMoveChat(cinna)
   await expect(cinna.page.getByTestId('vault-locked-chat')).toHaveCount(0)
   await expect(cinna.page.getByText(REPLY, { exact: true })).toBeVisible()
+})
+
+test('V7 a file the vault agent names links, previews from inside the vault, and downloads through the export', async ({ cinna }) => {
+  test.setTimeout(MOVE_TIMEOUT + 120_000)
+  const agent = await arrangeClaudeAgent(cinna, 'Saved `notes/vault-report.md` for you.')
+  // Moved in with the folder, so it exists only inside the vault afterwards.
+  mkdirSync(join(agent.path, 'notes'), { recursive: true })
+  writeFileSync(join(agent.path, 'notes', 'vault-report.md'), '# Vault report\n\nWritten inside the vault.\n')
+  await moveOverIpc(cinna, agent.id)
+  const page = cinna.page
+  await openSecurity(cinna)
+  await page.getByRole('button', { name: 'Start chat', exact: true }).click()
+  const box = page.getByRole('combobox', { name: 'Type a message...' })
+  await box.fill('Write the report.')
+  await box.press('Enter')
+
+  // The span names a file in the vault's agent folder: it links, and the preview reads it from inside.
+  const link = page.locator('code.file-ref', { hasText: 'notes/vault-report.md' })
+  await expect(link).toBeVisible({ timeout: 60_000 })
+  await link.click()
+  const preview = page.locator('.app-modal-panel')
+  await expect(preview.getByRole('heading', { name: 'Vault report' })).toBeVisible({ timeout: 30_000 })
+  await expect(preview.getByText('Written inside the vault.')).toBeVisible()
+
+  // Only what the vault offers: no Open, Open folder, Pin or Publish.
+  await preview.getByRole('button', { name: 'More file actions' }).click()
+  const menu = page.getByRole('menu', { name: 'File actions' })
+  await expect(menu.getByRole('menuitem')).toHaveText(['Download', 'Copy content'])
+
+  // Download: the fake backend approves at once; the save dialog is answered here.
+  const savedTo = join(cinna.sandbox.home, 'Downloads', 'vault-report.md')
+  mkdirSync(join(cinna.sandbox.home, 'Downloads'), { recursive: true })
+  await cinna.electronApp.evaluate(({ dialog }, path) => {
+    dialog.showSaveDialog = (async () => ({ canceled: false, filePath: path })) as typeof dialog.showSaveDialog
+  }, savedTo)
+  await menu.getByRole('menuitem', { name: 'Download' }).click()
+  await expect(menu).toHaveCount(0, { timeout: 30_000 })
+  await expect.poll(() => (existsSync(savedTo) ? readFileSync(savedTo, 'utf8') : null), { timeout: 30_000 }).toBe('# Vault report\n\nWritten inside the vault.\n')
+  await expect(preview.getByRole('alert')).toHaveCount(0)
 })

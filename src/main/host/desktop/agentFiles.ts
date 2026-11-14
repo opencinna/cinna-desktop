@@ -9,6 +9,8 @@ import { createAgentFileService } from '../../services/agentFiles/agentFileServi
 import { consentDialogOptions, createConsentRegistry, type ConsentPrompt } from '../../services/agentFiles/consent'
 import { findDefaultEditor } from '../../services/agentFiles/openStrategy'
 import { createBrowserLauncher } from '../../services/agentFiles/openInBrowser'
+import { createVaultFileSource } from '../../services/agentFiles/vaultFileSource'
+import { vaultService } from '../../vault/vaultService'
 
 /**
  * Opens a file in the user's default web browser — the `https:` handler, which
@@ -46,7 +48,15 @@ export const agentFileService = createAgentFileService({
   openPath: (path) => shell.openPath(path),
   openInTextEditor,
   showItemInFolder: (path) => shell.showItemInFolder(path),
-  openInBrowser
+  openInBrowser,
+  // A vault agent's files, reached only through the vault (settings-scoped, like folder agents).
+  vaultSource: createVaultFileSource({
+    locateVault: (agentId) => {
+      const { ref } = vaultService.refFor(getSettingsScopeUserId(), agentId)
+      return { vaultId: ref.vaultId, agentDir: vaultService.agentCwd(ref.vaultId) }
+    },
+    files: () => vaultService.files()
+  })
 })
 
 /** Ask with a native dialog attached to the window that asked, so it cannot be skipped. */

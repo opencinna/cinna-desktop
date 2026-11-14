@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentFileRef } from '../../../shared/agentFiles'
+import type { AgentFileActions, AgentFileRef } from '../../../shared/agentFiles'
 import type { MessageAttachment } from '../../../shared/attachments'
 
 const api = vi.hoisted(() => {
@@ -8,7 +8,9 @@ const api = vi.hoisted(() => {
     readPreview: vi.fn(),
     open: vi.fn(),
     reveal: vi.fn(),
-    openInBrowser: vi.fn()
+    openInBrowser: vi.fn(),
+    readImage: vi.fn(),
+    download: vi.fn()
   }
   const files = { readPreview: vi.fn() }
   Object.assign(window, { api: { agentFiles, files } })
@@ -264,6 +266,115 @@ describe('header actions', () => {
     await store().revealAgentFile()
     expect(api.agentFiles.authorize).not.toHaveBeenCalled()
     expect(store().actionError).toBeNull()
+  })
+})
+
+/** A reference whose source previews (images too) and downloads, and nothing else: a vault's. */
+const VAULT: AgentFileActions = {
+  preview: true, previewImages: true, open: false, reveal: false, openInBrowser: false,
+  readText: false, pin: false, publish: false, run: false, reference: false, download: true, copyPath: false
+}
+const vaultRef = (over: Partial<AgentFileRef> = {}): AgentFileRef =>
+  ref({ path: '/vault/agent/out/report.md', displayPath: 'out/report.md', text: 'out/report.md', actions: VAULT, ...over })
+
+describe('a reference that carries its actions', () => {
+  it('previews an image from its bytes when the source previews images, and a host image not at all', async () => {
+    api.agentFiles.readImage.mockResolvedValue({ success: true, dataUrl: 'data:image/png;base64,AA==', mimeType: 'image/png' })
+    await store().openAgentFile('folder:v', vaultRef({ path: '/vault/agent/chart.png', displayPath: 'chart.png' }))
+    expect(api.agentFiles.readImage).toHaveBeenCalledWith({ agentId: 'folder:v', path: '/vault/agent/chart.png' })
+    expect(api.agentFiles.readPreview).not.toHaveBeenCalled()
+    expect(store()).toMatchObject({ kind: 'image', isLoading: false, image: { url: 'data:image/png;base64,AA==' } })
+
+    api.agentFiles.readImage.mockClear()
+    await store().openAgentFile('folder:a', ref({ path: '/agent/chart.png', displayPath: 'chart.png' }))
+    expect(api.agentFiles.readImage).not.toHaveBeenCalled()
+    expect(store()).toMatchObject({ kind: null, notice: 'unsupported' })
+  })
+
+  it('keeps a locked failure as its code, for the body to offer Unlock, and reads again in place after it', async () => {
+    api.agentFiles.readPreview.mockResolvedValue({ success: false, code: 'locked', error: 'Unlock the vault to use this file.' })
+    await store().openAgentFile('folder:v', vaultRef())
+    const seq = store().openSeq
+    expect(store()).toMatchObject({ errorCode: 'locked', failedStep: 'preview', isLoading: false })
+    api.agentFiles.readPreview.mockResolvedValue({ success: true, text: '# Report', truncated: false })
+    await store().reloadAgentFile()
+    expect(store()).toMatchObject({ text: '# Report', error: null, errorCode: null, kind: 'markdown', openSeq: seq })
+  })
+
+  it('opens a folder its source cannot reveal in the preview, with a folder notice and no reveal', async () => {
+    await store().openAgentFile('folder:v', vaultRef({ kind: 'dir', path: '/vault/agent/out', displayPath: 'out' }))
+    expect(api.agentFiles.reveal).not.toHaveBeenCalled()
+    expect(store()).toMatchObject({ target: { type: 'agentFile' }, notice: 'folder', isLoading: false })
+  })
+
+  it('downloads a file or folder, pending until main answers, and keeps a refusal as the action error', async () => {
+    let answer: (value: unknown) => void = () => {}
+    api.agentFiles.readPreview.mockResolvedValue({ success: true, text: 'x', truncated: false })
+    api.agentFiles.download.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+    await store().openAgentFile('folder:v', vaultRef())
+    const pending = store().downloadAgentFile()
+    await vi.waitFor(() => expect(api.agentFiles.download).toHaveBeenCalledWith({ agentId: 'folder:v', path: '/vault/agent/out/report.md' }))
+    expect(store().pendingAction).toBe('download')
+    answer({ success: false, code: 'read_failed', error: 'Could not save a copy of the file.' })
+    await pending
+    expect(store()).toMatchObject({ pendingAction: null, actionError: { action: 'download', code: 'read_failed' } })
+    expect(actionErrorText(store().actionError!)).toBe('Could not save a copy of the file.')
+
+    // Cancelled at the prompt: like a cancelled save dialog, nothing is said.
+    api.agentFiles.download.mockResolvedValue({ success: false, code: 'denied', error: 'Cancelled at the prompt — nothing left the vault.' })
+    await store().downloadAgentFile()
+    expect(store()).toMatchObject({ pendingAction: null, actionError: null, error: null })
+
+    api.agentFiles.download.mockResolvedValue({ success: true, savedTo: null })
+    await store().openAgentFile('folder:v', vaultRef({ kind: 'dir', path: '/vault/agent/out', displayPath: 'out' }))
+    await store().downloadAgentFile()
+    expect(api.agentFiles.download).toHaveBeenLastCalledWith({ agentId: 'folder:v', path: '/vault/agent/out' })
+    expect(store()).toMatchObject({ pendingAction: null, actionError: null })
+  })
+
+  it('turns a Download refused as locked into the locked body, which offers Unlock', async () => {
+    api.agentFiles.readPreview.mockResolvedValue({ success: true, text: 'x', truncated: false })
+    await store().openAgentFile('folder:v', vaultRef())
+    api.agentFiles.download.mockResolvedValue({ success: false, code: 'locked', error: 'Unlock the vault to use this file.' })
+    await store().downloadAgentFile()
+    expect(store()).toMatchObject({ pendingAction: null, actionError: null, errorCode: 'locked', error: 'Unlock the vault to use this file.', text: '', isLoading: false })
+  })
+
+  it('keeps where a cut preview stopped, as the source read it', async () => {
+    api.agentFiles.readPreview.mockResolvedValue({ success: true, text: 'x', truncated: true, shownBytes: 10 * 1024 * 1024 })
+    await store().openAgentFile('folder:v', vaultRef())
+    expect(store()).toMatchObject({ truncated: true, shownBytes: 10 * 1024 * 1024 })
+  })
+
+  describe('recheckAgentFile', () => {
+    it('swaps an open preview of the agent to the locked body when main now answers locked', async () => {
+      api.agentFiles.readPreview.mockResolvedValue({ success: true, text: '# Report', truncated: false })
+      await store().openAgentFile('folder:v', vaultRef())
+      const reads = api.agentFiles.readPreview.mock.calls.length
+      api.agentFiles.authorize.mockResolvedValue({ success: false, code: 'locked', error: 'Unlock the vault to use this file.' })
+      await store().recheckAgentFile('folder:other')
+      expect(store()).toMatchObject({ text: '# Report', errorCode: null })
+      await store().recheckAgentFile('folder:v')
+      expect(store()).toMatchObject({ text: '', errorCode: 'locked', failedStep: 'preview', isLoading: false })
+      // Asked, never read.
+      expect(api.agentFiles.readPreview.mock.calls.length).toBe(reads)
+    })
+
+    it('leaves a readable preview alone, and reads a locked one again once main answers', async () => {
+      api.agentFiles.readPreview.mockResolvedValue({ success: true, text: '# Report', truncated: false })
+      await store().openAgentFile('folder:v', vaultRef())
+      const reads = api.agentFiles.readPreview.mock.calls.length
+      await store().recheckAgentFile('folder:v')
+      expect(api.agentFiles.readPreview.mock.calls.length).toBe(reads)
+      expect(store()).toMatchObject({ text: '# Report', isLoading: false })
+
+      api.agentFiles.authorize.mockResolvedValue({ success: false, code: 'locked', error: 'Unlock the vault to use this file.' })
+      await store().recheckAgentFile('folder:v')
+      api.agentFiles.authorize.mockResolvedValue({ success: true, approved: true })
+      await store().recheckAgentFile('folder:v')
+      expect(store()).toMatchObject({ text: '# Report', errorCode: null, error: null })
+      expect(api.agentFiles.readPreview.mock.calls.length).toBe(reads + 1)
+    })
   })
 })
 

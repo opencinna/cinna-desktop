@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { connect } from 'node:net'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { approvalDetail } from '../../../../../src/shared/vault/protocol'
+import { approvalDetail, VAULT_FILES_PATH_MAX } from '../../../../../src/shared/vault/protocol'
+import { checkedStatEntry, childRel, filesScript } from '../src/files'
 import { attach, Client, collect, KEY_HEX, makeTar, mint, startVaultd, VAULT_ID, type Harness, type TarEntry } from './harness'
 
 /** A well-formed sha256 for calls that never stream. */
@@ -284,6 +285,159 @@ describe('files.export and files.list', () => {
     const { symlinkSync } = await import('node:fs')
     symlinkSync(join(h.root, 'secrets'), join(h.root, 'agent', 'out'))
     expect(await c.code('files.list', { path: 'out' })).toBe('invalid')
+  })
+})
+
+describe('files.stat and files.read', () => {
+  beforeEach(() => boot())
+
+  type StatEntry = { path: string; rel: string | null; type: string | null; size: number }
+  const stat = async (paths: string[]): Promise<StatEntry[]> =>
+    (await c.call<{ entries: StatEntry[] }>('files.stat', { paths })).entries
+
+  it('stats agent-relative and absolute paths under the agent folder, in request order', async () => {
+    const agent = join(h.root, 'agent')
+    mkdirSync(join(agent, 'docs'))
+    writeFileSync(join(agent, 'docs', 'a.md'), 'hello')
+    const entries = await stat(['docs/a.md', join(agent, 'docs'), `${agent}/docs/a.md`, 'missing.txt', './docs/a.md', agent])
+    expect(entries.map((e) => [e.path, e.rel, e.type, e.size])).toEqual([
+      ['docs/a.md', 'docs/a.md', 'file', 5],
+      [join(agent, 'docs'), 'docs', 'dir', 0],
+      [`${agent}/docs/a.md`, 'docs/a.md', 'file', 5],
+      ['missing.txt', null, null, 0],
+      ['./docs/a.md', 'docs/a.md', 'file', 5],
+      [agent, '', 'dir', 0]
+    ])
+  })
+
+  it('answers nothing outside the agent folder: secrets, home, .., other absolute paths, a symlink out', async () => {
+    const agent = join(h.root, 'agent')
+    writeFileSync(join(h.root, 'secrets', 'ANTHROPIC_API_KEY'), 'sk-secret')
+    mkdirSync(join(h.root, 'home', '.claude'), { recursive: true })
+    writeFileSync(join(h.root, 'home', '.claude', 'credentials.json'), '{}')
+    const { symlinkSync } = await import('node:fs')
+    symlinkSync(join(h.root, 'secrets'), join(agent, 'out'))
+    symlinkSync(join(h.root, 'secrets', 'ANTHROPIC_API_KEY'), join(agent, 'key.txt'))
+    const paths = ['../secrets/ANTHROPIC_API_KEY', join(h.root, 'secrets', 'ANTHROPIC_API_KEY'), join(h.root, 'home', '.claude', 'credentials.json'),
+      '/etc/passwd', 'out', 'out/ANTHROPIC_API_KEY', 'key.txt', `${agent}/../secrets`, '', 'a\0b']
+    for (const entry of await stat(paths)) expect([entry.path, entry.type, entry.rel]).toEqual([entry.path, null, null])
+    for (const path of ['key.txt', 'out/ANTHROPIC_API_KEY', '../secrets/ANTHROPIC_API_KEY', join(h.root, 'secrets', 'ANTHROPIC_API_KEY'), '/etc/passwd']) {
+      expect(await c.code('files.read', { path, maxBytes: 100 })).toBe('not_found')
+    }
+  })
+
+  it('refuses more than 200 paths, a path over 1024 characters answers nothing, and a non-array is invalid', async () => {
+    expect(await c.code('files.stat', { paths: Array.from({ length: 201 }, () => 'a') })).toBe('invalid')
+    expect(await c.code('files.stat', { paths: 'a' })).toBe('invalid')
+    expect(await c.code('files.stat', { paths: [1] })).toBe('invalid')
+    writeFileSync(join(h.root, 'agent', 'a'), 'x')
+    expect((await stat(Array.from({ length: 200 }, () => 'a'))).every((e) => e.type === 'file')).toBe(true)
+    expect((await stat(['a'.repeat(1025)]))[0].type).toBeNull()
+  })
+
+  it('reads a file whole, or cut at maxBytes, never past 10 MB, and refuses a folder', async () => {
+    const agent = join(h.root, 'agent')
+    writeFileSync(join(agent, 'a.txt'), 'hello world')
+    const whole = await c.call<{ rel: string; bytes: string; size: number; truncated: boolean }>('files.read', { path: 'a.txt', maxBytes: 100 })
+    expect([whole.rel, Buffer.from(whole.bytes, 'base64').toString(), whole.size, whole.truncated]).toEqual(['a.txt', 'hello world', 11, false])
+    const cut = await c.call<{ bytes: string; size: number; truncated: boolean }>('files.read', { path: `${agent}/a.txt`, maxBytes: 5 })
+    expect([Buffer.from(cut.bytes, 'base64').toString(), cut.size, cut.truncated]).toEqual(['hello', 11, true])
+    writeFileSync(join(agent, 'big.bin'), Buffer.alloc(10 * 1024 * 1024 + 7, 1))
+    const big = await c.call<{ bytes: string; size: number; truncated: boolean }>('files.read', { path: 'big.bin', maxBytes: 64 * 1024 * 1024 })
+    expect([Buffer.from(big.bytes, 'base64').length, big.size, big.truncated]).toEqual([10 * 1024 * 1024, 10 * 1024 * 1024 + 7, true])
+    mkdirSync(join(agent, 'docs'))
+    expect(await c.code('files.read', { path: 'docs', maxBytes: 100 })).toBe('invalid')
+    expect(await c.code('files.read', { path: 'a.txt', maxBytes: -1 })).toBe('invalid')
+    expect(await c.code('files.read', { path: 'a.txt' })).toBe('invalid')
+  }, 20_000)
+})
+
+describe('files.stat and files.read: what the agent-user child may answer', () => {
+  beforeEach(() => boot())
+
+  /** A folder chain of `\u0001` names (six bytes each once in JSON) whose realpath is `length` characters. */
+  function controlCharPath(root: string, length: number): string {
+    const rest = length - root.length - 1
+    const parts: string[] = []
+    let used = 0
+    while (used < rest) {
+      const n = Math.min(200, rest - used - (parts.length > 0 ? 1 : 0))
+      parts.push('\u0001'.repeat(n))
+      used += n + (parts.length > 1 ? 1 : 0)
+    }
+    return parts.join('/')
+  }
+
+  it('answers nothing for a path whose realpath is over the limit, however short the name asked', async () => {
+    const { mkdtempSync: tmp, realpathSync, symlinkSync } = await import('node:fs')
+    // The child itself, with a small limit: macOS cannot even open a path past its own 1024.
+    const root = realpathSync(tmp(join(tmpdir(), 'vd-long-')))
+    try {
+      mkdirSync(join(root, 'a'.repeat(40), 'b'.repeat(40)), { recursive: true })
+      writeFileSync(join(root, 'a'.repeat(40), 'b'.repeat(40), 'f.txt'), 'x')
+      writeFileSync(join(root, 'near.txt'), 'x')
+      symlinkSync(join(root, 'a'.repeat(40), 'b'.repeat(40), 'f.txt'), join(root, 'short'))
+      const run = (request: object): unknown =>
+        JSON.parse(spawnSync(process.execPath, ['-e', filesScript()], { input: JSON.stringify({ root, pathMax: root.length + 60, ...request }) }).stdout.toString())
+      expect(run({ op: 'stat', rels: ['short', 'near.txt'] })).toEqual([null, { rel: 'near.txt', type: 'file', size: 1 }])
+      expect(run({ op: 'read', rel: 'short', maxBytes: 10 })).toEqual({ error: 'not_found' })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('answers a full batch of the longest paths the limit allows, every one escaped six-fold in JSON', async () => {
+    const { realpathSync, symlinkSync } = await import('node:fs')
+    const agent = realpathSync(join(h.root, 'agent'))
+    // One short of the limit: macOS's own PATH_MAX (1024) counts the NUL.
+    const rel = controlCharPath(agent, VAULT_FILES_PATH_MAX - 1)
+    mkdirSync(join(agent, rel.slice(0, rel.lastIndexOf('/'))), { recursive: true })
+    writeFileSync(join(agent, rel), 'x')
+    expect(join(agent, rel).length).toBe(VAULT_FILES_PATH_MAX - 1)
+    // Asked by a short name (the request stays small); answered by the long realpath.
+    symlinkSync(join(agent, rel), join(agent, 'l'))
+    const entries = (await c.call<{ entries: { rel: string | null; type: string | null }[] }>('files.stat', { paths: Array.from({ length: 200 }, () => 'l') })).entries
+    expect(entries.every((e) => e.type === 'file' && e.rel === rel)).toBe(true)
+  }, 20_000)
+
+  it('checks the child\'s stat answer: an agent-relative path, a known type, a whole non-negative size', () => {
+    const ok = { rel: 'docs/a.md', type: 'file', size: 5 }
+    expect(checkedStatEntry('p', ok)).toEqual({ path: 'p', rel: 'docs/a.md', type: 'file', size: 5 })
+    expect(checkedStatEntry('p', { rel: '', type: 'dir', size: 0 })).toEqual({ path: 'p', rel: '', type: 'dir', size: 0 })
+    for (const bad of [
+      null, 'x', { ...ok, rel: '/etc/passwd' }, { ...ok, rel: '../secrets/KEY' }, { ...ok, rel: 'a/../../b' }, { ...ok, rel: './a' },
+      { ...ok, rel: 'a//b' }, { ...ok, rel: 'a/' }, { ...ok, rel: 7 }, { ...ok, rel: 'a'.repeat(VAULT_FILES_PATH_MAX + 1) },
+      { ...ok, type: 'link' }, { ...ok, type: null }, { ...ok, size: -1 }, { ...ok, size: 1.5 }, { ...ok, size: 2 ** 60 }, { ...ok, size: '5' }
+    ]) {
+      expect(checkedStatEntry('p', bad)).toEqual({ path: 'p', rel: null, type: null, size: 0 })
+    }
+    expect(childRel('a\0b')).toBeNull()
+  })
+
+  it('refuses a read whose parent folder is swapped for a symlink out between the check and the open', async () => {
+    const { mkdtempSync: tmp, realpathSync } = await import('node:fs')
+    const base = realpathSync(tmp(join(tmpdir(), 'vd-swap-')))
+    try {
+      const root = join(base, 'agent')
+      const outside = join(base, 'outside')
+      mkdirSync(join(root, 'd'), { recursive: true })
+      mkdirSync(join(outside, 'd'), { recursive: true })
+      writeFileSync(join(root, 'd', 'a.txt'), 'inside')
+      writeFileSync(join(outside, 'd', 'a.txt'), 'SECRET')
+      // Between the realpath and the open: d becomes a symlink out of the agent folder.
+      const swap = `fs.renameSync(${JSON.stringify(join(root, 'd'))}, ${JSON.stringify(join(root, 'd.was'))}); ` +
+        `fs.symlinkSync(${JSON.stringify(join(outside, 'd'))}, ${JSON.stringify(join(root, 'd'))});`
+      const run = (script: string): Record<string, unknown> => {
+        const r = spawnSync(process.execPath, ['-e', script], {
+          input: JSON.stringify({ op: 'read', root, rel: 'd/a.txt', maxBytes: 100, pathMax: VAULT_FILES_PATH_MAX })
+        })
+        return JSON.parse(r.stdout.toString())
+      }
+      expect(run(filesScript())).toMatchObject({ rel: 'd/a.txt', bytes: Buffer.from('inside').toString('base64') })
+      expect(run(filesScript({ beforeOpen: swap }))).toEqual({ error: 'not_found' })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 })
 

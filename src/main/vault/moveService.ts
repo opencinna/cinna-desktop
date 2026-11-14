@@ -1032,11 +1032,21 @@ export async function moveOut(userId: string, agentId: string): Promise<{ folder
 export async function exportFile(userId: string, agentId: string, path: unknown): Promise<{ savedTo: string } | null> {
   const { ref } = vaultService.refFor(userId, agentId)
   if (typeof path !== 'string' || !path || path.startsWith('/') || path.split('/').includes('..')) throw new VaultError('invalid', 'Choose a file or folder inside the agent.')
+  return vaultService.files().exportFile(ref.vaultId, path)
+}
+
+/**
+ * The guest-protocol export behind {@link exportFile} and the vault file
+ * seam (`fileAccess.ts`): the save dialog, then the backend's prompt for a
+ * single-use token naming exactly `path`, then `files.export` unpacked to
+ * where the dialog said. `path` is agent-relative and already checked.
+ */
+export async function exportVaultPath(vaultId: string, path: string): Promise<{ savedTo: string } | null> {
   const name = basename(path.replace(/\/+$/, ''))
   const target = await vaultHost().saveDialog(name)
   if (!target) return null
-  const token = await vaultBackend().approve(ref.vaultId, 'export', approvalDetail({ method: 'files.export', path }))
-  const client = await vaultService.client(ref.vaultId)
+  const token = await vaultBackend().approve(vaultId, 'export', approvalDetail({ method: 'files.export', path }))
+  const client = await vaultService.client(vaultId)
   const { stream } = await client.request('files.export', { path, token })
   const staging = await mkdtemp(join(dirname(target), `.${basename(target)}.export-`))
   try {

@@ -34,6 +34,68 @@ export interface AgentFileRef {
   kind: AgentFileRefKind
   /** Decided on realpaths: a symlink out of the agent folder is outside. */
   inside: boolean
+  /**
+   * What the place the file lives in lets Cinna do with it, decided in main
+   * by the agent's file source. Absent (a ref built in the renderer, such as
+   * a pinned file's): {@link HOST_FILE_ACTIONS}. Read through
+   * {@link agentFileRefActions}.
+   */
+  actions?: AgentFileActions
+}
+
+/**
+ * What can be done with a resolved reference, by where its agent's files
+ * live. The renderer offers an action only when its flag is set (on top of its
+ * own per-file rules: the HTML kind, inside the folder, not a credential file);
+ * main refuses an action its source lacks regardless.
+ */
+export interface AgentFileActions {
+  /** The preview modal reads and shows the file (text kinds). */
+  preview: boolean
+  /** Images are previewed from their bytes too (`agent-files:read-image`). */
+  previewImages: boolean
+  /** **Open** in an app or editor on this computer. */
+  open: boolean
+  /** Show it in Finder / the file manager; a folder reference opens there. */
+  reveal: boolean
+  /** HTML rendered in the preview frame, and **Open in browser**. */
+  openInBrowser: boolean
+  /** The whole file as text: Copy contents and Save to Notes from the context menu. */
+  readText: boolean
+  pin: boolean
+  publish: boolean
+  /** Run… a script. */
+  run: boolean
+  /** Reference in a new chat. */
+  reference: boolean
+  /** **Download**: save a copy elsewhere (`agent-files:download`). */
+  download: boolean
+  /**
+   * **Copy full path**: the path means something on this computer. A vault's
+   * `/vault/agent/…` path names nothing here, so it is not offered.
+   */
+  copyPath: boolean
+}
+
+/** A file in a folder on this computer: everything but Download (it is already here). */
+export const HOST_FILE_ACTIONS: AgentFileActions = Object.freeze({
+  preview: true,
+  previewImages: false,
+  open: true,
+  reveal: true,
+  openInBrowser: true,
+  readText: true,
+  pin: true,
+  publish: true,
+  run: true,
+  reference: true,
+  download: false,
+  copyPath: true
+})
+
+/** The reference's actions, {@link HOST_FILE_ACTIONS} when it carries none. */
+export function agentFileRefActions(ref: Pick<AgentFileRef, 'actions'>): AgentFileActions {
+  return ref.actions ?? HOST_FILE_ACTIONS
 }
 
 /** Candidates resolved per call; the rest of a very long chat is not linked. */
@@ -730,6 +792,12 @@ export type AgentFileErrorCode =
   | 'too_large'
   /** A binary type, or bytes that are not UTF-8 text. */
   | 'not_text'
+  /** The files are in a vault that is locked: unlock it, then try again. */
+  | 'locked'
+  /** The user cancelled the prompt that gates the action. */
+  | 'denied'
+  /** The agent's file source does not offer this action ({@link AgentFileActions}). */
+  | 'unsupported'
 
 /** Failures travel as data: a thrown error's code never reaches the renderer. */
 export interface AgentFileFailure {
@@ -769,7 +837,12 @@ export interface AuthorizeAgentFileInput extends AgentFilePathInput {
 export type AuthorizeAgentFileResult = { success: true; approved: boolean } | AgentFileFailure
 
 export type ReadAgentFilePreviewResult =
-  | { success: true; text: string; truncated: boolean }
+  /**
+   * `shownBytes`, with `truncated`: how much of the file the text is — the
+   * preview cap, or less where the file's source reads less at a time (a
+   * vault's 10 MB).
+   */
+  | { success: true; text: string; truncated: boolean; shownBytes?: number }
   | AgentFileFailure
 
 export type AgentFileActionResult = { success: true } | AgentFileFailure
@@ -792,6 +865,12 @@ export const MAX_AGENT_FILE_COPY_BYTES = 25 * 1024 * 1024
 
 /** The whole file as UTF-8 text, never truncated. */
 export type ReadAgentFileTextResult = { success: true; text: string } | AgentFileFailure
+
+/** An image as a `data:` URL typed by main's byte sniff, for the preview; never written to disk. */
+export type ReadAgentFileImageResult = { success: true; dataUrl: string; mimeType: string } | AgentFileFailure
+
+/** **Download**: where the copy went, or `savedTo: null` when the save dialog was cancelled. */
+export type DownloadAgentFileResult = { success: true; savedTo: string | null } | AgentFileFailure
 
 /**
  * A file the profile pinned for a folder agent, as the Pinned files card shows

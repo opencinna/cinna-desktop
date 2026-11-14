@@ -51,9 +51,11 @@ import type {
   AgentFilePathInput,
   AuthorizeAgentFileInput,
   AuthorizeAgentFileResult,
+  DownloadAgentFileResult,
   ListPinnedAgentFilesInput,
   ListPinnedAgentFilesResult,
   MovePinnedAgentFileInput,
+  ReadAgentFileImageResult,
   ReadAgentFilePreviewResult,
   ReadAgentFileTextInput,
   ReadAgentFileTextResult,
@@ -2197,6 +2199,16 @@ const api = {
     /** An HTML file in the default web browser, not the `.html` default app. */
     openInBrowser: (input: AgentFilePathInput): Promise<AgentFileActionResult> =>
       ipcRenderer.invoke('agent-files:open-in-browser', input),
+    /** An image, whole, as a `data:` URL typed by its bytes — for a reference whose `actions.previewImages` is set. */
+    readImage: (input: AgentFilePathInput): Promise<ReadAgentFileImageResult> =>
+      ipcRenderer.invoke('agent-files:read-image', input),
+    /**
+     * **Download** — for a reference whose `actions.download` is set: a copy
+     * saved where the user says, behind the source's own prompt. `savedTo: null`
+     * when the save dialog was cancelled.
+     */
+    download: (input: AgentFilePathInput): Promise<DownloadAgentFileResult> =>
+      ipcRenderer.invoke('agent-files:download', input),
     /** The active profile's pinned files for a folder agent, in order; a missing file has `exists: false`. */
     listPins: (input: ListPinnedAgentFilesInput): Promise<ListPinnedAgentFilesResult> =>
       ipcRenderer.invoke('agent-files:pins-list', input),

@@ -519,6 +519,20 @@ describe('messageMenuItems with Pin file', () => {
     expect(messageMenuItems(target(ref('docs/plan.md')), { canPublish: false, saveToNotes: true, pinnable: false, missing: true })).toEqual([['copy-path']])
   })
 
+  it('offers only what the reference\'s source does: a vault\'s file or folder downloads, its path is not offered', () => {
+    const vault = {
+      preview: true, previewImages: true, open: false, reveal: false, openInBrowser: false,
+      readText: false, pin: false, publish: false, run: false, reference: false, download: true, copyPath: false
+    }
+    for (const name of ['docs/plan.md', 'out/report.html']) {
+      expect(messageMenuItems(target(ref(name, { actions: vault })), { canPublish: true, saveToNotes: true, pinnable: true })).toEqual([['download']])
+    }
+    expect(messageMenuItems(target(ref('pulled', { kind: 'dir', actions: vault })), { canPublish: true, saveToNotes: true, pinnable: true })).toEqual([['download']])
+    // A credential file: nothing at all (main refuses its download too).
+    expect(messageMenuItems(target(ref('.env', { actions: vault })), { canPublish: true, saveToNotes: true, pinnable: true })).toEqual([])
+    expect(messageMenuItems(target(ref('.env', { actions: { ...vault, download: false } })), { canPublish: true, saveToNotes: true })).toEqual([])
+  })
+
   it('keeps Pin file first with Notes off', () => {
     expect(messageMenuItems(target(ref('docs/plan.md')), { canPublish: false, saveToNotes: false, pinnable: true })).toEqual([
       ['pin'],
@@ -637,5 +651,63 @@ describe('the same menu outside the transcript', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Unpin file' }))
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
     expect(setPin).toHaveBeenCalledWith({ agentId: 'folder:a', path: '/agent/docs/plan.md', pinned: false })
+  })
+})
+
+describe('Download on a vault file link', () => {
+  const VAULT = {
+    preview: true, previewImages: true, open: false, reveal: false, openInBrowser: false,
+    readText: false, pin: false, publish: false, run: false, reference: false, download: true, copyPath: false
+  }
+  const vaultLink = ref('report.md', { source: 'link', path: '/vault/agent/report.md', actions: VAULT })
+  const vaultScope: FileRefScope = { agentId: 'folder:v', refs: new Map(), links: new Map([[vaultLink.text, vaultLink]]) }
+  const download = vi.fn()
+
+  function VaultHarness() {
+    const context = useMessageContextMenu('chat-1')
+    return (
+      <>
+        <div data-testid="transcript" onContextMenu={context.onContextMenu}>
+          <FileRefContext.Provider value={vaultScope}>
+            <MessageBubble role="assistant" content="See [the report](report.md)." />
+          </FileRefContext.Provider>
+        </div>
+        {context.menu}
+      </>
+    )
+  }
+  const mountVault = () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(<VaultHarness />, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> })
+  }
+
+  beforeEach(() => {
+    download.mockReset()
+    Object.assign(window.api.agentFiles, { download })
+  })
+
+  it('offers Download only, saves through main, and closes', async () => {
+    download.mockResolvedValue({ success: true, savedTo: '/Users/me/Downloads/report.md' })
+    mountVault()
+    openOn('the report')
+    expect(itemNames()).toEqual(['Download'])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download' }))
+    await waitFor(() => expect(download).toHaveBeenCalledWith({ agentId: 'folder:v', path: '/vault/agent/report.md' }))
+    expect(authorize).toHaveBeenCalledWith({ agentId: 'folder:v', path: '/vault/agent/report.md', purpose: 'read' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  })
+
+  it('closes quietly when the prompt is cancelled, and keeps a refusal in the menu', async () => {
+    download.mockResolvedValue({ success: false, code: 'denied', error: 'Cancelled at the prompt — nothing left the vault.' })
+    mountVault()
+    openOn('the report')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download' }))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    download.mockResolvedValue({ success: false, code: 'locked', error: 'Unlock the vault to use this file.' })
+    openOn('the report')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Unlock the vault to use this file.'))
   })
 })

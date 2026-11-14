@@ -1,8 +1,9 @@
 import { create } from 'zustand'
-import type { PreviewRenderKind } from '../../../shared/filePreview'
+import { previewKindFor, type PreviewRenderKind } from '../../../shared/filePreview'
 import type { MessageAttachment } from '../../../shared/attachments'
 import {
   agentFilePreviewKindFor,
+  agentFileRefActions,
   isCredentialFileRef,
   type AgentFileErrorCode,
   type AgentFileRef,
@@ -47,14 +48,14 @@ export interface PreviewImage {
   height: number
 }
 
-/** A body that is a sentence rather than content. */
-export type PreviewNotice = 'credential' | 'unsupported'
+/** A body that is a sentence rather than content. `folder`: a folder that cannot be shown in its folder (a vault's). */
+export type PreviewNotice = 'credential' | 'unsupported' | 'folder'
 
 /** Which step of an agent-file open failed; it decides how the body words the reason. */
 export type AgentFileFailedStep = 'authorize' | 'preview' | 'reveal'
 
-/** A header action: Open, Open folder, Open in browser, Run…. */
-export type PreviewAction = 'open' | 'reveal' | 'browser' | 'run'
+/** A header action: Open, Open folder, Open in browser, Run…, Download. */
+export type PreviewAction = 'open' | 'reveal' | 'browser' | 'run' | 'download'
 
 /**
  * Where a Run… from the preview resolves its agent and folder: the message
@@ -132,6 +133,8 @@ interface FilePreviewState {
   isLoading: boolean
   /** True when the file exceeded the byte cap and only a prefix is shown. */
   truncated: boolean
+  /** With `truncated`, how many bytes of an agent file the text is (its source's cap); null for the shipped preview cap. */
+  shownBytes: number | null
   /** Why the body has nothing to show — the reason as main or the call gave it. */
   error: string | null
   /** An agent file's failure code; null for attachments and thrown calls. */
@@ -161,6 +164,21 @@ interface FilePreviewState {
   openAgentFile: (agentId: string, ref: AgentFileRef, origin?: PreviewOrigin | null, messageId?: string | null) => Promise<void>
   openAgentFileExternally: () => Promise<void>
   revealAgentFile: () => Promise<void>
+  /**
+   * **Download** an agent file or folder whose reference offers it: the
+   * source's own prompt and the save dialog. Pending and a refusal stay with
+   * the preview (`pendingAction`, `actionError`); a cancelled dialog says nothing.
+   */
+  downloadAgentFile: () => Promise<void>
+  /** Read the open agent file again, in place (after its vault was unlocked). */
+  reloadAgentFile: () => Promise<void>
+  /**
+   * The agent's files may have become unreachable or reachable again (its
+   * vault locked or unlocked): asks main about the open file without reading
+   * it. An answer of `locked` swaps the body for the locked one; a body that
+   * was locked and now answers is read again. Anything else leaves it alone.
+   */
+  recheckAgentFile: (agentId: string) => Promise<void>
   /** An HTML agent file or attachment in the default web browser. */
   openInBrowser: () => Promise<void>
   /**
@@ -206,6 +224,7 @@ const closedState = {
   image: null,
   isLoading: false,
   truncated: false,
+  shownBytes: null,
   error: null,
   errorCode: null,
   failedStep: null,
@@ -240,7 +259,7 @@ export function agentFileErrorText(
  */
 export function actionErrorText(actionError: PreviewActionError): string {
   // Main's sentence for Run… already says what could not be done.
-  if (actionError.code === 'launch_failed' || actionError.action === 'run' || actionError.action === 'pin') return actionError.reason
+  if (actionError.code === 'launch_failed' || actionError.action === 'run' || actionError.action === 'pin' || actionError.action === 'download') return actionError.reason
   if (actionError.action === 'browser') return `Couldn't open it in the browser: ${actionError.reason}`
   return actionError.action === 'open'
     ? `Couldn't open it: ${actionError.reason}`
@@ -260,6 +279,28 @@ export function actionErrorRepeatsBody(
   return actionError.reason === error
 }
 
+/** How an agent file's body starts: the kind to render, or a notice shown without reading. */
+interface AgentFileBody {
+  kind: PreviewRenderKind | null
+  notice: PreviewNotice | null
+  isLoading: boolean
+}
+
+/**
+ * An agent file's body before anything is read. A kind its source does not
+ * preview is a notice; an image only for a source that previews images. A
+ * name that is plainly a credential file is not even asked for — `.env` has
+ * no preview kind, and would otherwise read as "no preview for this type".
+ * Main refuses the read regardless, and catches what a name hides.
+ */
+function agentFileBody(ref: AgentFileRef): AgentFileBody {
+  const actions = agentFileRefActions(ref)
+  const image = actions.previewImages && previewKindFor(ref.path) === 'image'
+  const kind: PreviewRenderKind | null = !actions.preview ? null : image ? 'image' : agentFilePreviewKindFor(ref.path)
+  const notice: PreviewNotice | null = isCredentialFileRef(ref) ? 'credential' : kind ? null : 'unsupported'
+  return { kind, notice, isLoading: notice === null }
+}
+
 /**
  * The image decoded before the modal counts as settled, so its entrance
  * measures the card at its final size (the card never grows under the
@@ -272,6 +313,34 @@ async function decodePreviewImage(url: string): Promise<PreviewImage> {
   img.src = url
   await img.decode()
   return { url, width: img.naturalWidth, height: img.naturalHeight }
+}
+
+/** How a {@link downloadAgentFileRef} ended. `done`: saved, or the save dialog was cancelled. */
+export type AgentFileDownloadOutcome =
+  | { status: 'done' }
+  /** The user cancelled a prompt (consent, or the source's own): nothing is said. */
+  | { status: 'cancelled' }
+  /** `code` is null when a call threw rather than answering. */
+  | { status: 'failed'; code: AgentFileErrorCode | null; error: string }
+
+/**
+ * **Download** one referenced file or folder whose source offers it: main's
+ * authorize, then the source's own prompt and the save dialog. The preview's
+ * Download and the message menu's both go through here. Never throws.
+ */
+export async function downloadAgentFileRef(agentId: string, ref: AgentFileRef): Promise<AgentFileDownloadOutcome> {
+  const input = { agentId, path: ref.path }
+  try {
+    const access = await authorize({ ...input, purpose: 'read' })
+    if (!access.success) return { status: 'failed', code: access.code, error: access.error }
+    if (!access.approved) return { status: 'cancelled' }
+    const result = await window.api.agentFiles.download(input)
+    if (result.success) return { status: 'done' }
+    if (result.code === 'denied') return { status: 'cancelled' }
+    return { status: 'failed', code: result.code, error: result.error }
+  } catch (err) {
+    return { status: 'failed', code: null, error: unwrapIpcError(err, 'Could not save a copy of the file.') }
+  }
 }
 
 export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
@@ -321,15 +390,44 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
     }
   }
 
-  const runAction = async (action: PreviewAction): Promise<void> => {
+  /** The open agent file's body becomes the locked one (Unlock); what it showed is dropped. */
+  const showLocked = (reason: string): void => {
+    set({
+      requestId: get().requestId + 1,
+      isLoading: false,
+      text: '',
+      image: null,
+      truncated: false,
+      shownBytes: null,
+      error: reason,
+      errorCode: 'locked',
+      failedStep: 'preview',
+      pendingAction: null,
+      actionError: null
+    })
+  }
+
+  const runAction = async (action: Exclude<PreviewAction, 'run'>): Promise<void> => {
     const target = get().target
-    if (target?.type !== 'agentFile' || target.ref.kind !== 'file' || get().pendingAction) return
+    // Download takes a folder too (saved as a folder); the rest act on files.
+    if (target?.type !== 'agentFile' || (target.ref.kind !== 'file' && action !== 'download') || get().pendingAction) return
     const input = { agentId: target.agentId, path: target.ref.path }
     const fail = (code: AgentFileErrorCode | null, reason: string): void => {
       if (get().target !== target) return
+      // The files are out of reach (a locked vault): the body says so and offers to unlock.
+      if (code === 'locked') return showLocked(reason)
+      // Cancelled at a prompt: like a cancelled dialog, nothing is said.
+      if (code === 'denied') return set({ pendingAction: null })
       set({ pendingAction: null, actionError: { action, code, reason } })
     }
     set({ pendingAction: action, actionError: null })
+    if (action === 'download') {
+      const outcome = await downloadAgentFileRef(target.agentId, target.ref)
+      if (get().target !== target) return
+      if (outcome.status === 'failed') fail(outcome.code, outcome.error)
+      else set({ pendingAction: null })
+      return
+    }
     try {
       const purpose = action === 'browser' ? 'browser' : action === 'reveal' ? 'reveal' : 'show'
       const access = await authorize({ ...input, purpose })
@@ -351,6 +449,52 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
       else fail(result.code, result.error)
     } catch (err) {
       fail(null, unwrapIpcError(err))
+    }
+  }
+
+  /**
+   * Fill an agent file's body under `requestId`: a notice without reading
+   * (a credential name, a kind its source cannot preview), an image through
+   * `readImage` when the source previews images, else the text preview.
+   */
+  const loadAgentFile = async (
+    target: Extract<PreviewTarget, { type: 'agentFile' }>,
+    requestId: number,
+    { kind, notice }: AgentFileBody
+  ): Promise<void> => {
+    if (notice) return
+    const input = { agentId: target.agentId, path: target.ref.path }
+    const failed = (code: AgentFileErrorCode, error: string): void => {
+      if (code === 'credential_file') set({ notice: 'credential', isLoading: false })
+      else if (code === 'not_previewable') set({ notice: 'unsupported', isLoading: false })
+      else set({ error, errorCode: code, failedStep: 'preview', isLoading: false })
+    }
+    try {
+      if (kind === 'image') {
+        const result = await window.api.agentFiles.readImage(input)
+        if (get().requestId !== requestId) return
+        if (!result.success) return failed(result.code, result.error)
+        let decoded: PreviewImage
+        try {
+          decoded = await decodePreviewImage(result.dataUrl)
+        } catch {
+          if (get().requestId !== requestId) return
+          set({ error: 'The image could not be decoded.', failedStep: 'preview', isLoading: false })
+          return
+        }
+        if (get().requestId !== requestId) return
+        set({ image: decoded, isLoading: false })
+        return
+      }
+      const result = await window.api.agentFiles.readPreview(input)
+      if (get().requestId !== requestId) return
+      if (result.success) {
+        set({ text: result.text, truncated: result.truncated, shownBytes: result.shownBytes ?? null, isLoading: false })
+      }
+      else failed(result.code, result.error)
+    } catch (err) {
+      if (get().requestId !== requestId) return
+      set({ error: unwrapIpcError(err), failedStep: 'preview', isLoading: false })
     }
   }
 
@@ -432,7 +576,21 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
       // Denied: nothing opens and nothing is said — the user chose it.
       if (!access.approved) return
 
+      const actions = agentFileRefActions(ref)
       if (ref.kind === 'dir') {
+        // A folder whose source cannot show it in a file manager (a vault's)
+        // opens the preview, which offers what it can (Download).
+        if (!actions.reveal) {
+          set({
+            ...closedState,
+            target,
+            notice: 'folder',
+            origin,
+            openSeq: get().openSeq + 1,
+            requestId: get().requestId + 1
+          })
+          return
+        }
         try {
           const result = await window.api.agentFiles.reveal(input)
           if (result.success) return
@@ -444,44 +602,52 @@ export const useFilePreviewStore = create<FilePreviewState>((set, get) => {
         return
       }
 
-      const kind = agentFilePreviewKindFor(ref.path)
-      // A name that is plainly a credential file is not even asked for — `.env`
-      // has no preview kind, and would otherwise read as "no preview for this
-      // type". Main refuses the read regardless, and catches what a name hides.
-      const credential = isCredentialFileRef(ref)
-      const notice: PreviewNotice | null = credential ? 'credential' : kind ? null : 'unsupported'
       const requestId = get().requestId + 1
+      const body = agentFileBody(ref)
       set({
         ...closedState,
         target,
-        kind,
-        isLoading: notice === null,
-        notice,
+        ...body,
         origin,
         openSeq: get().openSeq + 1,
         requestId
       })
-      if (notice) return
-      try {
-        const result = await window.api.agentFiles.readPreview(input)
-        if (get().requestId !== requestId) return
-        if (result.success) {
-          set({ text: result.text, truncated: result.truncated, isLoading: false })
-        } else if (result.code === 'credential_file') {
-          set({ notice: 'credential', isLoading: false })
-        } else if (result.code === 'not_previewable') {
-          set({ notice: 'unsupported', isLoading: false })
-        } else {
-          set({ error: result.error, errorCode: result.code, failedStep: 'preview', isLoading: false })
-        }
-      } catch (err) {
-        if (get().requestId !== requestId) return
-        set({ error: unwrapIpcError(err), failedStep: 'preview', isLoading: false })
-      }
+      await loadAgentFile(target, requestId, body)
     },
 
     openAgentFileExternally: () => runAction('open'),
     revealAgentFile: () => runAction('reveal'),
+    downloadAgentFile: () => runAction('download'),
+    reloadAgentFile: async () => {
+      const target = get().target
+      if (target?.type !== 'agentFile') return
+      const requestId = get().requestId + 1
+      const reset = { requestId, error: null, errorCode: null, failedStep: null, actionError: null, text: '', image: null, truncated: false, shownBytes: null }
+      if (target.ref.kind === 'dir') {
+        set({ ...reset, kind: null, isLoading: false, notice: agentFileRefActions(target.ref).reveal ? null : 'folder' })
+        return
+      }
+      const body = agentFileBody(target.ref)
+      set({ ...reset, ...body })
+      await loadAgentFile(target, requestId, body)
+    },
+    recheckAgentFile: async (agentId) => {
+      const target = get().target
+      if (target?.type !== 'agentFile' || target.agentId !== agentId) return
+      const wasLocked = get().errorCode === 'locked'
+      let access: AuthorizeAgentFileResult
+      try {
+        access = await authorize({ agentId, path: target.ref.path })
+      } catch {
+        return
+      }
+      if (get().target !== target) return
+      if (!access.success) {
+        if (access.code === 'locked' && get().errorCode !== 'locked') showLocked(access.error)
+        return
+      }
+      if (wasLocked && access.approved && get().errorCode === 'locked') await get().reloadAgentFile()
+    },
     openInBrowser: async () => {
       const target = get().target
       if (target?.type === 'agentFile') return runAction('browser')

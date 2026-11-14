@@ -14,7 +14,8 @@ import {
   MAX_IMAGE_PREVIEW_BYTES,
   THUMBNAIL_MAX_SIDE,
   THUMBNAIL_ORIGINAL_MAX_BYTES,
-  decodePreviewText
+  decodePreviewText,
+  sniffPreviewImageMime
 } from '../../shared/filePreview'
 import { pathGuard } from './pathGuard'
 import { pastedRoot } from './pastedFiles'
@@ -323,25 +324,7 @@ export const fileService = {
   }
 }
 
-/**
- * The MIME type of an image the preview can show, from its first bytes (PNG,
- * JPEG, GIF, WebP, BMP, and SVG by its root element); null for anything else.
- * Sniffed rather than taken from the name or the renderer, so the `data:` URL
- * main hands back always says what the bytes are.
- */
-export function sniffPreviewImageMime(bytes: Uint8Array): string | null {
-  const ascii = (from: number, to: number): string =>
-    bytes.length >= to ? String.fromCharCode(...bytes.subarray(from, to)) : ''
-  const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-  if (bytes.length >= png.length && png.every((b, i) => bytes[i] === b)) return 'image/png'
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
-  if (ascii(0, 6) === 'GIF87a' || ascii(0, 6) === 'GIF89a') return 'image/gif'
-  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp'
-  if (ascii(0, 2) === 'BM') return 'image/bmp'
-  const head = new TextDecoder('utf-8').decode(bytes.subarray(0, 4096))
-  if (/<svg[\s>]/i.test(head) && !/<html[\s>]/i.test(head)) return 'image/svg+xml'
-  return null
-}
+export { sniffPreviewImageMime }
 
 function imageDataUrl(bytes: Buffer): { dataUrl: string; mimeType: string } {
   const mimeType = sniffPreviewImageMime(bytes)

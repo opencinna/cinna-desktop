@@ -195,6 +195,20 @@ describe('guest users (D36)', () => {
     expect([tar.uid, tar.gid]).toEqual([1000, 1000])
   })
 
+  it('stats and reads agent files with node running as agent', async () => {
+    const { c, root } = await guestVaultd()
+    writeFileSync(join(layoutOf(root).agent, 'a.txt'), 'hi')
+    spawns.length = 0
+    expect((await c.call<{ entries: { type: string }[] }>('files.stat', { paths: ['a.txt'] })).entries[0].type).toBe('file')
+    const read = await c.call<{ bytes: string }>('files.read', { path: 'a.txt', maxBytes: 10 })
+    expect(Buffer.from(read.bytes, 'base64').toString()).toBe('hi')
+    expect(spawns.length).toBe(2)
+    for (const s of spawns) {
+      expect(s.args[0]).toBe('-e')
+      expect([s.uid, s.gid]).toEqual([1000, 1000])
+    }
+  })
+
   it('hands imported files to agent, group-writable', async () => {
     const { c, sock, root } = await guestVaultd()
     const { stream } = await c.call<{ stream: string }>('files.import', { dest: 'agent', token: mint('move-in') })

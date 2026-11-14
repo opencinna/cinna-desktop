@@ -54,6 +54,7 @@ import { pinnedVaultVersions } from './runtimeInstall'
 import { guestHashMismatch, guestRootfs } from './guestImage'
 import { sweepVaultChatFiles } from './vaultChatFiles'
 import { vaultLoginProblem } from './engineLoginCheck'
+import { createGuestFileAccess, type VaultFileAccess } from './fileAccess'
 
 const logger = createLogger('vault')
 
@@ -250,6 +251,13 @@ function defaultRootPath(userId: string): string {
 }
 
 export { guestRootfs } from './guestImage'
+
+/** The default {@link VaultFileAccess}: vaultd, through the shared connection. */
+const guestFileAccess: VaultFileAccess = createGuestFileAccess({
+  client: (vaultId) => vaultService.client(vaultId),
+  // The export's save dialog and staging live with the move service's tar handling.
+  exportPath: async (vaultId, path) => (await import('./moveService')).exportVaultPath(vaultId, path)
+})
 
 export const vaultService = {
   /** Subscribe to the installed backend (and any installed later). Once per process. */
@@ -556,6 +564,15 @@ export const vaultService = {
     } catch {
       return GUEST_AGENT_PATH
     }
+  },
+
+  /**
+   * How the vault's agent files are stat-ed, read and exported: the
+   * backend's own ({@link VaultBackend.files}) or the guest protocol over
+   * {@link client}, which refuses a vault not known to be unlocked.
+   */
+  files(): VaultFileAccess {
+    return vaultBackend().files?.() ?? guestFileAccess
   },
 
   /** The vault ref of a vault agent of `userId`, or `not_vault_agent`. */

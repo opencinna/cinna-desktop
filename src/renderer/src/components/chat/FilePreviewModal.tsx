@@ -9,6 +9,7 @@ import {
   Image as ImageIcon,
   ListTree,
   Loader2,
+  LockOpen,
   SquareTerminal,
   Table2,
   TableOfContents,
@@ -51,7 +52,9 @@ import {
 } from '../../stores/filePreview.store'
 import { useFileDownloadStore } from '../../stores/fileDownload.store'
 import { MAX_PREVIEW_BYTES } from '../../../../shared/filePreview'
-import { agentFileName, isCredentialFileRef, type AgentFileRef } from '../../../../shared/agentFiles'
+import { agentFileName, agentFileRefActions, isCredentialFileRef, type AgentFileRef } from '../../../../shared/agentFiles'
+import { useVaultUnlock, vaultErrorText } from '../../hooks/useVault'
+import { SettingsButton } from '../settings/SettingsLayout'
 import { pinnedFilesKey, useIsFilePinned, useTogglePinnedFile } from '../../hooks/usePinnedFiles'
 import { useArtifactsSupport } from '../../hooks/useArtifacts'
 import { useArtifactPublishStore } from '../../stores/artifactPublish.store'
@@ -68,7 +71,11 @@ const OVERLAY_PADDING_X_REM = 2
 /** The card's left and right borders together, inside its border-box width. */
 const CARD_BORDER_X = 2
 /** The text read cap, as the truncation notices name it. */
-const MAX_PREVIEW_MB = MAX_PREVIEW_BYTES / (1024 * 1024)
+/** Bytes as MB for a sentence: whole when it is, else one decimal. */
+function formatMb(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  return Number.isInteger(mb) ? String(mb) : mb.toFixed(1)
+}
 /** How long the ⋯ trigger says "copied". */
 const COPIED_MARK_MS = 1200
 
@@ -218,6 +225,54 @@ function useCardEntrance({
 const NO_SUBSCRIPTION = (): (() => void) => () => undefined
 
 /**
+ * The body of an agent file whose vault is locked: the sentence and Unlock
+ * (the vault's own prompt). A refusal stays under the button; an unlock that
+ * lands reads the file again in place.
+ */
+function LockedFileBody({
+  agentId,
+  folder,
+  onUnlocked
+}: {
+  agentId: string
+  folder: boolean
+  onUnlocked: () => void
+}): React.JSX.Element {
+  const unlock = useVaultUnlock()
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <p className="text-xs text-[var(--color-text-muted)]">
+        {folder ? 'Unlock the vault to download this folder.' : 'Unlock the vault to preview this file.'}
+      </p>
+      <SettingsButton
+        aria-busy={unlock.isPending}
+        aria-disabled={unlock.isPending || undefined}
+        onClick={() => {
+          if (unlock.isPending) return
+          unlock.reset()
+          unlock.mutate(agentId, {
+            onSuccess: (status) => {
+              if (status.state === 'unlocked') onUnlocked()
+            }
+          })
+        }}
+      >
+        {/* Fixed width: Unlock and Unlocking… swap in place. */}
+        <span className="inline-flex min-w-[6.5rem] items-center justify-center gap-1.5">
+          {unlock.isPending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <LockOpen size={14} aria-hidden="true" />}
+          {unlock.isPending ? 'Unlocking…' : 'Unlock'}
+        </span>
+      </SettingsButton>
+      {unlock.error && (
+        <p role="alert" className="text-xs text-[var(--color-danger)]">
+          {vaultErrorText(unlock.error, 'Unlock was cancelled at the prompt.')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
  * The ⋯ menu with Pin file / Unpin file, for a file of a folder agent. A
  * component of its own because it needs a query client, which the preview
  * otherwise does without; it owns the toggle, so it outlives the menu that
@@ -286,7 +341,9 @@ function useCachedChatAgentId(chatId: string | null): string | null | undefined 
  */
 export function FilePreviewModal(): React.JSX.Element | null {
   const live = useFilePreviewStore()
-  const { close, openAgentFileExternally, revealAgentFile, openInBrowser, runAgentFile } = live
+  const { close, openAgentFileExternally, revealAgentFile, openInBrowser, runAgentFile, downloadAgentFile, reloadAgentFile } = live
+  // While the ⋯ menu is open it shows a Download refusal itself, under the item.
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false)
   const activeChatId = useChatStore((s) => s.activeChatId)
   const activeChatAgentId = useCachedChatAgentId(activeChatId)
   const queryClient = useContext(QueryClientContext)
@@ -315,6 +372,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
     image,
     isLoading,
     truncated,
+    shownBytes,
     error,
     errorCode,
     failedStep,
@@ -588,11 +646,16 @@ export function FilePreviewModal(): React.JSX.Element | null {
     : target.type === 'path'
       ? target.filename
       : (attachmentTarget?.filename ?? '')
-  // A folder only reaches the modal when showing it failed: no file actions.
-  const fileActions = agentFile?.ref.kind === 'file'
+  // What the file's source lets the preview offer (main refuses the rest).
+  const refActions = agentFile ? agentFileRefActions(agentFile.ref) : null
+  // A folder reaches the modal when showing it failed (no file actions), or
+  // when its source cannot show it in a folder but can download it.
+  const fileActions = agentFile !== null && (agentFile.ref.kind === 'file' || refActions?.download === true)
   // Pin file / Unpin file for a file of a folder agent (from the cached agents; main checks again).
   const pinnable =
     fileActions &&
+    agentFile.ref.kind === 'file' &&
+    refActions?.pin === true &&
     queryClient !== undefined &&
     queryClient
       .getQueryData<Array<{ id: string; capabilities?: { cwd?: boolean } | null }>>(['agents'])
@@ -609,19 +672,38 @@ export function FilePreviewModal(): React.JSX.Element | null {
         : `Couldn't load preview: ${error}`
   const showActionError =
     actionError !== null &&
+    !(actionError.action === 'download' && actionsMenuOpen) &&
     (agentFile === null || !actionErrorRepeatsBody({ actionError, error, errorCode, isLoading }))
+  // The vault the file is in is locked: the body offers Unlock instead of a reason.
+  const lockedFile = agentFile !== null && !isLoading && error !== null && errorCode === 'locked'
   // A composer file not sent yet has no preview frame to serve it: its HTML
   // shows as source (see PreviewBody).
-  const html = kind === 'html' && target.type !== 'path'
+  // A source that cannot serve the frame (a vault's file) shows the HTML as source.
+  const html = kind === 'html' && target.type !== 'path' && refActions?.openInBrowser !== false
   const imageShown = kind === 'image' && image !== null && !isLoading && bodyError === null
   // The page fills a fixed-height body, so the card never resizes as the frame loads.
   const htmlRendered = html && htmlView === 'rendered' && !isLoading && bodyError === null && !notice
   // Run…: a script inside the folder, with a chat to run it in (main builds the command).
   const runSource =
-    agentFile && isRunnableScriptRef(agentFile.ref, text)
+    agentFile && refActions?.run && isRunnableScriptRef(agentFile.ref, text)
       ? previewRunSource(target, activeChatId, activeChatAgentId)
       : null
   const nothingToCopy = isLoading || error !== null || notice !== null || text === ''
+  // Where the preview was cut: the file source's own cap when it reads less (a vault's), else the shipped one.
+  const shownMb = formatMb(shownBytes ?? MAX_PREVIEW_BYTES)
+  // Copy content for a file that can have text: never for an image or a body
+  // that is a notice (a credential file, a type with no preview).
+  const copyOffered = agentFile !== null && agentFile.ref.kind === 'file' && kind !== 'image' && notice === null
+  // Download where the source offers it, never for a credential file (main refuses it too).
+  const downloadOffered =
+    agentFile !== null && refActions?.download === true && !(agentFile.ref.kind === 'file' && isCredentialFileRef(agentFile.ref))
+  const openOffered = agentFile?.ref.kind === 'file' && refActions?.open === true
+  const revealOffered = agentFile?.ref.kind === 'file' && refActions?.reveal === true
+  const publishOffered =
+    agentFile !== null && canPublish && refActions?.publish === true && agentFile.ref.inside && !isCredentialFileRef(agentFile.ref)
+  // No ⋯ at all when it would open on nothing (a vault's credential file).
+  const actionsMenuShown =
+    fileActions && (pin !== null || openOffered || revealOffered || html || copyOffered || downloadOffered || publishOffered)
   const TitleIcon = agentFile?.ref.kind === 'dir' ? Folder : kind === 'image' ? ImageIcon : FileText
 
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
@@ -681,7 +763,8 @@ export function FilePreviewModal(): React.JSX.Element | null {
               title={filename}
               className={
                 'text-sm font-semibold text-[var(--color-text)] truncate' +
-                (agentFile ? ' shrink-0 max-w-[60%]' : '')
+                // The name takes the header's width (less the icon) before the path gets any.
+                (agentFile ? ' shrink-0 max-w-[calc(100%-24px)]' : '')
               }
             >
               {filename}
@@ -801,21 +884,24 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 Run…
               </button>
             )}
-            {fileActions && (
+            {actionsMenuShown && agentFile && (
               <PreviewFileActions
                 key={targetKey}
                 pin={pin}
                 dismissed={exiting}
                 pendingAction={pendingAction === 'run' ? null : pendingAction}
                 fileGone={fileGone}
-                onOpen={() => void openAgentFileExternally()}
-                onReveal={() => void revealAgentFile()}
+                onOpen={openOffered ? () => void openAgentFileExternally() : undefined}
+                onReveal={revealOffered ? () => void revealAgentFile() : undefined}
                 onOpenInBrowser={html ? () => void openInBrowser() : undefined}
-                onCopy={() => void copyContent()}
+                onCopy={copyOffered ? () => void copyContent() : undefined}
+                onDownload={downloadOffered ? () => void downloadAgentFile() : undefined}
+                downloadError={actionError?.action === 'download' ? actionErrorText(actionError) : null}
+                onOpenChange={setActionsMenuOpen}
                 copyDisabled={nothingToCopy}
                 copied={copiedMarkFor === openSeq}
                 onPublish={
-                  canPublish && agentFile.ref.inside && !isCredentialFileRef(agentFile.ref)
+                  publishOffered
                     ? () => {
                         // The card lands in the chat: the preview steps aside for the dialog.
                         const { agentId, ref, messageId } = agentFile
@@ -916,7 +1002,7 @@ export function FilePreviewModal(): React.JSX.Element | null {
             role="status"
             className="px-5 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)]"
           >
-            Copied the first {MAX_PREVIEW_MB} MB: the file is larger than the preview reads.
+            Copied the first {shownMb} MB: the file is larger than the preview reads.
           </div>
         )}
 
@@ -965,13 +1051,21 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 <Loader2 size={12} className="animate-spin" />
                 <span>Loading preview…</span>
               </div>
+            ) : lockedFile && agentFile ? (
+              <LockedFileBody
+                agentId={agentFile.agentId}
+                folder={agentFile.ref.kind === 'dir'}
+                onUnlocked={() => void reloadAgentFile()}
+              />
             ) : bodyError ? (
               <div className="text-xs text-[var(--color-danger)]">{bodyError}</div>
             ) : notice ? (
               <div className="text-xs text-[var(--color-text-muted)]">
                 {notice === 'credential'
                   ? 'Preview is off for credential files.'
-                  : 'No preview for this file type.'}
+                  : notice === 'folder'
+                    ? 'No preview for folders.'
+                    : 'No preview for this file type.'}
               </div>
             ) : kind ? (
               <>
@@ -1022,11 +1116,11 @@ export function FilePreviewModal(): React.JSX.Element | null {
                 )}
                 {truncated && !htmlRendered && (
                   <div className="mt-3 text-[10px] italic text-[var(--color-text-muted)]">
-                    {agentFile
+                    {agentFile && refActions?.open
                       ? 'Preview truncated — open the file to see the full content.'
-                      : downloadable
+                      : downloadable || (agentFile && refActions?.download)
                         ? 'Preview truncated — download the file to see the full content.'
-                        : `Preview truncated at ${MAX_PREVIEW_MB} MB.`}
+                        : `Preview truncated at ${shownMb} MB.`}
                   </div>
                 )}
               </>

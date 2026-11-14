@@ -402,6 +402,28 @@ export interface VaultdRequestMap {
   'files.import': { params: { dest: 'agent'; token: string }; result: { stream: string } }
   'files.export': { params: { path: string; token: string }; result: { stream: string } }
   'files.list': { params: { path: string }; result: { entries: { name: string; type: 'file' | 'dir' | 'link'; size: number; mtime: number }[] } }
+  /**
+   * What each path names, for file references in a vault chat. A path is
+   * agent-relative, or absolute under the agent folder as processes inside the
+   * vault see it (`/vault/agent/…`; the fake's own root). Checked as the
+   * `agent` user, after realpath: anything else, missing, or leading out of
+   * the agent folder (a symlink) is `type: null`. `rel` is the realpath,
+   * agent-relative (`''` for the folder itself), null with `type`. At most
+   * {@link VAULT_FILES_STAT_MAX} paths of {@link VAULT_FILES_PATH_MAX}
+   * characters; results in request order. No token: the unlock is the gate.
+   */
+  'files.stat': { params: { paths: string[] }; result: { entries: VaultFileStatEntry[] } }
+  /**
+   * At most `maxBytes` ({@link VAULT_FILES_READ_MAX} at most) of one file in
+   * the agent folder, read as the `agent` user after the same containment
+   * check as `files.stat`; `bytes` is base64, `size` the whole file's,
+   * `truncated` when it was cut. `rel` is where the opened file really is,
+   * agent-relative, taken from the open descriptor after the open (a parent
+   * swapped for a symlink out in between is refused): the caller checks it
+   * against what it stat-ed. A folder is `invalid`, anything missing or
+   * outside `not_found`. No token.
+   */
+  'files.read': { params: { path: string; maxBytes: number }; result: { rel: string; bytes: string; size: number; truncated: boolean } }
   /** `cols`/`rows` (shell only, optional): the terminal's size at open, as for `exec.resize`. */
   exec: { params: { preset: ExecPreset; token?: string; cols?: number; rows?: number }; result: { stream: string } }
   /**
@@ -437,6 +459,22 @@ export interface VaultdRequestMap {
   'kv.put': { params: { key: string; value: unknown }; result: Record<string, never> }
 }
 export type VaultdMethod = keyof VaultdRequestMap
+
+/** One answer of `files.stat`, in request order. */
+export interface VaultFileStatEntry {
+  /** The path as it was asked for. */
+  path: string
+  /** The realpath, relative to the agent folder (`''` for the folder itself); null when `type` is. */
+  rel: string | null
+  type: 'file' | 'dir' | null
+  size: number
+}
+
+/** Paths per `files.stat` call, and the longest path it takes. */
+export const VAULT_FILES_STAT_MAX = 200
+export const VAULT_FILES_PATH_MAX = 1024
+/** The most `files.read` returns in one call: 10 MB. */
+export const VAULT_FILES_READ_MAX = 10 * 1024 * 1024
 
 /** Bounds of a vault terminal's size (`exec`, `exec.resize`); values outside are clamped. */
 export const VAULT_TERMINAL_COLS = { min: 2, max: 500 } as const

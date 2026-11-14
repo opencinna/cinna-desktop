@@ -278,6 +278,13 @@ A folder agent works inside its folder and names files all the time: `data/refor
 - **Reference in a new chat uses the reference's own agent**: the agent whose folder the span resolved in, which in a routed chat can be a different agent from the chat's. It lands where every "chat with this agent" action lands — the new-chat screen, that agent preselected, the Chats list beside it — as [New Chat with This Agent](../../ui/keyboard_shortcuts/keyboard_shortcuts.md) does. The chip is added to the new-chat screen's draft before the screen mounts, so it is there when the composer appears; the text the user had already typed is kept. A chip rather than typed text, because the path is not a sentence to be edited: it is sent as its own line, and the same chip is what a file sent from Finder becomes.
 - **The path is the realpath**, for Copy full path and Reference in a new chat alike, not the display path: a relative path means nothing in another chat or tool.
 
+### In a vault agent's chat
+- **What the reference offers depends on where the file lives.** Main decides it per reference (`actions`) and the renderer shows only that, so a click, the preview's ⋯ menu and the right-click menu agree. For a file in an [Agent Vault](../../agents/vault/vault.md) it is a **preview** (text kinds and images, read from inside the vault into memory, no prompt) and **Download** (a save dialog behind the helper's export prompt; a referenced folder downloads whole). Download is first in the ⋯ menu and in the message menu. Nothing else: no Open, Open folder, Open in browser, Copy contents, Save to Notes, Copy full path, Pin, Publish, Run or Reference in a new chat, because the file is not on this Mac.
+- **Only the agent's folder.** `~/…` and other absolute paths link nothing; a path is shown and copied as `/vault/agent/…`.
+- **Credential files never leave on their own.** Not previewed, and no Download is offered. A folder that holds one downloads with it once the export is approved.
+- **A locked vault.** Links already shown stay; a click opens the preview, whose body says the vault is locked with **Unlock**, and the file is read once it opens. A vault that locks or unlocks, or an agent moved in or out, re-checks an open preview and drops the old links so none offers an action its place no longer has.
+- **Preview cap.** A vault read is 10 MB at a time; a larger text file shows its first 10 MB under the usual truncation note.
+
 ### Deliberately not done
 - **No approval survives a restart**, and none is written anywhere.
 - **Nothing links** for a remote or command-line agent, in a coordinator's sub-threads, in reference-style markdown links or in code blocks.

@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentFileRef } from '../../../../shared/agentFiles'
+import type { AgentFileActions, AgentFileRef } from '../../../../shared/agentFiles'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 vi.mock('../../stores/logger.store', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
@@ -793,6 +794,123 @@ describe('agent file header and errors', () => {
   })
 })
 
+/** A vault's reference: preview (images too) and Download, nothing else. */
+const VAULT_ACTIONS: AgentFileActions = {
+  preview: true, previewImages: true, open: false, reveal: false, openInBrowser: false,
+  readText: false, pin: false, publish: false, run: false, reference: false, download: true, copyPath: false
+}
+const vaultFile: AgentFileRef = { ...csv, path: '/vault/agent/data/omp.csv', actions: VAULT_ACTIONS }
+const vaultTarget = (ref: AgentFileRef = vaultFile) => ({ type: 'agentFile' as const, agentId: 'folder:v', ref })
+
+describe('a reference whose source offers only preview and download', () => {
+  const menuItems = (): string[] => screen.getAllByRole('menuitem').map((item) => item.textContent ?? '')
+
+  it('offers Download first, then Copy content, in the ⋯ menu, never Open, Open folder or Pin', () => {
+    render(<FilePreviewModal />)
+    open({ target: vaultTarget(), kind: 'text', text: 'hello' })
+    fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+    expect(menuItems()).toEqual(['Download', 'Copy content'])
+  })
+
+  it('offers no Download for a credential file, and no Copy content for an image', () => {
+    render(<FilePreviewModal />)
+    open({ target: vaultTarget({ ...vaultFile, path: '/vault/agent/.env', displayPath: '.env' }), notice: 'credential' })
+    // Neither Download nor Copy content: no ⋯ that would open on nothing.
+    expect(screen.queryByRole('button', { name: 'More file actions' })).toBeNull()
+    act(() => useFilePreviewStore.getState().close())
+    open({
+      target: vaultTarget({ ...vaultFile, path: '/vault/agent/chart.png', displayPath: 'chart.png' }),
+      kind: 'image',
+      image: { url: 'data:image/png;base64,AA==', width: 10, height: 10 }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+    expect(menuItems()).toEqual(['Download'])
+  })
+
+  it('words a cut preview by what the source offers and by where it was cut', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<FilePreviewModal />)
+    open({ target: vaultTarget(), kind: 'text', text: 'hello', truncated: true, shownBytes: 10 * 1024 * 1024 })
+    expect(screen.getByText('Preview truncated — download the file to see the full content.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy content' }))
+    })
+    expect(screen.getByText('Copied the first 10 MB: the file is larger than the preview reads.')).toBeTruthy()
+    delete (navigator as { clipboard?: unknown }).clipboard
+  })
+
+  it('lets the name take the header width before the path', () => {
+    render(<FilePreviewModal />)
+    open({ target: vaultTarget({ ...vaultFile, path: '/vault/agent/chart.png', displayPath: 'chart.png' }), kind: 'text', text: 'x' })
+    const title = screen.getAllByTitle('chart.png').find((el) => el.textContent === 'chart.png')!
+    expect(title.className).toContain('max-w-[calc(100%-24px)]')
+    expect(title.className).not.toContain('max-w-[60%]')
+  })
+
+  it('keeps the menu open while Download waits, shows a refusal in it, and closes it once saved', () => {
+    const download = vi.fn(async () => {})
+    render(<FilePreviewModal />)
+    open({ target: vaultTarget(), kind: 'text', text: 'hello' })
+    act(() => useFilePreviewStore.setState({ downloadAgentFile: download }))
+    fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Download' }))
+    expect(download).toHaveBeenCalledTimes(1)
+    act(() => useFilePreviewStore.setState({ pendingAction: 'download' }))
+    expect(screen.getByRole('menu')).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'Downloading…' }).getAttribute('aria-busy')).toBe('true')
+    act(() =>
+      useFilePreviewStore.setState({
+        pendingAction: null,
+        actionError: { action: 'download', code: 'read_failed', reason: 'Could not save a copy of the file.' }
+      })
+    )
+    // In the menu, once: not again under the header while the menu shows it.
+    expect(screen.getByRole('menu').textContent).toContain('Could not save a copy of the file.')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    act(() => useFilePreviewStore.setState({ pendingAction: 'download', actionError: null }))
+    act(() => useFilePreviewStore.setState({ pendingAction: null }))
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('offers Download for a folder it cannot show in a folder, under a folder notice', () => {
+    render(<FilePreviewModal />)
+    open({ target: vaultTarget({ ...vaultFile, kind: 'dir', path: '/vault/agent/data', displayPath: 'data' }), notice: 'folder' })
+    expect(screen.getByText('No preview for folders.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+    expect(menuItems()).toEqual(['Download'])
+  })
+
+  it('shows HTML as source, with no Rendered / Source toggle', () => {
+    render(<FilePreviewModal />)
+    open({ target: vaultTarget({ ...vaultFile, path: '/vault/agent/site/index.html', displayPath: 'site/index.html' }), kind: 'html', text: '<h1>hi</h1>' })
+    expect(screen.queryByRole('button', { name: 'Rendered' })).toBeNull()
+    expect(card().textContent).toContain('<h1>hi</h1>')
+    expect(card().querySelector('iframe')).toBeNull()
+  })
+
+  it('asks to unlock a locked vault, and reads the file again once it is', async () => {
+    const unlock = vi.fn(async () => ({ ok: true, data: { agentId: 'folder:v', state: 'unlocked' } }))
+    Object.assign(window, { api: { ...(window as unknown as { api?: object }).api, vault: { unlock } } })
+    const reload = vi.fn(async () => {})
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <FilePreviewModal />
+      </QueryClientProvider>
+    )
+    open({ target: vaultTarget(), kind: 'text', error: 'Unlock the vault to use this file.', errorCode: 'locked', failedStep: 'preview' })
+    act(() => useFilePreviewStore.setState({ reloadAgentFile: reload }))
+    expect(screen.getByText('Unlock the vault to preview this file.')).toBeTruthy()
+    expect(screen.queryByText(/Couldn't load preview/)).toBeNull()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Unlock' }))
+    })
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1))
+    expect(unlock).toHaveBeenCalledWith('folder:v')
+  })
+})
+
 /** A spec-shaped file: a title, several sections, a repeated heading. */
 const LONG_MD = [
   '# Spec',
@@ -1409,8 +1527,14 @@ describe('FilePreviewModal: Copy content', () => {
     expect(document.body.textContent).toContain('Copied the first 25 MB')
   })
 
-  it('has nothing to copy from a notice', () => {
+  it('has nothing to copy from a notice, so it is not offered', () => {
     open({ target: agentTarget(), kind: null, notice: 'unsupported', isLoading: false })
+    fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
+    expect(screen.queryByRole('menuitem', { name: 'Copy content' })).toBeNull()
+  })
+
+  it('waits, dimmed, while the file loads', () => {
+    open({ target: agentTarget(), kind: 'text', isLoading: true })
     fireEvent.click(screen.getByRole('button', { name: 'More file actions' }))
     expect(screen.getByRole('menuitem', { name: 'Copy content' })).toHaveProperty('disabled', true)
   })

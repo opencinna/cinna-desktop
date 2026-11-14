@@ -9,6 +9,15 @@ export interface FileRefScope {
   links: ReadonlyMap<string, AgentFileRef>
 }
 
+/**
+ * The prefix of every resolve query of one agent's transcript: dropped when
+ * where the agent's files live changes (it moved into or out of a vault, its
+ * vault locked or unlocked), so refs resolved by the old source go.
+ */
+export function agentFileRefsKey(agentId: string): readonly unknown[] {
+  return ['agent-file-refs', agentId] as const
+}
+
 /** FNV-1a over the ordered candidates: a short, stable query-key part. */
 export function hashCandidates(candidates: readonly string[]): string {
   let hash = 0x811c9dc5
@@ -34,7 +43,8 @@ export function hashCandidates(candidates: readonly string[]): string {
  * do that here: in `useQueries` a new key starts with no data and no
  * placeholder. So the hook remembers each agent's last answer itself and shows
  * it until the new one arrives. The memory lives as long as the hook, which is
- * one chat's transcript (`MessageStream` keys the resolver by chat).
+ * one chat's transcript (`MessageStream` keys the resolver by chat). A
+ * `locked` answer (the agent's files are in a locked vault) keeps them too.
  */
 export function useAgentFileRefs(
   sources: ReadonlyMap<string, readonly string[]>
@@ -52,14 +62,18 @@ export function useAgentFileRefs(
 
   const results = useQueries({
     queries: entries.map((entry) => ({
-      queryKey: ['agent-file-refs', entry.agentId, entry.hash],
+      queryKey: [...agentFileRefsKey(entry.agentId), entry.hash],
       queryFn: async (): Promise<AgentFileRef[]> => {
         if (entry.entries.length === 0) return []
         const result = await window.api.agentFiles.resolve({
           agentId: entry.agentId,
           entries: entry.entries
         })
-        return result.success ? result.refs : []
+        if (result.success) return result.refs
+        // A locked vault answers nothing new: thrown, so the links already
+        // shown stay (the last answer) rather than being replaced by none.
+        if (result.code === 'locked') throw new Error(result.error)
+        return []
       },
       staleTime: 30_000,
       retry: false

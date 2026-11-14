@@ -1,9 +1,10 @@
 import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { QueryClientContext, useQueryClient } from '@tanstack/react-query'
-import { Cog, Copy, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, Pin, PinOff, Play, SquarePen, Upload, type LucideIcon } from 'lucide-react'
+import { Cog, Copy, Download, FolderOpen, Globe, Link, Loader2, MessageSquarePlus, NotebookPen, Pin, PinOff, Play, SquarePen, Upload, type LucideIcon } from 'lucide-react'
 import {
   agentFileContentKind,
+  agentFileRefActions,
   isCredentialFileRef,
   type AgentFileActionResult,
   type AgentFileConsentPurpose,
@@ -31,6 +32,7 @@ import { fileRefTargetOf, type FileRefTarget } from './fileRefs'
 import { detectCommand, looksAutoRunnable } from '../../../../shared/commandRun'
 import { agentRunsCommands, fenceLanguage, primeHomeDir } from '../../utils/userCommands'
 import { estimateRunColumns, useRunScriptStore } from '../../stores/runScript.store'
+import { downloadAgentFileRef, type AgentFileDownloadOutcome } from '../../stores/filePreview.store'
 
 type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
@@ -77,6 +79,7 @@ export type MessageMenuItem =
   | 'copy-contents'
   | 'save-contents'
   | 'copy-path'
+  | 'download'
   | 'reveal'
   | 'reference'
   | 'publish'
@@ -118,6 +121,26 @@ export interface MessageMenuOptions {
  * leaves only what works without it: Unpin file and Copy full path.
  */
 export function messageMenuItems(file: FileRefTarget | undefined, options: MessageMenuOptions = {}): MessageMenuItem[][] {
+  const groups = menuItemsFor(file, options)
+  if (!file) return groups
+  // What the reference's source offers (a vault's file: its path only).
+  const actions = agentFileRefActions(file.ref)
+  const offered: Partial<Record<MessageMenuItem, boolean>> = {
+    pin: actions.pin,
+    'open-in-browser': actions.openInBrowser,
+    'copy-contents': actions.readText,
+    'save-contents': actions.readText,
+    'copy-path': actions.copyPath,
+    reveal: actions.reveal,
+    reference: actions.reference,
+    publish: actions.publish,
+    // Never a credential file on its own (main refuses it); a folder downloads whole.
+    download: actions.download && !(file.ref.kind === 'file' && isCredentialFileRef(file.ref))
+  }
+  return groups.map((group) => group.filter((item) => offered[item] !== false)).filter((group) => group.length > 0)
+}
+
+function menuItemsFor(file: FileRefTarget | undefined, options: MessageMenuOptions = {}): MessageMenuItem[][] {
   const { canPublish = false, command, saveToNotes = true, pinnable = false, missing = false } = options
   if (file && missing) {
     return pinnable && file.ref.kind === 'file' ? [['pin'], ['copy-path']] : [['copy-path']]
@@ -125,12 +148,12 @@ export function messageMenuItems(file: FileRefTarget | undefined, options: Messa
   // Notes off (Settings → Features → Capabilities): no Save to Notes, and a
   // group it leaves empty goes with it. The other options are passed on whole.
   if (!saveToNotes) {
-    return messageMenuItems(file, { ...options, saveToNotes: true })
+    return menuItemsFor(file, { ...options, saveToNotes: true })
       .map((group) => group.filter((item) => item !== 'save-text' && item !== 'save-contents'))
       .filter((group) => group.length > 0)
   }
   if (file && pinnable && file.ref.kind === 'file') {
-    return [['pin'], ...messageMenuItems(file, { ...options, pinnable: false })]
+    return [['pin'], ...menuItemsFor(file, { ...options, pinnable: false })]
   }
   if (!file) {
     if (!command) return [['copy-text', 'save-text']]
@@ -138,7 +161,8 @@ export function messageMenuItems(file: FileRefTarget | undefined, options: Messa
   }
   const { ref } = file
   const pathOnly = ref.kind === 'dir' || isCredentialFileRef(ref) || agentFileContentKind(ref.path) === 'binary'
-  const pathGroup: MessageMenuItem[] = ['copy-path', 'reveal', 'reference']
+  // Download only where the reference's source offers it (filtered above).
+  const pathGroup: MessageMenuItem[] = ['copy-path', 'reveal', 'reference', 'download']
   const publish: MessageMenuItem[][] = canPublish && ref.inside && !isCredentialFileRef(ref) ? [['publish']] : []
   if (pathOnly) return [pathGroup, ...publish]
   const contents: MessageMenuItem[] = ['copy-contents', 'save-contents']
@@ -565,6 +589,19 @@ function MessageContextMenu({ x, y, text, highlight, file, code, missing, chatId
       await navigator.clipboard.writeText(file.ref.path)
       onClose()
     }, 'Could not copy the path.'),
+    // The preview's Download: the source's prompt, then the save dialog; a cancel closes quietly.
+    'download': () => run('download', async (fail) => {
+      if (!file) return
+      consentPending.current = true
+      let outcome: AgentFileDownloadOutcome
+      try {
+        outcome = await downloadAgentFileRef(file.agentId, file.ref)
+      } finally {
+        consentPending.current = false
+      }
+      if (outcome.status === 'failed') fail(outcome.error)
+      else onClose()
+    }, 'Could not save a copy of the file.'),
     'reveal': () => run('reveal', (fail) =>
       launch(fail, 'reveal', (input) => window.api.agentFiles.reveal(input)), 'Could not show it in its folder.'),
     'reference': () => run('reference', async () => {
@@ -612,6 +649,7 @@ function MessageContextMenu({ x, y, text, highlight, file, code, missing, chatId
     'copy-contents': ['Copy contents', Copy],
     'save-contents': ['Save to Notes', NotebookPen],
     'copy-path': ['Copy full path', Link],
+    'download': ['Download', Download],
     'reveal': ['Show in the folder', FolderOpen],
     'reference': ['Reference in a new chat', MessageSquarePlus],
     'publish': ['Publish…', Upload],
@@ -623,6 +661,10 @@ function MessageContextMenu({ x, y, text, highlight, file, code, missing, chatId
   // Decided once, at open: nothing appears or disappears while the menu is open.
   const notesEnabled = useCapabilities().notesEnabled
   const [groups] = useState(() => messageMenuItems(file, { canPublish, command, saveToNotes: notesEnabled, pinnable, missing }))
+  // A reference its source offers nothing for (a vault's credential file): no menu at all.
+  useEffect(() => {
+    if (groups.length === 0) onClose()
+  }, [groups, onClose])
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (['Escape', 'Tab', 'PageUp', 'PageDown'].includes(event.key)) {
@@ -650,6 +692,7 @@ function MessageContextMenu({ x, y, text, highlight, file, code, missing, chatId
   const itemClass = 'flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-[var(--color-text)] focus:bg-[var(--color-bg-hover)] focus:outline-none transition-[background-color,opacity] duration-100 motion-reduce:transition-none'
   const bottomAnchored = position.bottom !== undefined
   const errorRow = error && <p role="alert" className="break-words px-3 py-2 text-xs text-[var(--color-danger)]">{error}</p>
+  if (groups.length === 0) return null
   return createPortal(
     <div ref={ref} role="menu" aria-label="Message actions" onKeyDown={onKeyDown}
       onContextMenu={(event) => event.preventDefault()}

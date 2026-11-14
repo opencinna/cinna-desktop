@@ -11,7 +11,7 @@ import { layoutOf, type VaultdConfig } from './config'
 import type { Conn, Ctx, Handler, Params } from './context'
 import { authLogin, authStatus, engineKill, engineSpawn } from './engine'
 import { exec } from './exec'
-import { filesExport, filesImport, filesList } from './files'
+import { filesExport, filesImport, filesList, filesRead, filesStat } from './files'
 import { cryptsetupOps, fakeOps, HELPER_CONNECTIONS_MAX, HelperEvents, serveHelper, type HelperOps } from './helperControl'
 import { killGroup } from './procs'
 import { execResize, ptyOpsFor, type PtyOps } from './pty'
@@ -34,6 +34,8 @@ export const HANDLERS: Record<VaultdMethod, Handler> = {
   'files.import': filesImport,
   'files.export': filesExport,
   'files.list': filesList,
+  'files.stat': filesStat,
+  'files.read': filesRead,
   exec,
   'exec.resize': execResize,
   'secrets.put': secretsPut,

@@ -20,6 +20,7 @@ import type {
   VaultUnavailableReason
 } from '../../shared/vault/protocol'
 import type { VaultCapabilities } from '../../shared/vault/types'
+import type { VaultFileAccess } from './fileAccess'
 
 export type VaultBackendKind = 'apple-vz' | 'fake' | 'unavailable'
 
@@ -86,6 +87,12 @@ export interface VaultBackend {
    * directory on this computer. Absent: {@link GUEST_AGENT_PATH}.
    */
   guestAgentPath?(vaultId: string): string
+  /**
+   * How the agent's files are stat-ed, read and exported, for a backend that
+   * does not run cinna-vaultd inside. Absent: the guest protocol
+   * (`createGuestFileAccess`); `vaultService.files()` picks.
+   */
+  files?(): VaultFileAccess
   /** Subscribe to backend events; returns the unsubscribe. */
   onEvent(listener: (event: VaultBackendEvent) => void): () => void
   /** Stops the helper (and with it every VM). */

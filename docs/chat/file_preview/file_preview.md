@@ -15,7 +15,8 @@ One read-only modal for looking at a file **in place**, reached three ways.
 **A [file reference](../file_references/file_references.md) in a folder agent's chat.** This is an inline code span, or a markdown link's destination, that names a real file.
 - **Open instead of Download:** the file is already on disk, so the header's **⋯** menu offers **Open** and **Open folder**, **Copy content**, and **Publish** under a separator when the file can be published ([Artifacts](../artifacts/artifacts.md)).
 - **More types:** other code and config preview as plain text as well; Python is highlighted, as it is for an attachment.
-- **Not images.** An agent file is read as text, so an image it names opens in its system app, as before.
+- **Not images.** A file on this computer is read as text, so an image it names opens in its system app. A file in an Agent Vault is the exception: its images preview (read whole, shown from a `data:` URL, never written to disk), since there is no system app to open it in.
+- **In a vault agent's chat** the ⋯ menu has **Download** first (the helper's export prompt, then a save dialog; the menu stays open while it waits and shows a refusal under the item) and Copy content, and no Open, Open folder or Publish. HTML shows as source (no frame). A locked vault shows its own body with **Unlock** and reads the file once it opens. A credential file gets no menu at all. See [File References](../file_references/file_references.md#in-a-vault-agents-chat).
 
 **A file still in the composer**, not sent yet: a thumbnail or a previewable badge above the text box. It opens the same modal with **no Download** — the file is the user's own. A new chat's files are read from their path on disk, since no chat exists to hold them yet.
 

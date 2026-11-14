@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Copy, ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal, Pin, PinOff, Upload } from 'lucide-react'
+import { Check, Copy, Download, ExternalLink, FolderOpen, Globe, Loader2, MoreHorizontal, Pin, PinOff, Upload } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
 import { MODAL_HEADER_ICON } from '../ui/modalHeader'
 import { MENU_ITEM, MENU_SURFACE } from '../agents/local/OpenInMenu'
@@ -13,15 +13,28 @@ export const PREVIEW_POPOVER_ATTR = 'data-file-preview-popover'
 
 interface FileActionsMenuProps {
   /** The action in flight, if any: the trigger spins and both items wait. */
-  pendingAction: 'open' | 'reveal' | 'browser' | null
+  pendingAction: 'open' | 'reveal' | 'browser' | 'download' | null
   /** The body already says the file has gone: its actions could only fail. */
   fileGone: boolean
-  onOpen: () => void
-  onReveal: () => void
+  /** Offered where the file's source can open it on this computer. */
+  onOpen?: () => void
+  /** Offered where the file's source can show it in a file manager. */
+  onReveal?: () => void
+  /**
+   * Download, for a reference whose source offers it (a vault's file or
+   * folder). Unlike the other items it keeps the menu open while it waits —
+   * on the source's prompt, then the save dialog — and shows a refusal under
+   * itself; the menu closes once the copy is saved or the dialog cancelled.
+   */
+  onDownload?: () => void
+  /** Why the last Download failed, shown in the menu under the item. */
+  downloadError?: string | null
+  /** The menu opened or closed (the preview shows a Download refusal itself while it is closed). */
+  onOpenChange?: (open: boolean) => void
   /** Offered for an HTML file: Open in browser, between Open and Open folder. */
   onOpenInBrowser?: () => void
-  /** Copy content, after Open folder. Copies what the preview read, so it stays clickable while an action runs. */
-  onCopy: () => void
+  /** Copy content, after Open folder. Copies what the preview read, so it stays clickable while an action runs. Absent for a folder. */
+  onCopy?: () => void
   /** There is no text to copy: still loading, or the body is a notice or an error. */
   copyDisabled: boolean
   /** Just copied: the trigger says so for a moment, since the menu has closed by then. */
@@ -40,10 +53,12 @@ interface FileActionsMenuProps {
 }
 
 /**
- * The file preview's ⋯ menu: Pin file / Unpin file first for a folder
+ * The file preview's ⋯ menu: Download first where the file's source offers
+ * it (a vault's file or folder), then Pin file / Unpin file for a folder
  * agent's file, then Open, Open in browser (HTML only), Open folder and
- * Copy content for a file an agent named, then Publish under a separator when
- * the file can be published (it was a header button; it is as occasional as these).
+ * Copy content for a file an agent named — each only where the file's source
+ * offers it — then Publish under a separator when the file can be published (it was a
+ * header button; it is as occasional as these).
  *
  * They used to be labelled header buttons; the header now holds the Contents
  * toggle, and these two are occasional. The trigger stays enabled while the
@@ -69,15 +84,31 @@ export function FileActionsMenu({
   onPublish,
   dismissed,
   onTogglePin,
-  pinned
+  pinned,
+  onDownload,
+  downloadError = null,
+  onOpenChange
 }: FileActionsMenuProps): React.JSX.Element {
   const menu = usePopover<HTMLButtonElement>('below-right')
   const { open, setOpen, triggerRef, popoverRef } = menu
   const disabled = pendingAction !== null || fileGone
+  const downloading = pendingAction === 'download'
 
   useEffect(() => {
     if (dismissed) setOpen(false)
   }, [dismissed, setOpen])
+
+  useEffect(() => {
+    onOpenChange?.(open)
+  }, [open, onOpenChange])
+
+  // A Download that ends without a refusal (saved, or the dialog cancelled)
+  // closes the menu it kept open; a refusal stays in it, under the item.
+  const wasDownloading = useRef(false)
+  useEffect(() => {
+    if (wasDownloading.current && !downloading && downloadError === null) setOpen(false)
+    wasDownloading.current = downloading
+  }, [downloading, downloadError, setOpen])
 
   const items = (): HTMLButtonElement[] =>
     Array.from(popoverRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []).filter(
@@ -180,6 +211,33 @@ export function FileActionsMenu({
             className={MENU_SURFACE}
             {...{ [PREVIEW_POPOVER_ATTR]: '' }}
           >
+            {onDownload && (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={MENU_ITEM}
+                  // Not dimmed while it waits: its own label says what is happening.
+                  disabled={disabled && !downloading}
+                  aria-busy={downloading || undefined}
+                  // Stays open: the prompt and the save dialog come next, and a refusal lands here.
+                  onClick={() => {
+                    if (!downloading) onDownload()
+                  }}
+                >
+                  {downloading ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" /> : <Download size={12} />}
+                  {downloading ? 'Downloading…' : 'Download'}
+                </button>
+                {downloadError && !downloading && (
+                  <div role="alert" className="px-2 py-1.5 text-xs text-[var(--color-danger)]">
+                    {downloadError}
+                  </div>
+                )}
+                {(onTogglePin || onOpen || onOpenInBrowser || onReveal || onCopy) && (
+                  <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
+                )}
+              </>
+            )}
             {onTogglePin && (
               <>
                 <button
@@ -195,10 +253,12 @@ export function FileActionsMenu({
                 <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
               </>
             )}
-            <button type="button" role="menuitem" className={MENU_ITEM} disabled={disabled} onClick={() => run(onOpen)}>
-              <ExternalLink size={12} />
-              Open
-            </button>
+            {onOpen && (
+              <button type="button" role="menuitem" className={MENU_ITEM} disabled={disabled} onClick={() => run(onOpen)}>
+                <ExternalLink size={12} />
+                Open
+              </button>
+            )}
             {onOpenInBrowser && (
               <button
                 type="button"
@@ -211,26 +271,30 @@ export function FileActionsMenu({
                 Open in browser
               </button>
             )}
-            <button
-              type="button"
-              role="menuitem"
-              className={MENU_ITEM}
-              disabled={disabled}
-              onClick={() => run(onReveal)}
-            >
-              <FolderOpen size={12} />
-              Open folder
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className={MENU_ITEM}
-              disabled={copyDisabled}
-              onClick={() => run(onCopy)}
-            >
-              <Copy size={12} />
-              Copy content
-            </button>
+            {onReveal && (
+              <button
+                type="button"
+                role="menuitem"
+                className={MENU_ITEM}
+                disabled={disabled}
+                onClick={() => run(onReveal)}
+              >
+                <FolderOpen size={12} />
+                Open folder
+              </button>
+            )}
+            {onCopy && (
+              <button
+                type="button"
+                role="menuitem"
+                className={MENU_ITEM}
+                disabled={copyDisabled}
+                onClick={() => run(onCopy)}
+              >
+                <Copy size={12} />
+                Copy content
+              </button>
+            )}
             {onPublish && (
               <>
                 <div role="separator" className="my-1 border-t border-[var(--color-border)]" />

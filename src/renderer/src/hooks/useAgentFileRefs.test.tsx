@@ -56,6 +56,22 @@ describe('useAgentFileRefs', () => {
     expect(result.current.get('folder:a')?.refs.has('a.csv')).toBe(true)
   })
 
+  it('keeps the links it has when the agent\'s vault answers locked, and links nothing on another failure', async () => {
+    api.resolve.mockImplementationOnce(echo)
+    const { result, rerender } = setup(new Map([['folder:v', ['Wrote `a.csv`']]]))
+    await waitFor(() => expect(result.current.get('folder:v')?.refs.has('a.csv')).toBe(true))
+
+    api.resolve.mockResolvedValueOnce({ success: false, code: 'locked', error: 'Unlock the vault to use this file.' })
+    rerender({ sources: new Map([['folder:v', ['Wrote `a.csv`', 'Then `b.csv`']]]) })
+    await waitFor(() => expect(api.resolve).toHaveBeenCalledTimes(2))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(result.current.get('folder:v')?.refs.has('a.csv')).toBe(true)
+
+    api.resolve.mockResolvedValueOnce({ success: false, code: 'agent_not_found', error: 'gone' })
+    rerender({ sources: new Map([['folder:v', ['Wrote `a.csv`', 'Then `b.csv`', 'And `c.csv`']]]) })
+    await waitFor(() => expect(result.current.get('folder:v')).toBeUndefined())
+  })
+
   it('keeps the scopes identical while nothing changed', async () => {
     api.resolve.mockImplementation(echo)
     const sources = new Map([['folder:a', ['Wrote `a.csv`']]])

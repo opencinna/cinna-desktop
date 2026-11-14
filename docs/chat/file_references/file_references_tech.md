@@ -26,6 +26,9 @@
 
 ### Main process — services
 - `src/main/services/agentFiles/agentFileService.ts`: `createAgentFileService(deps)`, with `resolve`, `authorize`, `readPreview`, `readText`, `open`, `openInBrowser` and `reveal`, and the HTML preview frame's `htmlDocumentAccess`, `readHtmlDocument` and `readHtmlAsset` (documented with [File Preview — Technical Details](../file_preview/file_preview_tech.md)).
+- `src/main/services/agentFiles/fileSource.ts`: the `AgentFileSource` seam (see [File sources](#file-sources)), `createFileSourceFor`, `refusingVaultSource`, the shared `AGENT_FILE_MESSAGES`.
+- `src/main/services/agentFiles/hostFolderSource.ts`: the folder-on-this-computer source: everything `agentFileService` used to hold privately (`target`, `permitted`, the credential check, the consent dialog, open, reveal, the HTML frame's reads).
+- `src/main/services/agentFiles/vaultFileSource.ts`: the Agent Vault source, over `VaultFileAccess` (`src/main/vault/fileAccess.ts`).
 - `src/main/services/agentFiles/openInBrowser.ts`: `browserLaunchPlan` and `createBrowserLauncher`, the default-browser launch behind Open in browser.
 - `src/main/services/agentFiles/resolver.ts`: `resolveFileRefs`, `displayPathFor` and `homeDisplayPath`.
 - `src/main/services/agentFiles/consent.ts`:
@@ -118,8 +121,10 @@ None.
 |---------|---------|---------|
 | `agent-files:resolve` | `{ agentId, entries: FileRefEntry[] }` (`{ text, source: 'span' \| 'link' }`, transcript order) | `{ success: true, refs: AgentFileRef[] }` or `AgentFileFailure` |
 | `agent-files:authorize` | `{ agentId, path, purpose? }` (`'show'` default, `'read'`, `'reveal'` or `'browser'`) | `{ success: true, approved: boolean }` or `AgentFileFailure`. May show the native dialog, worded by `purpose` |
-| `agent-files:read-preview` | `{ agentId, path }` | `{ success: true, text, truncated }` or `AgentFileFailure` |
+| `agent-files:read-preview` | `{ agentId, path }` | `{ success: true, text, truncated, shownBytes? }` or `AgentFileFailure`. `shownBytes` accompanies `truncated` when the source read less than the preview cap (a vault: 10 MB) |
 | `agent-files:read-text` | `ReadAgentFileTextInput`: `{ agentId, path, use? }` (`'note'` default, or `'copy'`) | `{ success: true, text }` (the whole file) or `AgentFileFailure`. `use` picks the cap |
+| `agent-files:read-image` | `{ agentId, path }` | `{ success: true, dataUrl, mimeType }` or `AgentFileFailure`. Only where `actions.previewImages` (a vault); whole, refused over the image cap, type sniffed from the bytes, in memory |
+| `agent-files:download` | `{ agentId, path }` | `{ success: true, savedTo: string \| null }` (`null`: save dialog cancelled) or `AgentFileFailure`. Only where `actions.download` (a vault); `requireActivated()` |
 | `agent-files:open` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure` |
 | `agent-files:open-in-browser` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure`. HTML only; never asks |
 | `agent-files:reveal` | `{ agentId, path }` | `{ success: true }` or `AgentFileFailure` |
@@ -143,6 +148,9 @@ None.
 | `credential_file` | Preview or whole-file read of a credential file | "Preview is off for credential files." (preview); "Cinna does not read credential files." (`readText`) |
 | `not_previewable` | A type the modal cannot render, or a non-HTML file given to the HTML frame or Open in browser | "No preview for this file type." |
 | `not_a_file` | A folder where a file was needed | "That is a folder, not a file." |
+| `locked` | The agent's files are in a vault that is locked | "Unlock the vault to use this file." |
+| `denied` | The prompt gating a Download was cancelled | "Cancelled at the prompt — nothing left the vault." |
+| `unsupported` | The agent's source does not offer the action (`actions` flag unset), or a vault's whole folder was asked for Download | "That isn't available for this file." |
 | `read_failed` | The read threw | "Could not read the file." |
 | `too_large` | A whole-file read over its cap (`MAX_AGENT_FILE_COPY_BYTES` for `use: 'copy'`, else `MAX_AGENT_FILE_TEXT_BYTES`), or an HTML frame document or asset over `MAX_HTML_PREVIEW_BYTES`, at the stat or at the read | "This file is over 25 MB." (copy) or "This file is over 4 MB." (note), built by `tooLarge(copy)` from the shipped constant, not an injected cap; "This file is too large to show." for the frame (served as 413) |
 | `not_text` | A whole-file read of a `binary` content kind (refused unread), or bytes with a NUL or invalid UTF-8 | "This isn't a text file." |
@@ -156,7 +164,8 @@ None.
   - consent: `getConsentUserId`, `consent`;
   - platform and paths: `platform`, `isGuardedLocation`, `paths`, `home`, `maxPreviewBytes`, `maxTextBytes` (the note cap), `maxCopyBytes` (the copy cap). `isGuardedLocation` is required, so no wiring can forget it.
   - launching: `getDefaultEditor`, `launchEditor`, `openPath`, `openInTextEditor`, `showItemInFolder`, `openInBrowser`.
-- `target(input)` (private):
+- The service holds no place-specific logic any more. Each call takes the `agentId` from the untrusted input, picks the source with `createFileSourceFor`, refuses an action whose `actions` flag the source leaves unset (`unsupported`), then runs the shared rules on what the source's `stat` returned (files only, `credential`, the kinds, the caps) and asks `source.read` for bytes. `readImage` and `download` are new. What follows in this section describes the host folder source, `hostFolderSource.ts`, as it behaves.
+- `target(input)` (private to the host source):
   1. validates the input;
   2. locates the agent folder;
   3. realpaths the folder and the path through the canonicaliser;
@@ -191,6 +200,15 @@ None.
   5. launches.
 - `openInBrowser(input)`: `permitted`, `not_a_file`, `credential_file`, `not_previewable` unless the name is of the html kind; re-takes the realpath and returns `launch_failed` if it moved; then `deps.openInBrowser(real)`.
 - `reveal(input)`: `permitted`, then `showItemInFolder(real)`.
+
+### File sources
+- **`AgentFileSource`** (`fileSource.ts`) is what is particular to the place a file lives: `actions` (what the renderer may offer, and main enforces), `resolve`, `stat` (locate, allow, stat; returns an `AgentFileTarget` with the realpath, kind, `inside` and `credential`), `read(target, { maxBytes, whole })`, and optionally `authorize`, `open`, `openInBrowser`, `reveal` and `exportFile` (Download). A source that omits `authorize` approves whatever `stat` allows.
+- **Two sources.** `hostFolderSource.ts`: a folder on this computer, every action but Download. `vaultFileSource.ts`: an Agent Vault. **`createFileSourceFor` is the only place that knows a vault agent exists** (`isVaultAgent`); a build with no vault source wired gets `refusingVaultSource`, which answers every call `agent_not_found`.
+- **Every ref carries `actions`** (`AgentFileRef.actions`, `AgentFileActions` in `shared/agentFiles.ts`: `preview`, `previewImages`, `open`, `reveal`, `openInBrowser`, `readText`, `pin`, `publish`, `run`, `reference`, `download`, `copyPath`). The renderer reads them through `agentFileRefActions(ref)`; a ref built in the renderer, such as a pinned file's, has none and gets `HOST_FILE_ACTIONS` (everything but `download`). The renderer renders from the flags, so a new source needs no component change; main refuses an unset flag regardless. The flags came from a rule: the renderer must not decide from the agent's kind what a place allows, or a third source would need every menu changed.
+- **The vault's actions** (`VAULT_FILE_ACTIONS`): `preview`, `previewImages` and `download` only. No Open, Open folder, Open in browser, Copy contents, Save to Notes, Copy full path, Pin, Publish, Run or Reference in a new chat: the file is not on this computer. A credential file in a vault gets `VAULT_CREDENTIAL_FILE_ACTIONS` (no `download` either); a folder keeps `download`.
+- **Vault resolution** is `files.stat` through `VaultFileAccess`, same candidate rules and base heuristic as the host's, but only inside the agent folder: `~/` and other absolute paths link nothing. A ref's `path` is the `/vault/agent/…` spelling, all `inside`. A locked vault fails the resolve with `locked`; the renderer keeps the links it has.
+- **Vault reads** go through `VaultFileAccess.read`, capped at 10 MB (a preview of a bigger file shows its first 10 MB with `shownBytes`). The source compares the `rel` vaultd opened with the one it stat-ed and re-applies the credential rule to it, since vaultd's answer comes from inside the vault. Previews and image reads are in memory only.
+- **Download** (`exportFile`) of a vault path runs the save dialog, then the helper's export prompt, then `files.export`. A cancelled dialog is `savedTo: null`, a cancelled prompt `denied`. The vault's own folder is refused (`unsupported`; Export… on the Security tab does that). A folder inside it exports whole, credential files inside included, after the prompt. See [Agent Vault](../../agents/vault/vault_tech.md).
 
 ### `src/main/services/agentFiles/resolver.ts`
 - `resolveFileRefs(agentDir, entries, options)`. The options are `home`, `maxCandidates`, `maxBases`, `isGuarded` (required) and `paths`. It:
@@ -272,6 +290,7 @@ None.
   - It is a sibling of the transcript rather than a wrapper, so mounting it when the first folder agent appears never remounts the bubbles.
 
 ### `src/renderer/src/hooks/useAgentFileRefs.ts`
+- A `locked` resolve answer is thrown, so the links already shown stay. `useVault.ts` drops an agent's resolved refs when a vault state push arrives, or when the agent list shows the agent moved in or out of a vault (refs from the old source carry the old `actions`), and asks main again about an open preview of one of its files.
 - `useAgentFileRefs(sources)`: `useQueries`, with one query per agent.
   - Entries from `extractFileRefEntries`. Key: `['agent-file-refs', agentId, hashCandidates(...)]` over `s:<text>` / `l:<text>` items, so the source is part of the hash.
   - `staleTime` 30 s and `retry: false`.

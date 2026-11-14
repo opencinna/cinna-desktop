@@ -6,7 +6,9 @@ import { ipcHandle } from './_wrap'
 import type {
   AgentFileActionResult,
   AuthorizeAgentFileResult,
+  DownloadAgentFileResult,
   ListPinnedAgentFilesResult,
+  ReadAgentFileImageResult,
   ReadAgentFilePreviewResult,
   ReadAgentFileTextResult,
   ResolveAgentFileRefsResult,
@@ -14,7 +16,7 @@ import type {
 } from '../../shared/agentFiles'
 
 /**
- * Inline file references in a folder agent's chat. Thin controllers: gate,
+ * Inline file references in an agent's chat (a folder here, or a vault). Thin controllers: gate,
  * delegate. Every payload is untrusted — the service re-validates the shape,
  * locates the agent folder itself, and re-checks containment or consent on
  * every read, open and reveal. Results carry failure codes as data.
@@ -50,6 +52,18 @@ export function registerAgentFileHandlers(): void {
   ipcHandle('agent-files:open-in-browser', (_event, data: unknown): Promise<AgentFileActionResult> => {
     userActivation.requireActivated()
     return agentFileService.openInBrowser(data)
+  })
+
+  /** An image as a `data:` URL, for a source that previews images (a vault). Kept in memory only. */
+  ipcHandle('agent-files:read-image', (_event, data: unknown): Promise<ReadAgentFileImageResult> => {
+    userActivation.requireActivated()
+    return agentFileService.readImage(data)
+  })
+
+  /** Download: a copy saved outside, behind the source's own gate (a vault's prompt, then the save dialog). */
+  ipcHandle('agent-files:download', (_event, data: unknown): Promise<DownloadAgentFileResult> => {
+    userActivation.requireActivated()
+    return agentFileService.download(data)
   })
 
   // Pins belong to the active profile (the service reads its scope) and to a

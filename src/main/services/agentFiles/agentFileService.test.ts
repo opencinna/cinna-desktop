@@ -174,7 +174,8 @@ describe('readPreview', () => {
     expect(await service.readPreview(at(join(agent, 'data/omp.csv')))).toEqual({
       success: true,
       text: 'a,b\n1,2',
-      truncated: true
+      truncated: true,
+      shownBytes: 7
     })
   })
 
@@ -187,7 +188,7 @@ describe('readPreview', () => {
     expect(await service.readPreview(at(path))).toMatchObject({ success: false, code: 'needs_consent' })
 
     expect(await service.authorize(at(path), approve())).toEqual({ success: true, approved: true })
-    expect(await service.readPreview(at(path))).toEqual({ success: true, text: '# outsi', truncated: true })
+    expect(await service.readPreview(at(path))).toEqual({ success: true, text: '# outsi', truncated: true, shownBytes: 7 })
     expect(prompts.map((p) => [p.agentName, p.path, p.dir, p.offerDir])).toEqual([
       ['GFCA', path, outside, true],
       ['GFCA', path, outside, true]
@@ -243,7 +244,7 @@ describe('readPreview', () => {
 
   it('drops a multi-byte character severed by the byte cap', async () => {
     const service = makeService()
-    expect(await service.readPreview(at(join(agent, 'big.txt')))).toEqual({ success: true, text: 'ééé', truncated: true })
+    expect(await service.readPreview(at(join(agent, 'big.txt')))).toEqual({ success: true, text: 'ééé', truncated: true, shownBytes: 7 })
   })
 
   it('refuses malformed input and unknown agents as data', async () => {
@@ -477,7 +478,8 @@ describe('macOS data-volume spelling', () => {
     expect(await service.readPreview(at(firm + join(agent, 'main.py')))).toEqual({
       success: true,
       text: 'print(1',
-      truncated: true
+      truncated: true,
+      shownBytes: 7
     })
   })
 

@@ -12,7 +12,9 @@ import {
   type VaultStatusDto
 } from '../../../shared/vault/types'
 import { composerDraftSurface, useComposerDraftStore } from '../stores/composerDraft.store'
-import { LOCAL_AGENTS_KEY, localAgentKey } from './useLocalAgents'
+import { useFilePreviewStore } from '../stores/filePreview.store'
+import { LOCAL_AGENTS_KEY, localAgentKey, type LocalAgentsSnapshot } from './useLocalAgents'
+import { agentFileRefsKey } from './useAgentFileRefs'
 
 /**
  * Agent Vault, as the renderer sees it. Every call but `availability` answers
@@ -123,26 +125,61 @@ export function applyVaultChatFilesSwept(event: VaultChatFilesSweptEvent): void 
   }
 }
 
+/** The ids of the agents a local-agents snapshot lists as in a vault. */
+function vaultAgentIds(snapshot: LocalAgentsSnapshot | undefined): Set<string> | null {
+  if (!snapshot?.agents) return null
+  return new Set(snapshot.agents.filter((agent) => agent.vault !== undefined).map((agent) => agent.id))
+}
+
 /**
  * App-wide: every `vault:state` push updates that vault's status and drops the
  * agent lists (the readiness row and the agent page's Unlock / Lock now), which carry the state too;
  * a lock's attachment sweep reaches the composer drafts.
+ *
+ * Where an agent's files can be reached changes with it: a state push, or the
+ * agent list showing an agent moved into or out of a vault, drops that
+ * agent's resolved file references (refs resolved by the old source offered
+ * the old actions), and an open preview of one of its files checks again.
  */
 export function useVaultWatch(): void {
   const queryClient = useQueryClient()
   useEffect(() => {
     const api = vaultApi()
     if (!api?.onState) return
+    // Whether each agent's vault was open at its last push: file refs and an open
+    // preview only care when that changes, not on every window restart a
+    // keystroke's touch or a turn's hold sends.
+    const open = new Map<string, boolean>()
     const offState = api.onState((event) => {
       applyVaultState(queryClient, event)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY }, { cancelRefetch: false })
       void queryClient.invalidateQueries({ queryKey: localAgentKey(event.agentId) }, { cancelRefetch: false })
       void queryClient.invalidateQueries({ queryKey: ['agents'] }, { cancelRefetch: false })
+      const nowOpen = event.state === 'unlocked'
+      if (open.get(event.agentId) === nowOpen) return
+      open.set(event.agentId, nowOpen)
+      void queryClient.invalidateQueries({ queryKey: agentFileRefsKey(event.agentId) })
+      void useFilePreviewStore.getState().recheckAgentFile(event.agentId)
     })
     const offSwept = api.onChatFilesSwept?.(applyVaultChatFilesSwept)
+    // Moved in or out: the agent list is where that shows.
+    let inVault = vaultAgentIds(queryClient.getQueryData<LocalAgentsSnapshot>(LOCAL_AGENTS_KEY))
+    const offList = queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' || event.query.queryKey[0] !== LOCAL_AGENTS_KEY[0] || event.query.queryKey.length !== 1) return
+      const now = vaultAgentIds(event.query.state.data as LocalAgentsSnapshot | undefined)
+      if (now === null) return
+      // The first list seen is the baseline, not a move.
+      const before = inVault
+      inVault = now
+      if (before === null) return
+      for (const id of new Set([...before, ...now])) {
+        if (before.has(id) !== now.has(id)) void queryClient.invalidateQueries({ queryKey: agentFileRefsKey(id) })
+      }
+    })
     return () => {
       offState()
       offSwept?.()
+      offList()
     }
   }, [queryClient])
 }
