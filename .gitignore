@@ -35,6 +35,7 @@ e2e/playwright-report
 
 # make vault-image output and its download cache (build/ itself holds tracked packaging files).
 /build/vault-guest/
+/build/vault-dev-electron/
 
 # The Agent Vault helper, built by scripts/vault/build-helper.sh, and the guest
 # pins it generates from build/vault-guest/guest.lock.json.
