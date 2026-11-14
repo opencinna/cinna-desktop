@@ -437,7 +437,7 @@ function PrecheckPanel({
 
 /** What a key of each provider starts with, as a hint in the empty field; a generic word when the provider is unknown. */
 const API_KEY_PLACEHOLDER: Record<string, string> = {
-  ANTHROPIC_API_KEY: 'sk-ant-…',
+  ANTHROPIC_API_KEY: 'sk-ant-… or a claude setup-token token',
   OPENAI_API_KEY: 'sk-…',
   GEMINI_API_KEY: 'AIza…'
 }

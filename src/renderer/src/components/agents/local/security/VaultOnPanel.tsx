@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Download, File, Folder, Loader2, Lock, LockOpen, Plus, SquareTerminal, Trash2 } from 'lucide-react'
 import type { LocalAgentDto } from '../../../../../../shared/localAgents'
 import type { LocalAgentVaultInfo, VaultEngine, VaultStatusDto } from '../../../../../../shared/vault/types'
-import { VAULT_ENGINE_HOSTS } from '../../../../../../shared/vault/protocol'
+import { VAULT_ENGINE_HOSTS, VAULT_ENGINE_LOGIN } from '../../../../../../shared/vault/protocol'
 import {
   onVaultMoveProgress,
   useVaultDeleteHostCopy,
@@ -541,7 +541,10 @@ function EngineLoginRow({
   const [value, setValue] = useState('')
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const loggedIn = auth.data?.loggedIn ?? false
-  const onKey = loggedIn && auth.data?.method === 'api_key'
+  // A `claude setup-token` token is set and removed the same way as a key (main files it by prefix).
+  const onKey = loggedIn && (auth.data?.method === 'api_key' || auth.data?.method === 'oauth_token')
+  const login = VAULT_ENGINE_LOGIN[engine]
+  const keyWord = login?.short ?? 'API key'
   const text = !open
     ? LOCKED_VALUE
     : auth.isLoading
@@ -593,13 +596,13 @@ function EngineLoginRow({
                 setEditing(true)
               }}
             >
-              {onKey ? 'Replace API key' : 'Set API key'}
+              {onKey ? `Replace ${keyWord}` : `Set ${keyWord}`}
             </SettingsButton>
             {open && onKey && (
               <SettingsIconButton
                 danger
-                title="Remove API key"
-                aria-label="Remove API key"
+                title={`Remove ${keyWord}`}
+                aria-label={`Remove ${keyWord}`}
                 disabled={forms.active !== null || confirmingRemove}
                 onClick={() => {
                   remove.reset()
@@ -616,7 +619,7 @@ function EngineLoginRow({
       {confirmingRemove && keyName && (
         <div className="mt-2 flex min-h-[30px] items-center gap-2">
           <span className="min-w-0 flex-1 text-[13px] text-[var(--color-text)]">
-            Remove the API key? {ENGINE_NAME[engine]} is signed out in this vault until you set a new one.
+            Remove the {keyWord}? {ENGINE_NAME[engine]} is signed out in this vault until you set a new one.
           </span>
           <button type="button" className={CANCEL_TEXT} disabled={remove.isPending} onClick={() => setConfirmingRemove(false)}>
             Cancel
@@ -643,8 +646,8 @@ function EngineLoginRow({
         >
           <input
             type="password"
-            aria-label={keyName ?? 'API key'}
-            placeholder={keyName ?? ''}
+            aria-label={login?.short ?? keyName ?? 'API key'}
+            placeholder={login?.what ?? keyName ?? ''}
             autoComplete="off"
             value={value}
             disabled={setSecret.isPending}
@@ -703,7 +706,9 @@ function SecretsRow({
    */
   const auth = useVaultEngineAuth(agentId, open)
   const engineKey = engineKeyName(engine, auth.data)
-  const names = (secrets.data ?? []).filter((secret) => secret !== engineKey)
+  // An engine login of several names (Claude: API key or setup-token token); all belong to Engine login.
+  const loginNames = VAULT_ENGINE_LOGIN[engine]?.names ?? (engineKey ? [engineKey] : [])
+  const names = (secrets.data ?? []).filter((secret) => !loginNames.includes(secret))
   const known = secrets.data !== undefined
   const count = `${names.length} secret${names.length === 1 ? '' : 's'}`
   const text = !open
@@ -726,8 +731,8 @@ function SecretsRow({
       setProblem('A name is letters, digits and underscores, not starting with a digit.')
       return
     }
-    if (engineKey && name.trim() === engineKey) {
-      setProblem(`${engineKey} is the engine’s key; set it under Engine login.`)
+    if (loginNames.includes(name.trim())) {
+      setProblem(`${name.trim()} is the engine’s key; set it under Engine login.`)
       return
     }
     if (!value) {

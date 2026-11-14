@@ -30,7 +30,7 @@
 import { createHash } from 'node:crypto'
 import type { AgentReadiness } from '../../../../shared/agentDrivers'
 import type { ClaudeApproval } from '../../../../shared/engine'
-import type { RuntimeKind, VaultEngine, VaultState } from '../../../../shared/vault/protocol'
+import { VAULT_ENGINE_LOGIN, type RuntimeKind, type VaultEngine, type VaultState } from '../../../../shared/vault/protocol'
 import type { VaultdClient } from '../../../vault/vaultdClient'
 import { parseLaunchSettings, VAULT_KV_INSTRUCTIONS, VAULT_KV_LAUNCH, VAULT_LAUNCH_FALLBACK, type VaultLaunchSettings } from '../../../vault/vaultAgentState'
 import { airClientMeta } from './acpActivity'
@@ -90,7 +90,8 @@ export function vaultEngineNotPinned(engine: VaultEngine): string {
 export function vaultEngineSignedOut(engine: VaultEngine, keyName: string | undefined): string {
   if (engine === 'antigravity') return VAULT_ANTIGRAVITY_SIGNED_OUT
   const owner = (keyName && KEY_OWNER[keyName]) ?? 'an'
-  return `${VAULT_ENGINE_NAME[engine]} is not signed in inside this vault. Add ${owner} API key on the agent’s Security tab.`
+  const what = VAULT_ENGINE_LOGIN[engine]?.what ?? `${owner} API key`
+  return `${VAULT_ENGINE_NAME[engine]} is not signed in inside this vault. Add ${what} on the agent’s Security tab.`
 }
 
 export function specKey(parts: readonly string[]): string {

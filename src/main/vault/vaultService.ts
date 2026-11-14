@@ -18,7 +18,7 @@ import { createLogger } from '../logger/logger'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import {
   VAULT_ENGINES,
-  VAULT_SECRET_NAME, vaultSecretStorable,
+  VAULT_SECRET_NAME, vaultSecretStorable, VAULT_ENGINE_LOGIN, vaultEngineLoginSecret,
   approvalDetail,
   type EgressPolicy,
   type GatedAction,
@@ -508,14 +508,35 @@ export const vaultService = {
     if (typeof name !== 'string' || !VAULT_SECRET_NAME.test(name)) throw new VaultError('invalid', 'A secret name is capital letters, digits and _ (like ANTHROPIC_API_KEY).')
     if (!vaultSecretStorable(name)) throw new VaultError('invalid', `${name} would change how the engine runs, so it can’t be a secret. Give it a name of your own.`)
     if (typeof value !== 'string' || value.length === 0 || value.length > 64 * 1024 || value.includes('\0')) throw new VaultError('invalid', 'The secret value is empty or too long.')
-    await (await this.client(ref.vaultId)).request('secrets.put', { name, value })
+    const client = await this.client(ref.vaultId)
+    const logins = VAULT_ENGINE_LOGIN[ref.engine]?.names ?? []
+    if (logins.includes(name)) {
+      // An engine login of several names (Claude: an API key or a `claude
+      // setup-token` token, told apart by prefix); the vault keeps one, since
+      // an API key wins over a token.
+      const login = vaultEngineLoginSecret(ref.engine, null, value) ?? name
+      await client.request('secrets.put', { name: login, value })
+      try {
+        for (const other of logins) if (other !== login) await client.request('secrets.delete', { name: other })
+      } catch {
+        // An API key wins over a token, so a leftover one would hide what was just saved.
+        refreshReadiness(ref.vaultId)
+        throw new VaultError('internal', 'Saved, but the previous login could not be removed. Save it again.')
+      }
+    } else {
+      await client.request('secrets.put', { name, value })
+    }
     refreshReadiness(ref.vaultId)
   },
 
   async deleteSecret(userId: string, agentId: string, name: unknown): Promise<void> {
     const { ref } = refFor(userId, agentId)
     if (typeof name !== 'string' || !VAULT_SECRET_NAME.test(name)) throw new VaultError('invalid', 'That is not a secret name.')
-    await (await this.client(ref.vaultId)).request('secrets.delete', { name })
+    const client = await this.client(ref.vaultId)
+    // Removing an engine login of several names removes whichever the vault holds.
+    const logins = VAULT_ENGINE_LOGIN[ref.engine]?.names ?? []
+    const names = logins.includes(name) ? logins : [name]
+    for (const each of names) await client.request('secrets.delete', { name: each })
     refreshReadiness(ref.vaultId)
   },
 

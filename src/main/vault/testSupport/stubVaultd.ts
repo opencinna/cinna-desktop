@@ -12,6 +12,7 @@ const net = require('node:net')
 const args = process.argv.slice(2)
 const flag = (name) => args[args.indexOf(name) + 1]
 const listen = flag('--listen')
+const secrets = {}
 const journals = {}
 net.createServer((socket) => {
   let buffered = ''
@@ -33,6 +34,9 @@ net.createServer((socket) => {
       if (req.method === 'hello') result = { protocol: 1, image: { version: 'fake', node: process.version, uv: '' }, layoutReady: true, fake: true, vaultId: flag('--vault-id'), key: flag('--approval-key').length }
       else if (req.method === 'transcript.append') { (journals[req.params.chatId] ||= []).push(...req.params.ops); result = {} }
       else if (req.method === 'transcript.read') result = { ops: journals[req.params.chatId] || [] }
+      else if (req.method === 'secrets.put') { secrets[req.params.name] = req.params.value; result = {} }
+      else if (req.method === 'secrets.delete') { delete secrets[req.params.name]; result = {} }
+      else if (req.method === 'secrets.list') result = { names: Object.keys(secrets) }
       else { socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, error: { code: -32601, message: 'no such method', data: { code: 'invalid' } } }) + '\\n'); continue }
       socket.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) + '\\n')
     }

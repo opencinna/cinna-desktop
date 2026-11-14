@@ -241,6 +241,19 @@ describe('vaultService', () => {
     expect(status.egress).toEqual({ hosts: ['*.githubusercontent.com', 'pypi.org'] })
   })
 
+  it('files a Claude login by its prefix: a setup-token token as CLAUDE_CODE_OAUTH_TOKEN, a key as ANTHROPIC_API_KEY, one at a time', async () => {
+    await vaultService.unlock(USER, AGENT)
+    await vaultService.setSecret(USER, AGENT, 'ANTHROPIC_API_KEY', 'sk-ant-oat01-from-setup-token')
+    expect((await vaultService.secrets(USER, AGENT)).names).toEqual(['CLAUDE_CODE_OAUTH_TOKEN'])
+    await vaultService.setSecret(USER, AGENT, 'ANTHROPIC_API_KEY', 'sk-ant-api03-a-key')
+    expect((await vaultService.secrets(USER, AGENT)).names).toEqual(['ANTHROPIC_API_KEY'])
+    await vaultService.setSecret(USER, AGENT, 'DB_URL', 'sk-ant-oat01-not-a-login')
+    expect((await vaultService.secrets(USER, AGENT)).names).toEqual(['ANTHROPIC_API_KEY', 'DB_URL'])
+    await vaultService.setSecret(USER, AGENT, 'ANTHROPIC_API_KEY', 'sk-ant-oat01-again')
+    await vaultService.deleteSecret(USER, AGENT, 'ANTHROPIC_API_KEY')
+    expect((await vaultService.secrets(USER, AGENT)).names).toEqual(['DB_URL'])
+  })
+
   it('answers failures as data with a code, for the renderer', async () => {
     expect(await vaultService.result(() => vaultService.unlock(USER, 'folder:not-a-vault'))).toEqual({
       ok: false, code: 'not_vault_agent', message: 'That agent is not in a vault.'

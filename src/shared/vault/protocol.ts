@@ -297,6 +297,39 @@ export type VaultLaunchProvider = (typeof VAULT_LAUNCH_PROVIDERS)[number]
 /** A model id as `cinna.launch` may hold it (no provider prefix). */
 export const VAULT_LAUNCH_MODEL = /^[A-Za-z0-9._:\[\]-]{1,100}$/
 
+/** The two secrets Claude Code signs in with inside a vault; a vault holds one of them. */
+export const CLAUDE_LOGIN_SECRETS: readonly string[] = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']
+
+/**
+ * Which of {@link CLAUDE_LOGIN_SECRETS} a pasted value belongs in, by its
+ * prefix: `claude setup-token` prints an OAuth token (`sk-ant-oat…`), which
+ * Claude Code reads only from CLAUDE_CODE_OAUTH_TOKEN (as ANTHROPIC_API_KEY it
+ * is sent as an API key and refused); anything else is an API key.
+ */
+export function claudeLoginSecretName(value: string): 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' {
+  return value.trim().startsWith('sk-ant-oat') ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY'
+}
+
+/**
+ * Engines whose login is more than one fixed key: the names it may be stored
+ * under (a vault keeps one), how a pasted value picks its name, and how the
+ * UI names what to paste. Every other engine signs in with
+ * {@link vaultEngineKeyName} alone.
+ */
+export const VAULT_ENGINE_LOGIN: Partial<Record<VaultEngine, { names: readonly string[]; nameFor: (value: string) => string; what: string; short: string }>> = {
+  claude: {
+    names: CLAUDE_LOGIN_SECRETS,
+    nameFor: claudeLoginSecretName,
+    what: 'an Anthropic API key or a claude setup-token token',
+    short: 'API key or token'
+  }
+}
+
+/** The secret a pasted engine login is stored under. */
+export function vaultEngineLoginSecret(engine: VaultEngine, provider: VaultLaunchProvider | null, value: string): string | null {
+  return VAULT_ENGINE_LOGIN[engine]?.nameFor(value) ?? vaultEngineKeyName(engine, provider)
+}
+
 /**
  * The secret an engine signs in with inside a vault: the API key it reads
  * from its environment. OpenCode's depends on the agent's model provider

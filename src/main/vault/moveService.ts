@@ -48,6 +48,8 @@ import {
   VAULT_ENGINE_HOSTS,
   approvalDetail,
   vaultEngineKeyName,
+  vaultEngineLoginSecret,
+  VAULT_ENGINE_LOGIN,
   type ExecPreset,
   type VaultEngine,
   type VaultLaunchProvider
@@ -437,7 +439,7 @@ export async function precheck(userId: string, agentId: string): Promise<VaultPr
     const keyName = apiKeyName
     const owner = keyName ? KEY_OWNER[keyName] ?? 'an' : 'an'
     const name = VAULT_ENGINE_NAME[vaultEngine]
-    items.push({ kind: 'engine-login', severity: 'info', title: `${name} needs an API key inside the vault`, detail: `Your ${name} login on this computer cannot be handed into a vault. Paste ${owner} API key, or add one later.` })
+    items.push({ kind: 'engine-login', severity: 'info', title: `${name} needs an API key inside the vault`, detail: `Your ${name} login on this computer cannot be handed into a vault. Paste ${VAULT_ENGINE_LOGIN[vaultEngine]?.what ?? `${owner} API key`}, or add one later.` })
   }
   return {
     agentId: row.id,
@@ -774,7 +776,7 @@ async function runMoveIn(userId: string, agentId: string, moveId: string, check:
     const hasServiceCredentials = check.items.some((item) => item.kind === 'service-credential')
     if (options.apiKey || hasServiceCredentials) {
       await step('credentials', async () => {
-        if (options.apiKey) await client.request('secrets.put', { name: vaultEngineKeyName(engine, provider) ?? 'ANTHROPIC_API_KEY', value: options.apiKey })
+        if (options.apiKey) await client.request('secrets.put', { name: vaultEngineLoginSecret(engine, provider, options.apiKey) ?? 'ANTHROPIC_API_KEY', value: options.apiKey })
         if (hasServiceCredentials) {
           const files = await vaultCredentials.moveIn(vaultId, client, agentId, vaultService.agentCwd(vaultId))
           if (files > 0) report.output('credentials', 'Service credentials delivered into the vault.\n')
