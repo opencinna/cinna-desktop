@@ -25,6 +25,9 @@
  *   make vault-helper          # FLAVOR=test
  *   make vault-image
  *   make vault-switch-live
+ *
+ * On a Mac whose screen is locked, add CINNA_VAULT_TEST_SCREEN_LOCKED=0; with
+ * the Gemini key's free tier spent, VAULT_SWITCH_ANTIGRAVITY_QUOTA_OK=1.
  */
 import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -48,10 +51,22 @@ const ANTIGRAVITY_MODEL = 'gemini-3.8-flash-low'
 /**
  * VAULT_SWITCH_SKIP_ANTIGRAVITY_TURN=1 checks Antigravity's readiness instead
  * of sending its turn: the Gemini free tier allows 20 Flash requests a day per
- * project, and on a 429 the pinned server retries without a word, so the turn
- * would only hang until the timeout below.
+ * project. A spent daily quota ends the turn at once with a refusal (see
+ * VAULT_SWITCH_ANTIGRAVITY_QUOTA_OK); an unreachable API makes the turn hang
+ * silently until the timeout below.
  */
 const SKIP_ANTIGRAVITY_TURN = process.env['VAULT_SWITCH_SKIP_ANTIGRAVITY_TURN'] === '1'
+/**
+ * VAULT_SWITCH_ANTIGRAVITY_QUOTA_OK=1 also passes the Antigravity turn when
+ * Gemini refuses it for quota: the server answers a daily-quota 429 at once
+ * with "You exceeded your current quota…" and `end_turn`, which only arrives
+ * when the request went through the vault's egress proxy to
+ * generativelanguage.googleapis.com and back. A broken path is silent instead
+ * (the server retries its connect every ~40 s), so the refusal is proof of the
+ * path, and it costs nothing once the key's free tier is spent.
+ */
+const ANTIGRAVITY_QUOTA_OK = process.env['VAULT_SWITCH_ANTIGRAVITY_QUOTA_OK'] === '1'
+const QUOTA_REFUSAL = 'You exceeded your current quota'
 /** A turn that has not ended by then fails (and is cancelled) instead of hanging the lane. */
 const TURN_TIMEOUT_MS = 180_000
 
@@ -235,7 +250,7 @@ describe('Agent Vault engine switch live (three short billed turns)', () => {
     }
 
     /** One short turn in a new vault chat (a chat's session belongs to the engine it ran on). */
-    const turn = async (label: string, phrase: string): Promise<string> => {
+    const turn = async (label: string, phrase: string, alsoAccept?: string): Promise<string> => {
       const row = agentRepo.getOwned(USER, AGENT)!
       expect(await driver.readiness(USER, row), `${label} readiness`).toEqual({ state: 'ok', reason: null })
       const chatId = chatRepo.create(USER, {}).id
@@ -270,7 +285,8 @@ describe('Agent Vault engine switch live (three short billed turns)', () => {
       say(`reply ${label}`, JSON.stringify(reply.slice(-300)))
       say(`telemetry ${label}`, JSON.stringify((turnResult as { telemetry?: unknown } | null)?.telemetry ?? null))
       expect(posted.at(-1), JSON.stringify(posted.slice(-3)).slice(0, 2000)).toMatchObject({ type: 'done' })
-      expect(reply).toContain(phrase)
+      if (alsoAccept && reply.includes(alsoAccept)) say(`${label}: refused with "${alsoAccept}…", accepted as proof of the path`)
+      else expect(reply).toContain(phrase)
       return reply
     }
 
@@ -306,7 +322,7 @@ describe('Agent Vault engine switch live (three short billed turns)', () => {
         expect(await driver.readiness(USER, agentRepo.getOwned(USER, AGENT)!), 'antigravity readiness').toEqual({ state: 'ok', reason: null })
         say('antigravity turn skipped (VAULT_SWITCH_SKIP_ANTIGRAVITY_TURN=1); readiness ok')
       } else {
-        await turn('antigravity', 'vault antigravity ok')
+        await turn('antigravity', 'vault antigravity ok', ANTIGRAVITY_QUOTA_OK ? QUOTA_REFUSAL : undefined)
       }
 
       // ---- 4. Back to OpenCode, no key: nothing to set up or allow, the stored key signs in.
