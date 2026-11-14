@@ -17,7 +17,9 @@
 //
 //   sh scripts/vault/build-helper.sh            # FLAVOR=test (default)
 //   node scripts/vault/helper-smoke.mjs [--keep] [--no-net]
-//   FLAVOR=dev sh scripts/vault/build-helper.sh && node scripts/vault/helper-smoke.mjs --keychain
+//   FLAVOR=dev sh scripts/vault/build-helper.sh && node scripts/vault/helper-smoke.mjs --keychain [--presence]
+//   (dev/release: the smoke re-runs itself under a copy of node signed as Cinna with your team identity;
+//   --presence raises four real Touch ID prompts: unlock, resume, an export approval, destroy)
 //
 // Needs build/vault-guest/rootfs.img (make vault-image). No prompts, no
 // billing; --no-net skips the two curl probes that reach the internet.
@@ -61,6 +63,30 @@ function frame(type, channel, payload = Buffer.alloc(0)) {
 
 if (!existsSync(HELPER)) throw new Error(`no helper at ${HELPER}: run sh scripts/vault/build-helper.sh`)
 if (!existsSync(ROOTFS)) throw new Error(`no guest rootfs at ${ROOTFS}: run make vault-image`)
+
+// A dev or release helper enforces its parent (D35): signed by the team, with
+// Cinna's identifier, hardened. Stand in for Cinna with a throwaway copy of this
+// node signed that way (dev: Apple Development or Developer ID; release:
+// Developer ID only) and run the whole smoke under it.
+const FLAVOR = spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CinnaVaultFlavor', join(HELPER, '../../Info.plist')], { encoding: 'utf8' }).stdout.trim() || 'test'
+if (FLAVOR !== 'test' && !process.env.CINNA_SMOKE_STANDIN) {
+  const identities = spawnSync('security', ['find-identity', '-v', '-p', 'codesigning'], { encoding: 'utf8' }).stdout
+  const pick = (kind) => new RegExp(`([0-9A-F]{40}) "${kind}: [^"]*\\(G5E484HA2U\\)"`).exec(identities)?.[1]
+  const identity = FLAVOR === 'release' ? pick('Developer ID Application') : (pick('Apple Development') ?? pick('Developer ID Application'))
+  if (!identity) throw new Error(`no ${FLAVOR === 'release' ? 'Developer ID Application' : 'Apple Development / Developer ID'} identity of team G5E484HA2U to sign the stand-in parent`)
+  const standDir = mkdtempSync(join(tmpdir(), 'cinna-vault-standin-'))
+  const standIn = join(standDir, 'node')
+  writeFileSync(standIn, readFileSync(process.execPath))
+  chmodSync(standIn, 0o755)
+  const ents = join(standDir, 'node.entitlements')
+  writeFileSync(ents, '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/></dict></plist>\n')
+  const sign = spawnSync('codesign', ['-f', '-s', identity, '-o', 'runtime', '--identifier', 'io.opencinna.desktop', '--entitlements', ents, standIn], { encoding: 'utf8' })
+  if (sign.status !== 0) throw new Error(`codesign of the stand-in parent failed: ${sign.stderr}`)
+  console.log(stamp(), `stand-in parent: ${standIn} signed as io.opencinna.desktop (${FLAVOR} helper)`)
+  const run = spawnSync(standIn, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: 'inherit', env: { ...process.env, CINNA_SMOKE_STANDIN: '1' } })
+  rmSync(standDir, { recursive: true, force: true })
+  process.exit(run.status ?? 1)
+}
 
 const dir = mkdtempSync(join(tmpdir(), 'cinna-vault-smoke-'))
 const secureAgents = join(dir, 'SecureAgents')
@@ -111,7 +137,9 @@ function parentProbe({ env = {}, parentEnv = {}, rogue = false } = {}) {
 const nodeSigned = spawnSync('codesign', ['-dv', process.execPath], { encoding: 'utf8' }).stderr ?? ''
 const nodeTeam = /TeamIdentifier=(\w+)/.exec(nodeSigned)?.[1]
 const nodeIdent = /Identifier=(\S+)/.exec(nodeSigned)?.[1]
-{
+if (FLAVOR !== 'test') {
+  say(`  SKIP parent-check probes: they need the test flavor's overrides (this helper is ${FLAVOR}; its parent is the signed stand-in)`)
+} else {
   say('parent-check probes (D35)')
   const def = parentProbe()
   const h0 = def.replies.find((m) => m.id === 1)?.result
@@ -256,6 +284,32 @@ if (process.argv.includes('--keychain')) {
     check((await call('vault.list', { dir: secureAgents })).vaults[0]?.state === 'tampered', 'edited vault.json → tampered')
     writeFileSync(p, orig)
     check((await call('vault.list', { dir: secureAgents })).vaults[0]?.state === 'stopped', 'original bytes verify again')
+  }
+  // --presence: the real Touch ID / password prompts, a person at the Mac.
+  // Four prompts: unlock (cold boot), unlock again (resume after a lock), an
+  // export approval, and the destroy approval (which also removes this run's
+  // keychain digest item).
+  if (c?.vault && process.argv.includes('--presence')) {
+    const ask = (what) => say(`>>> ${what}: approve the prompt that appears now (or cancel it to see a refusal)`)
+    ask('1/4 unlock the vault (cold boot)')
+    const u1 = await step('vault.unlock with Touch ID (cold boot + LUKS format)', () => call('vault.unlock', { vaultId, purpose: 'presence smoke' }))
+    check(u1?.state === 'unlocked', 'unlocked after the prompt', JSON.stringify(u1))
+    if (u1?.state === 'unlocked') {
+      const h = await step('vaultd hello inside the VM', () => vaultd(vaultId, 'hello'))
+      check(h?.reply?.result?.protocol === 1, 'vaultd answers over channel.open')
+      await call('vault.lock', { vaultId })
+      check((await call('vault.status', { vaultId })).state === 'locked', 'locked (key wiped, VM paused)')
+      ask('2/4 unlock again (resume)')
+      const u2 = await step('vault.unlock with Touch ID (resume)', () => call('vault.unlock', { vaultId, purpose: 'presence smoke resume' }))
+      check(u2?.state === 'unlocked', 'resumed after the prompt', JSON.stringify(u2))
+      ask('3/4 approve an export')
+      const ex = await step('vault.approve export with Touch ID', () => call('vault.approve', { vaultId, action: 'export', detail: approvalDetail({ method: 'files.export', path: 'agent/presence.txt' }) }))
+      check(typeof ex?.token === 'string', 'export approval token issued')
+    }
+    ask('4/4 approve deleting the probe vault')
+    const ds = await step('vault.approve destroy with Touch ID', () => call('vault.approve', { vaultId, action: 'destroy', detail: approvalDetail({ method: 'vault.destroy' }) }))
+    if (ds?.token) await step('vault.destroy', () => call('vault.destroy', { vaultId, token: ds.token }))
+    check(!existsSync(join(secureAgents, vaultId)), 'probe vault deleted')
   }
   helper.stdin.end()
   await exited
