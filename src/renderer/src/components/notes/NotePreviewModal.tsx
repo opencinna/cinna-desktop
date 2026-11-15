@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { useNote } from '../../hooks/useNotes'
 import { markdownComponents } from '../../utils/markdownComponents'
+import { remarkNoteFormat } from '../../utils/noteFormat/remarkNoteFormat'
 import { useFrontmatter } from '../ui/FrontmatterTable'
 
 interface NotePreviewModalProps {
@@ -81,7 +82,7 @@ export function NotePreviewModal({
             <div className="markdown-body text-sm text-[var(--color-text)] leading-relaxed">
               {rendered.card}
               <Markdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkNoteFormat]}
                 rehypePlugins={[rehypeHighlight]}
                 components={markdownComponents}
               >

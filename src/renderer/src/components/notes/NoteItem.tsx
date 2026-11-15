@@ -13,9 +13,15 @@ interface NoteItemProps {
    * own group — see NotesList / NoteFolderRow.
    */
   onDropNote?: (draggedNoteId: string, beforeNoteId: string) => void
+  /**
+   * Whether the row can be dragged (default true). Off for rows outside the
+   * folder groups (Assistant memory, a tag-filtered list), which have no
+   * order of their own to change.
+   */
+  draggable?: boolean
 }
 
-export function NoteItem({ note, onDropNote }: NoteItemProps): React.JSX.Element {
+export function NoteItem({ note, onDropNote, draggable = true }: NoteItemProps): React.JSX.Element {
   const activeNoteId = useUIStore((s) => s.activeNoteId)
   const activeView = useUIStore((s) => s.activeView)
   const setActiveNoteId = useUIStore((s) => s.setActiveNoteId)
@@ -85,9 +91,9 @@ export function NoteItem({ note, onDropNote }: NoteItemProps): React.JSX.Element
   return (
     <div
       ref={rowRef}
-      draggable
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
+      draggable={draggable}
+      onDragStart={draggable ? handleDragStart : undefined}
+      onDragEnd={draggable ? handleDragEnd : undefined}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}

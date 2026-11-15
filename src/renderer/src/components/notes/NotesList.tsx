@@ -1,10 +1,10 @@
 import { FolderPlus, Plus } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   useCreateNote,
   useCreateNoteFolder,
+  useNoteCollections,
   useNoteFolders,
-  useNoteList,
   useReorderNoteFolders,
   useReorderNotes
 } from '../../hooks/useNotes'
@@ -13,9 +13,15 @@ import { NoteItem } from './NoteItem'
 import { NoteFolderRow } from './NoteFolderRow'
 import { NoteFolderEditModal } from './NoteFolderEditModal'
 import { NotesDragContext, type NotesDrag } from './dragContext'
+import { MemoryNotesSection } from './MemoryNotesSection'
+import { NoteTagFilterButton, NoteTagFilterRow } from './NoteTagFilter'
+import { useUIStore } from '../../stores/ui.store'
+import { noteIdsForTag, noteTags, tagFilterChips, type NoteTagRow } from '../../utils/noteFormat/noteIndex'
 
 export function NotesList(): React.JSX.Element {
-  const { data: notes, isLoading } = useNoteList()
+  // Regular notes fill the folders; Assistant memory notes get their own
+  // section after them.
+  const { regular: notes, memory, isLoading } = useNoteCollections()
   const { data: folders } = useNoteFolders()
   const createNote = useCreateNote()
   const createFolder = useCreateNoteFolder()
@@ -27,13 +33,43 @@ export function NotesList(): React.JSX.Element {
   // jobs, so the user lands on the naming step instead of "New folder".
   const [renamingFolder, setRenamingFolder] = useState<NoteFolderData | null>(null)
 
+  // Tags of the regular notes (frontmatter `tags` + inline `#tags`), derived
+  // from the bodies in memory, and the filter they offer.
+  const tagFilter = useUIStore((s) => s.notesTagFilter)
+  const activeNoteId = useUIStore((s) => s.activeNoteId)
+  const activeView = useUIStore((s) => s.activeView)
+  const keptOpenRef = useRef<{ filter: string; id: string } | null>(null)
+  const setTagFilter = useUIStore((s) => s.setNotesTagFilter)
+  const tagRows = useMemo<NoteTagRow[]>(
+    () => notes.flatMap((note) => noteTags(note.body).map((tag) => ({ noteId: note.id, ...tag }))),
+    [notes]
+  )
+  const chips = useMemo(() => tagFilterChips(tagRows), [tagRows])
+  const filtered = useMemo(() => {
+    if (!tagFilter) return null
+    const ids = noteIdsForTag(tagRows, tagFilter)
+    // An open note that matched keeps its row while it stays open, even once
+    // its tag is edited away: a row vanishing under the user's typing is a
+    // jump. A note that never matched is not added.
+    const open = activeView === 'note-detail' ? activeNoteId : null
+    const kept = keptOpenRef.current
+    if (open && ids.has(open)) keptOpenRef.current = { filter: tagFilter, id: open }
+    else if (!kept || kept.filter !== tagFilter || kept.id !== open) keptOpenRef.current = null
+    const keep = keptOpenRef.current?.id ?? null
+    return notes.filter((note) => ids.has(note.id) || note.id === keep)
+  }, [notes, tagRows, tagFilter, activeNoteId, activeView])
+  const filterDisplay = tagFilter ? (chips.find((c) => c.key === tagFilter)?.display ?? tagFilter) : null
+
   const handleAddNote = (): void => {
     if (createNote.isPending) return
+    // The new note has no tag: show the whole list, where its row will be.
+    setTagFilter(null)
     createNote.mutate(undefined)
   }
 
   const handleAddFolder = (): void => {
     if (createFolder.isPending) return
+    setTagFilter(null)
     createFolder.mutate(
       { name: 'New folder' },
       { onSuccess: (folder) => setRenamingFolder(folder) }
@@ -43,7 +79,7 @@ export function NotesList(): React.JSX.Element {
   const groups = useMemo(() => {
     const root: NoteData[] = []
     const byFolder = new Map<string, NoteData[]>()
-    for (const note of notes ?? []) {
+    for (const note of notes) {
       if (note.folderId) {
         const arr = byFolder.get(note.folderId) ?? []
         arr.push(note)
@@ -105,7 +141,7 @@ export function NotesList(): React.JSX.Element {
   // Root drop zone: detach a note from any folder.
   const handleRootDragOver = (e: React.DragEvent): void => {
     if (drag?.kind !== 'note') return
-    const draggedNote = (notes ?? []).find((n) => n.id === drag.id)
+    const draggedNote = notes.find((n) => n.id === drag.id)
     if (draggedNote && draggedNote.folderId === null) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
@@ -131,6 +167,10 @@ export function NotesList(): React.JSX.Element {
             Notes
           </span>
           <div className="flex items-center gap-0.5">
+            {/* Leftmost, so the buttons beside it never move as it comes and goes. */}
+            {chips.length > 0 && (
+              <NoteTagFilterButton chips={chips} active={tagFilter} onPick={setTagFilter} />
+            )}
             <button
               onClick={handleAddFolder}
               disabled={createFolder.isPending}
@@ -149,11 +189,26 @@ export function NotesList(): React.JSX.Element {
             </button>
           </div>
         </div>
+        {filterDisplay !== null && (
+          <NoteTagFilterRow display={filterDisplay} onClear={() => setTagFilter(null)} />
+        )}
 
         <div className="app-scroll-fade flex-1 overflow-y-auto">
           {isLoading ? (
             <div className="px-2.5 py-2 text-xs text-[var(--color-text-muted)]">Loading...</div>
-          ) : !notes || (notes.length === 0 && (folders ?? []).length === 0) ? (
+          ) : filtered ? (
+            filtered.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">
+                No notes tagged #{filterDisplay}
+              </div>
+            ) : (
+              <div className="px-1.5 py-1 space-y-px">
+                {filtered.map((note) => (
+                  <NoteItem key={note.id} note={note} draggable={false} />
+                ))}
+              </div>
+            )
+          ) : notes.length === 0 && memory.length === 0 && (folders ?? []).length === 0 ? (
             <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)]">
               No notes yet — click + to create one
             </div>
@@ -196,6 +251,8 @@ export function NotesList(): React.JSX.Element {
                   />
                 ))}
               </div>
+
+              <MemoryNotesSection notes={memory} />
             </div>
           )}
         </div>

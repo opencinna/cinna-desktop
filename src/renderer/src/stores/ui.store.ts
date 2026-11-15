@@ -229,6 +229,11 @@ interface UIStore {
    */
   revealNoteId: string | null
   /**
+   * The Notes list's tag filter (a tag key; a parent matches its nested tags),
+   * or null for all notes. Kept across sidebar tab switches, never persisted.
+   */
+  notesTagFilter: string | null
+  /**
    * A chat whose Chats-list row should scroll into view and flash once, without
    * the chat being opened. One-shot intent from the task page's "Show in the
    * Chats list"; the row clears it when it has shown itself.
@@ -358,6 +363,7 @@ interface UIStore {
   setTasksPeriod: (period: TasksPeriod) => void
   setActiveNoteId: (id: string | null) => void
   setRevealNoteId: (id: string | null) => void
+  setNotesTagFilter: (key: string | null) => void
   setRevealChatId: (id: string | null) => void
   setRevealInboxGateId: (id: string | null) => void
   setActiveExternalAgentId: (id: string | null) => void
@@ -415,6 +421,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   tasksPeriod: 'week',
   activeNoteId: null,
   revealNoteId: null,
+  notesTagFilter: null,
   revealChatId: null,
   revealInboxGateId: null,
   activeExternalAgentId: null,
@@ -475,6 +482,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setTasksPeriod: (tasksPeriod) => set({ tasksPeriod }),
   setActiveNoteId: (id) => set({ activeNoteId: id }),
   setRevealNoteId: (id) => set({ revealNoteId: id }),
+  setNotesTagFilter: (key) => set({ notesTagFilter: key }),
   setRevealChatId: (id) => set({ revealChatId: id }),
   setRevealInboxGateId: (id) => set({ revealInboxGateId: id }),
   setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),

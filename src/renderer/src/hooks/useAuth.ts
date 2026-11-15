@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/auth.store'
 import { useReauthStore } from '../stores/reauth.store'
 import { useChatStore } from '../stores/chat.store'
+import { useUIStore } from '../stores/ui.store'
 import { REMOTE_SYNC_STATUS_KEY, type RemoteSyncStatus } from './useAgents'
 import { unwrapIpcError } from '../utils/ipcError'
 import { brandThemeSettled } from '../stores/brandTheme.store'
@@ -142,6 +143,8 @@ export function useLogin() {
         setCurrentUser(toAuthUser(result.user))
         // Reset chat state and refetch all queries for the new user
         useChatStore.getState().setActiveChatId(null)
+        // A tag filter belongs to the old profile's notes.
+        useUIStore.getState().setNotesTagFilter(null)
         queryClient.resetQueries()
       }
     }
@@ -165,6 +168,8 @@ export function useRegister() {
       if (result.success && result.user) {
         setCurrentUser(toAuthUser(result.user))
         useChatStore.getState().setActiveChatId(null)
+        // A tag filter belongs to the old profile's notes.
+        useUIStore.getState().setNotesTagFilter(null)
         queryClient.resetQueries()
       }
     }
@@ -186,6 +191,8 @@ export function useLogout() {
         setCurrentUser(null)
       }
       useChatStore.getState().setActiveChatId(null)
+      // A tag filter belongs to the old profile's notes.
+      useUIStore.getState().setNotesTagFilter(null)
       queryClient.resetQueries()
     }
   })
@@ -275,6 +282,8 @@ export function useDeleteUser() {
           setCurrentUser(toAuthUser(currentUser))
         }
         useChatStore.getState().setActiveChatId(null)
+        // A tag filter belongs to the old profile's notes.
+        useUIStore.getState().setNotesTagFilter(null)
         queryClient.resetQueries()
       }
     }

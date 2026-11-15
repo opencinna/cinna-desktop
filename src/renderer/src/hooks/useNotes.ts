@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type {
   NoteAttachAsFilesInputDto,
@@ -11,12 +11,28 @@ import type {
 import type { MessageAttachment } from '../../../shared/attachments'
 import { useUIStore } from '../stores/ui.store'
 import { useAuthStore } from '../stores/auth.store'
+import { splitNotes } from '../utils/noteFormat/noteIndex'
 
 export function useNoteList() {
   return useQuery({
     queryKey: ['notes'],
     queryFn: () => window.api.notes.list()
   })
+}
+
+const NO_NOTES: NoteData[] = []
+
+/**
+ * The note list split into regular notes and Assistant memory notes
+ * (frontmatter `kind: assistant-memory`), each in list order. Derived in
+ * memory from the bodies; every surface that lists notes reads this, so a
+ * memory note is kept out of the folders, the `?` picker and the hints.
+ */
+export function useNoteCollections(): { regular: NoteData[]; memory: NoteData[]; isLoading: boolean } {
+  const { data, isLoading } = useNoteList()
+  const notes = data ?? NO_NOTES
+  const split = useMemo(() => splitNotes(notes), [notes])
+  return { regular: split.regular, memory: split.memory, isLoading }
 }
 
 export function useNote(noteId: string | null) {

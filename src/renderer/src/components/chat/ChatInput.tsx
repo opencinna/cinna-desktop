@@ -26,7 +26,7 @@ import { useCapabilityPicker } from '../../hooks/useCapabilityPicker'
 import { useCatalogPicker } from '../../hooks/useCatalogPicker'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
 import { useModelCapability } from '../../hooks/useModelCapability'
-import { useNoteList, useAttachNotesAsFiles, useFetchNote } from '../../hooks/useNotes'
+import { useNoteCollections, useAttachNotesAsFiles, useFetchNote } from '../../hooks/useNotes'
 import { useCapabilities } from '../../hooks/useCapabilities'
 import { useChatNotes } from '../../hooks/useChatNotes'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
@@ -1559,14 +1559,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }, [commands, triggerFilter])
 
   // Notes available for `?` attachment. Profile-scoped via `useNoteList`;
-  // filter by title only — the user explicitly asked to search titles, and
-  // matching body text would make typing a common word balloon the list.
-  const { data: notes } = useNoteList()
+  // Assistant memory notes are not offered. Filter by title only — the user
+  // explicitly asked to search titles, and matching body text would make
+  // typing a common word balloon the list.
+  const { regular: notes } = useNoteCollections()
   // With Notes off (Settings → Features → Capabilities) `?` is ordinary text.
   const notesEnabled = useCapabilities().notesEnabled
-  const hasPickableNotes = notesEnabled && (notes ?? []).length > 0
+  const hasPickableNotes = notesEnabled && notes.length > 0
   const filteredNotes = useMemo(() => {
-    const all = notes ?? []
+    const all = notes
     const q = triggerFilter.toLowerCase()
     if (!q) return all
     return all.filter((n) => n.title.toLowerCase().includes(q))

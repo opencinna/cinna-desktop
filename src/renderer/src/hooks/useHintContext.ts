@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { useNoteList } from './useNotes'
+import { useNoteCollections } from './useNotes'
 import { useCapabilities } from './useCapabilities'
 import { useAgents } from './useAgents'
 import { useMcpProviders } from './useMcp'
@@ -29,7 +29,8 @@ export function useHintContext(
   selectedAgent: AgentData | null,
   pendingAgentCount: number
 ): HintContext {
-  const { data: notes } = useNoteList()
+  // Memory notes are not offered by the `?` picker, so they do not count.
+  const { regular: notes } = useNoteCollections()
   // The `?` picker only opens with Notes on, so the hint teaching it waits for that too.
   const notesEnabled = useCapabilities().notesEnabled
   const { data: agents } = useAgents()
@@ -59,7 +60,7 @@ export function useHintContext(
 
   return useMemo<HintContext>(
     () => ({
-      hasNotes: notesEnabled && (notes ?? []).length > 0,
+      hasNotes: notesEnabled && notes.length > 0,
       hasExamplePrompts: promptCount > 0,
       hasCliCommands: commandCount > 0,
       hasChatModes: (chatModes ?? []).some((m) => m.enabled !== false),

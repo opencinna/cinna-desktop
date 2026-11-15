@@ -7,9 +7,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * notes but Notes off must not be taught a key that does nothing.
  */
 
-const state = vi.hoisted(() => ({ notesEnabled: true, notes: [{ id: 'n1', title: 'Plan' }] as unknown[] }))
+const state = vi.hoisted(() => ({ notesEnabled: true, notes: [{ id: 'n1', title: 'Plan', body: '' }] as Array<{ id: string; title: string; body: string }> }))
 vi.mock('./useCapabilities', () => ({ useCapabilities: () => ({ notesEnabled: state.notesEnabled, dashboardsEnabled: false, loaded: true }) }))
-vi.mock('./useNotes', () => ({ useNoteList: () => ({ data: state.notes }) }))
+vi.mock('./useNotes', async () => {
+  const { splitNotes } = await import('../utils/noteFormat/noteIndex')
+  return { useNoteCollections: () => ({ ...splitNotes(state.notes), isLoading: false }) }
+})
 vi.mock('./useAgents', () => ({ useAgents: () => ({ data: [] }) }))
 vi.mock('./useMcp', () => ({ useMcpProviders: () => ({ data: [] }) }))
 vi.mock('./useChatModes', () => ({ useChatModes: () => ({ data: [] }) }))
@@ -20,7 +23,7 @@ const { useHintContext } = await import('./useHintContext')
 
 beforeEach(() => {
   state.notesEnabled = true
-  state.notes = [{ id: 'n1', title: 'Plan' }]
+  state.notes = [{ id: 'n1', title: 'Plan', body: '' }]
 })
 
 describe('useHintContext hasNotes', () => {
@@ -30,6 +33,11 @@ describe('useHintContext hasNotes', () => {
 
   it('is false while Notes is off, notes or not', () => {
     state.notesEnabled = false
+    expect(renderHook(() => useHintContext(null, 0)).result.current.hasNotes).toBe(false)
+  })
+
+  it('is false when the only notes are Assistant memory notes', () => {
+    state.notes = [{ id: 'm1', title: 'Tea', body: '---\nkind: assistant-memory\n---\nLikes tea' }]
     expect(renderHook(() => useHintContext(null, 0)).result.current.hasNotes).toBe(false)
   })
 

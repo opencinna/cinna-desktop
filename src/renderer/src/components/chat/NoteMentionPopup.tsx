@@ -2,6 +2,7 @@ import type { RefObject } from 'react'
 import { NotebookPen } from 'lucide-react'
 import type { NoteData } from '../../../../shared/notes'
 import { MentionPopup } from './MentionPopup'
+import { splitFrontmatter } from '../../utils/frontmatter'
 
 interface NoteMentionPopupProps {
   /** Already-filtered list — ChatInput owns the filter predicate. */
@@ -14,8 +15,9 @@ interface NoteMentionPopupProps {
   anchorRef?: RefObject<HTMLElement | null>
 }
 
+/** The note's opening text, below any frontmatter (never its YAML). */
 function notePreview(body: string): string | null {
-  const trimmed = body.trim()
+  const trimmed = splitFrontmatter(body).body.trim()
   if (!trimmed) return null
   return trimmed.length > 140 ? trimmed.slice(0, 140) + '…' : trimmed
 }
