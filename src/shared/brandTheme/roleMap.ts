@@ -27,7 +27,7 @@ export const BRAND_ROLE_MAP: Readonly<Record<BrandThemeRole, readonly string[]>>
   'status.success': ['success', 'severity-ok'],
   'status.info': ['severity-info'],
   'status.danger.text': ['severity-error-text'],
-  'status.warning.text': ['severity-warning-text'],
+  'status.warning.text': ['severity-warning-text', 'severity-warning-strong-text'],
   'status.success.text': ['severity-ok-text'],
   'status.info.text': ['severity-info-text'],
   'chart.1': ['chart-1'],

@@ -65,7 +65,7 @@ const TAG_LINK_CLASS = ['cursor-pointer', 'hover:bg-[color-mix(in_srgb,var(--col
 const CHIP_BASE = ['note-due', 'inline-block', 'ml-1.5', 'rounded-full', 'px-1.5', 'py-px', 'text-xs', 'leading-none', 'align-baseline', 'whitespace-nowrap']
 const CHIP_TONE = {
   overdue: [
-    'text-[var(--color-severity-warning-text)]',
+    'text-[var(--color-severity-warning-strong-text)]',
     'bg-[color-mix(in_srgb,var(--color-severity-warning)_18%,transparent)]'
   ],
   done: ['text-[var(--color-text-secondary)]', 'bg-[var(--color-bg-tertiary)]', 'line-through'],

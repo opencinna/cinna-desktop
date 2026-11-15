@@ -109,6 +109,7 @@
     --color-severity-error-text: #f87171;
     --color-severity-warning: #fbbf24;
     --color-severity-warning-text: #fbbf24;
+    --color-severity-warning-strong-text: #fbbf24;
     --color-severity-info: #38bdf8;
     --color-severity-info-text: #38bdf8;
     --color-severity-ok: #10b981;
@@ -186,6 +187,7 @@
     --color-severity-error-text: #b91c1c;
     --color-severity-warning: #ca8a04;
     --color-severity-warning-text: #a16207;
+    --color-severity-warning-strong-text: #854d0e;
     --color-severity-info: #0284c7;
     --color-severity-info-text: #0369a1;
     --color-severity-ok: #16a34a;

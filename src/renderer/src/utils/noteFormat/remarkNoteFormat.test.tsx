@@ -35,7 +35,7 @@ describe('remarkNoteFormat due chips', () => {
     const [chip] = chips(view('- [ ] pay rent due:2026-11-10'))
     expect(chip.textContent).toBe('Nov 10')
     expect(chip.getAttribute('data-tone')).toBe('overdue')
-    expect(chip.className).toContain('--color-severity-warning-text')
+    expect(chip.className).toContain('--color-severity-warning-strong-text')
   })
 
   it('quiets the chip of a checked task, overdue or not, without going below secondary text', () => {
