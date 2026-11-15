@@ -13,7 +13,7 @@ const FRONTMATTER =
   '---\r\nkind:   assistant-memory\r\nx-unknown_key :  "odd \'quoted\' value"  # comment\r\ntags: [ a,b ]\r\n---\r\n'
 const BODY = `${FRONTMATTER}Prefers green tea. #drinks\r\n`
 
-const ui = vi.hoisted(() => ({ setNotesTagFilter: vi.fn(), setSidebarTab: vi.fn() }))
+const ui = vi.hoisted(() => ({ setNotesTagFilter: vi.fn(), setSidebarTab: vi.fn(), revealSidebar: vi.fn() }))
 vi.mock('../../stores/ui.store', () => {
   const state = { activeNoteId: 'm1', ...ui }
   const useUIStore = (select: (s: typeof state) => unknown): unknown => select(state)
@@ -77,10 +77,13 @@ describe('NoteDetail on a memory note', () => {
     fireEvent.click(pill)
     expect(ui.setNotesTagFilter).toHaveBeenCalledWith('drinks')
     expect(ui.setSidebarTab).toHaveBeenCalledWith('notes')
+    expect(ui.revealSidebar).toHaveBeenCalledTimes(1)
     expect(document.querySelector('textarea')).toBeNull()
 
     ui.setNotesTagFilter.mockClear()
+    ui.revealSidebar.mockClear()
     fireEvent.keyDown(pill, { key: 'Enter' })
     expect(ui.setNotesTagFilter).toHaveBeenCalledWith('drinks')
+    expect(ui.revealSidebar).toHaveBeenCalledTimes(1)
   })
 })
