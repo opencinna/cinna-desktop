@@ -7,6 +7,8 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 ## Core Concepts
 
 - **Note** — A profile-scoped markdown document with a title, a body, optional folder placement, and a sort position. Storage is raw markdown; the UI renders it via the same `react-markdown` stack chat bubbles use (GFM, syntax highlighting, clickable links open externally). A leading YAML frontmatter block shows as a key/value card above the body, in the detail view and the composer's note preview alike; the stored body and the textarea keep it as written. See [File Preview](../../chat/file_preview/file_preview.md#frontmatter).
+- **Shared note format** — The body conventions Cinna Assistant on the mobile app writes: `kind: assistant-memory` frontmatter, GFM task items with a due date, and Obsidian-style `#tags`. The desktop only reads them, from the body, in memory. See [Cross-app Note Format](../../sync/data_sync/cross_app_alignment.md).
+- **Assistant memory note** — A note whose frontmatter says `kind: assistant-memory`. It lives in the ordinary notes list but is kept out of every notes surface except one collapsible **Assistant memory** section.
 - **Note Folder** — A user-defined sidebar grouping (profile-scoped, name + collapsed-state + sort position). Thin collapsible separator — owns ordering, not content. A note lives in exactly one folder or at the root.
 - **Group** — A bucket the sidebar can address by drag-drop: either the root (`folderId = null`) or a specific folder. Each group keeps its own note ordering.
 - **Inline Edit** — There is no edit-mode toggle and no Save button. The title is always an editable heading-styled input; the body shows rendered markdown by default and swaps to a textarea on click, returning to rendered mode on blur. Autosave fires on a 500ms debounce while typing and immediately on blur.
@@ -22,6 +24,15 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 4. Pressing Chats afterwards reopens the chat the excerpt came from.
 5. Copy/Save errors remain in the context menu for retry. Selecting part of rendered text preserves the visible excerpt; a completely selected message preserves its Markdown. Capture and menu lifetime belong to [Conversation UI](../../chat/conversation_ui/conversation_ui.md#reusing-message-text).
 6. Right-clicking a linked [file reference](../../chat/file_references/file_references.md#right-clicking-a-reference) saves the file's whole contents instead. A markdown file is titled by its frontmatter `title:`, first H1 or first heading, anything else by its file name; markdown and `.txt` are saved as written, other text files in a fenced code block tagged with their language.
+
+### Reading Assistant memory, todos and tags
+
+1. A note written by the mobile Cinna Assistant syncs in as an ordinary note. The desktop has no Assistant; it recognises the format and shows it.
+2. **Memory notes** (`kind: assistant-memory`) are not listed with the folders and root notes, are not offered by the composer's `?` picker, and do not count toward the hint that teaches `?`. When at least one exists the Notes list ends with a collapsible **Assistant memory** row (brain icon, count), collapsed each time the list mounts. Its rows open the note in the normal editor, can be edited and trashed like any note, and cannot be dragged: a memory note has no folder or order of its own.
+3. **Todos.** A GFM task item (`- [ ] …`) with `due:YYYY-MM-DD` or `📅 YYYY-MM-DD` shows a **due chip** after its text instead of the token: Today / Tomorrow / Yesterday or a date ("Nov 15", with the year when it is not this year). A past date on an open task is the warning tone; a checked task's chip is muted. Obsidian's `✅ YYYY-MM-DD` done-date is stripped.
+4. **Tags.** An inline `#tag` renders as a pill. In the note editor's read view a pill is a button: clicking it (or Enter/Space on it) sets the sidebar tag filter and shows the Notes tab. In the composer's note preview the pills are plain.
+5. **Filter by tag.** When any regular note has a tag, a `#` button leads the Notes header buttons. Its menu lists **All notes** and every tag with a note count, including the parent of each nested tag (`#inbox/to-read` also offers `inbox`); choosing one shows a chip row under the header (with a clear button) and replaces the folder layout with a flat list of the matching notes, without drag. A parent matches its nested tags. Tags come from the body and from the frontmatter `tags` key, which is read-only here. Creating a note or a folder clears the filter so the new row is in view. A note that matched and is open keeps its row while it stays open even after the user edits its tag away, since a row vanishing under typing is a jump.
+6. The `?` picker's snippet shows the body below any frontmatter, never the YAML.
 
 ### Turning Notes on
 
@@ -77,6 +88,10 @@ Notes is an optional [capability](../../ui/capabilities/capabilities.md): off fo
 - **A saved excerpt is independent.** Save to Notes snapshots the captured body into an ordinary profile note. Later message streaming, edits or chat deletion do not rewrite the note; it has no live link back to the message.
 - **A note opened from outside the list is brought into view once.** Save to Notes asks for the new note's row to be revealed; the row scrolls itself into view, by the least distance, when it renders active, and the request is then spent. New notes land in the root group, which the list draws below every folder, so without it the note could be highlighted out of sight below a long run of folders. It is a one-time request rather than "whenever a row is active" because collapsing and re-expanding a folder remounts its rows, and the list would jump to the open note each time.
 
+- **The body is the only source, and it is never rewritten.** Memory status, due dates and tags are derived from `body` on read; nothing is stored, synced or sent over IPC for them, and no schema changed. A due token or tag is never removed from the stored text; the read view only draws it differently. This is what keeps a note identical on both apps.
+- **Identity comes from `kind`, never from a folder or a title.** A note moved into a folder is still a memory note; a regular note placed in a folder named "memory" is not.
+- **Untouched bytes stay untouched.** The body editor shows a CRLF body as LF (a textarea cannot hold CRLF) and folds each edit back into the stored body, changing only the edited region. Without this, the first keystroke in a note written by another client rewrote every line ending, frontmatter included, a change the user never made.
+- **A token is stripped only when its chip is drawn.** The read view never hides a due date it did not also show as a chip, so a date cannot vanish from a note it failed to understand. See [the technical notes](notes_tech.md#shared-note-format-in-the-read-view) for where the view cannot place a token.
 - **Profile scope.** Notes and note folders live in the active profile's `userId` scope — they don't follow the user across profile switches and are invisible from other profiles.
 - **Validation.** `title` must be non-empty on PATCH. The renderer normalizes whitespace-only titles to `Untitled note` before sending, so the user is never blocked while typing. Updates that would null out the title are rejected with `NoteError('invalid_input', ...)`.
 - **Inline-edit autosave contract.** Local state lives in `useAutosaveNote`. The hook tracks (a) the last-persisted snapshot per active note id and (b) the note id local state currently reflects. When the user switches notes, the *previous* note id is flushed using the still-in-memory local state before the new note's content is loaded — pending edits cannot leak across notes.
@@ -87,6 +102,9 @@ Notes is an optional [capability](../../ui/capabilities/capabilities.md): off fo
 - **Reorder ownership.** Both `notesService.reorderNotes` and `notesService.reorderFolders` use `notesRepo.countOwned` / `noteFoldersRepo.countOwned` to verify in a single COUNT query that every submitted id belongs to the active profile. A mismatch raises `NoteError('not_found')` before any write.
 
 ## Architecture Overview
+
+Note body (raw markdown, unchanged) → renderer-only derivation (`utils/noteFormat/`) → memory split, tag filter chips, read-view pills and due chips, `?` picker filtering.
+
 
 Transcript context menu → captured text → Notes create → profile note in root group → Notes sidebar tab, row scrolled into view, and note detail while the originating menu remains current.
 
@@ -140,4 +158,6 @@ See [Notes — Technical Details](notes_tech.md) for file paths, IPC channel sig
 - [Messaging](../../chat/messaging/messaging.md) — Notes reuse the chat trash retention contract (30-day permanent delete) and share the Settings → Trash view.
 - [Jobs](../../jobs/jobs/jobs.md) — Folder/drag-drop UX (FolderPlus header button, root drop zone, accepting-state visuals) mirrors the Jobs sidebar, including the `application/x-cinna-*` MIME-namespace pattern to keep drags from cross-pollinating between tabs. The folder menu no longer does: a notes folder keeps its gear and inline Edit/Delete dropdown, while a jobs folder has a ⋯ menu beside the row that also runs every job in it.
 - [Note Attachments](../../chat/note_attachments/note_attachments.md) — Notes are also addressable from the chat composer via the `?` mention popup. The chat-side feature owns the composer state and materialization; `notesService.materializeAsAttachments` is the entry point.
+- [Cross-app Note Format](../../sync/data_sync/cross_app_alignment.md) — the syntax this feature reads (memory notes, task due dates, tags), its source of truth in cinna-mobile, and where the desktop deviates.
+- [Data Sync](../../sync/data_sync/data_sync.md) — bodies sync verbatim, which is why the format needs no sync change.
 - [Settings](../../ui/settings/settings.md) — `TrashSection` is extended to render both chats and notes; the empty-state copy mentions both. No new settings tab — Trash is unchanged from the user's perspective.
