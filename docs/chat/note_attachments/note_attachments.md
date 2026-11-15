@@ -7,7 +7,7 @@ Attach existing profile notes to a chat message via the composer's `?` mention p
 ## Core Concepts
 
 - **`?` trigger** — Fourth mention trigger character alongside `@`, `#`, `/`. Opens the note picker when typed at the start of the chat input or directly after whitespace.
-- **Note picker** — Floating listbox showing profile notes, filtered by **title only** as the user keeps typing. Same shared `MentionPopup<T>` primitive used by the agent / example-prompt / CLI-command pickers.
+- **Note picker** — Floating listbox showing profile notes, filtered by **title only** as the user keeps typing. Same shared `MentionPopup<T>` primitive used by the agent / example-prompt / CLI-command pickers. Assistant memory notes (frontmatter `kind: assistant-memory`) are never listed, and the line under a title is the body after any frontmatter block, never the raw YAML ([Notes](../../notes/notes/notes.md)).
 - **Pending note** — Composer-local reference (id + title) the user has selected but not yet sent. Visually distinct from a file attachment: accent-tinted pill, `NotebookPen` icon, no size column.
 - **Note badge** — The pending-note pill itself. Click anywhere to open the preview; trailing X removes it.
 - **Note preview modal** — Read-only modal that renders the note's markdown without leaving the chat. Closes on Esc / outside click / X.
@@ -51,7 +51,7 @@ Attach existing profile notes to a chat message via the composer's `?` mention p
 
 ## Business Rules
 
-- **Trigger gating.** `?` opens the popup only when the profile has at least one note. The trigger respects the same boundary rule as other mentions — start of input or directly after whitespace; `?` in the middle of a word is a literal character.
+- **Trigger gating.** `?` opens the popup only when the profile has at least one note that is not an Assistant memory note. The trigger respects the same boundary rule as other mentions — start of input or directly after whitespace; `?` in the middle of a word is a literal character.
 - **Filter scope.** The popup matches the typed filter against note titles only — body content is not searched, so a common word inside notes doesn't balloon the list.
 - **Dedup on add.** Selecting a note that's already pending is a silent no-op; the existing badge is preserved.
 - **Late binding to body.** Note title is captured at attach-time (for badge / filename). Note body is fetched on the main side at send time, so edits to the source note between attach and send are reflected in the materialized `.md`.
