@@ -70,7 +70,9 @@ export function JobFolderRow({
   // The jobs "Run All Jobs" starts: the same set the rows' own run buttons
   // would — not one this device cannot run (main refuses it, and the row
   // already says why), and not one with a run in progress.
-  const isRunnable = (j: JobData): boolean => !j.incompleteSetup && j.inProgressRunsCount === 0
+  // A job mobile runs as the Assistant is skipped like a blocked one.
+  const isRunnable = (j: JobData): boolean =>
+    !j.incompleteSetup && !j.runsOnMobile && j.inProgressRunsCount === 0
   const runnableJobs = jobs.filter(isRunnable)
   // Main does not refuse a second run of a job already running, so each job
   // is checked again against the latest list just before it starts: the user

@@ -131,3 +131,14 @@ it('re-enables after the Job changes with the current Job revision, and says why
   fireEvent.click(toggle)
   await waitFor(() => expect(enable).toHaveBeenCalledWith({ profileUserId: 'profile', jobId: 'job-id', id: 'schedule-id', revision: 'schedule-revision', jobRevision: 'new-job-revision' }))
 })
+it('offers no new or re-enabled schedule for a Job mobile runs as the Assistant, and says why', async () => {
+  const hint = 'Runs on mobile as the Assistant. Pick a desktop mode in Edit to schedule it here.'
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><JobSchedules jobId="job-id" runsOnMobile /></QueryClientProvider>)
+  const toggle = await screen.findByRole('switch', { name: 'Run “Morning check” on this device' }) as HTMLButtonElement
+  expect(toggle.disabled).toBe(true)
+  const create = screen.getByRole('button', { name: 'New schedule' }) as HTMLButtonElement
+  expect(create.disabled).toBe(true)
+  expect(document.getElementById(create.getAttribute('aria-describedby')!)?.textContent).toBe(hint)
+  fireEvent.click(toggle)
+  expect(enable).not.toHaveBeenCalled()
+})

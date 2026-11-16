@@ -27,7 +27,7 @@ function job(over: Partial<JobData> = {}): JobData {
     agentId: null, modeId: null, cinnaAgentId: null, cinnaPriority: null, colorPreset: null, iconName: null,
     folderId: null, position: 0, deletedAt: null,
     createdAt: new Date('2026-01-01T00:00:00Z'), updatedAt: new Date('2026-01-01T00:00:00Z'),
-    inProgressRunsCount: 0, needsSetup: false, incompleteSetup: false, lastRunResult: null,
+    inProgressRunsCount: 0, needsSetup: false, incompleteSetup: false, lastRunResult: null, runsOnMobile: false,
     ...over
   }
 }

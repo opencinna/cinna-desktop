@@ -8,6 +8,7 @@ import { createLogger } from '../../logger/logger'
 import type { RunScope } from '../runExecutionService'
 import { desktopJobExecutor } from './desktop'
 import { canScheduleJob } from '../../../shared/localJobSchedules'
+import { refuseMobileOnlyJob } from './mobileOnly'
 
 const logger = createLogger('scheduled-job')
 
@@ -39,6 +40,8 @@ export async function prepareScheduledJob(scope: RunScope, job: JobRow, current:
   const assertScope = () => { if (!current()) throw new Error('The active profile changed before this scheduled job started.') }
   assertScope()
   if (!canScheduleJob(job.type) || job.userId !== scope.profileUserId || job.deletedAt) throw new Error('Only an available local Job can run on this device.')
+  // `jobScheduleService.check` skips these before admission; this is the backstop.
+  refuseMobileOnlyJob(job)
   jobRuntimeDefinition(job)
   const snapshot = () => {
     const live = jobsRepo.getById(scope.profileUserId, job.id)

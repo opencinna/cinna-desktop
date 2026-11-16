@@ -54,6 +54,7 @@ import {
   manifestNeedsSetup
 } from '../sync/resolvers'
 import type { JobDependencyStatus } from '../../shared/sync'
+import { isAssistantJobMode } from '../../shared/jobMode'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('job')
@@ -88,6 +89,8 @@ export interface JobDetail extends JobRow {
   incompleteSetup: boolean
   /** As on `JobListItem`. */
   lastRunResult: ChatRunResult | null
+  /** As on `JobListItem`. */
+  runsOnMobile: boolean
 }
 
 /**
@@ -162,6 +165,12 @@ export interface JobListItem extends JobRow {
    * its chat is deleted; never an older run's result.
    */
   lastRunResult: ChatRunResult | null
+  /**
+   * The job synced from mobile as an Assistant job (manifest `modeName`
+   * `@assistant`). It never runs on this device; every run entry point refuses
+   * it (`jobExecution/mobileOnly.ts`).
+   */
+  runsOnMobile: boolean
 }
 
 export const jobService = {
@@ -178,6 +187,7 @@ export const jobService = {
       ...j,
       inProgressRunsCount: counts.get(j.id) ?? 0,
       lastRunResult: results.get(j.id)?.result ?? null,
+      runsOnMobile: isAssistantJobMode(j.syncDeps?.modeName),
       needsSetup: index ? manifestNeedsSetup(j.syncDeps, index) : false,
       incompleteSetup: index
         ? unresolvableAgentLabels(j.syncDeps, index, serverUrl).length > 0
@@ -198,7 +208,8 @@ export const jobService = {
       ? unresolvableAgentLabels(job.syncDeps, index, profileServerUrl(userId)).length > 0
       : false
     const lastRunResult = jobRunsRepo.latestRunResults(userId, jobId).get(jobId)?.result ?? null
-    return { ...job, agentIds, mcpProviderIds, recentRuns, needsSetup, incompleteSetup, lastRunResult }
+    const runsOnMobile = isAssistantJobMode(job.syncDeps?.modeName)
+    return { ...job, agentIds, mcpProviderIds, recentRuns, needsSetup, incompleteSetup, lastRunResult, runsOnMobile }
   },
 
   /**
@@ -243,8 +254,10 @@ export const jobService = {
     const updated = jobsRepo.getById(userId, jobId)
     if (!updated) throw new JobError('not_found', 'Job not found after update')
     // A mode change alters the manifest's `modeName`; rebuild so the synced
-    // truth tracks the local edit.
-    if (patch.modeId !== undefined) rebuildJobManifest(userId, jobId)
+    // truth tracks the local edit. `explicitMode`: the user chose this mode
+    // here, so it replaces a name this device could not resolve — including
+    // mobile's Assistant marker (the edit form sends `modeId` only on a change).
+    if (patch.modeId !== undefined) rebuildJobManifest(userId, jobId, { explicitMode: true })
     syncService.markDirty(userId)
     return updated
   },
@@ -306,7 +319,9 @@ export const jobService = {
 
     const out: JobDependencyStatus[] = []
 
-    if (manifest.modeName) {
+    // The Assistant marker is not a mode this device lacks: the job runs on
+    // mobile, which the job page says beside its disabled Run button.
+    if (manifest.modeName && !isAssistantJobMode(manifest.modeName)) {
       const modeId = resolveMode(manifest.modeName)
       out.push({
         key: `mode:${manifest.modeName}`,

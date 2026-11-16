@@ -39,17 +39,23 @@ export function JobEditPage(): React.JSX.Element {
     )
   }
 
-  const handleSave = async (): Promise<void> => {
+  /*
+    Save and Back both flush: a mode change held for its confirm (leaving the
+    Assistant) must not be dropped by Back without the question being asked.
+    While the confirm waits, only its own button shows progress.
+  */
+  const saveThenLeave = async (): Promise<void> => {
     if (!formRef.current || saving) return
     setSaving(true)
     setError(null)
-    const result = await formRef.current.flush()
+    const result = await formRef.current.flush({ onConfirmOpen: () => setSaving(false) })
     setSaving(false)
     if (result.ok) {
       setActiveView('job-detail')
-    } else {
+    } else if ('error' in result) {
       setError(result.error)
     }
+    // Otherwise the user cancelled a confirm the save needed: the form stays as it was.
   }
 
   return (
@@ -58,7 +64,7 @@ export function JobEditPage(): React.JSX.Element {
         <header className="flex items-center justify-between gap-4">
           <button
             type="button"
-            onClick={() => setActiveView('job-detail')}
+            onClick={() => void saveThenLeave()}
             className="inline-flex items-center gap-1 text-xs text-[var(--color-text-muted)]
               hover:text-[var(--color-text)] transition-colors"
           >
@@ -84,7 +90,7 @@ export function JobEditPage(): React.JSX.Element {
           </button>
           <button
             type="button"
-            onClick={handleSave}
+            onClick={() => void saveThenLeave()}
             disabled={saving}
             className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
               bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white

@@ -106,6 +106,8 @@ export type JobErrorCode =
   | 'invalid_input'
   /** Delete run while a turn is still working in the run's chat. Nothing was removed. */
   | 'run_active'
+  /** The job runs on mobile as the Assistant (`shared/jobMode.ts`), never on this device. */
+  | 'runs_on_mobile'
 
 /**
  * The task domain (agent runtime plan, phase 5). Each code separates a

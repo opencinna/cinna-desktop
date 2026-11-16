@@ -8,11 +8,13 @@ import {
   agentIdentityKey,
   agentRowToDescriptor,
   mcpIdentityKey,
-  mcpRowToDescriptor
+  mcpRowToDescriptor,
+  modeKey
 } from './identity'
 import { profileServerUrl } from './resolvers'
 import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
 import { FOLDER_AGENT_SOURCE } from '../../shared/localAgents'
+import { isAssistantJobMode } from '../../shared/jobMode'
 import { createLogger } from '../logger/logger'
 
 /**
@@ -30,7 +32,51 @@ import { createLogger } from '../logger/logger'
  */
 const logger = createLogger('sync-manifest')
 
-export function buildJobManifest(userId: string, job: JobRow): JobSyncManifest {
+export interface BuildJobManifestOptions {
+  /**
+   * The user just chose this job's mode on this device, so `modeName` comes
+   * from local state even when the prior manifest holds a name this device
+   * cannot resolve (see {@link preservedModeName}).
+   */
+  explicitMode?: boolean
+}
+
+/**
+ * The prior manifest's `modeName`, when this device could not resolve it and
+ * nothing local has replaced it since; otherwise null.
+ *
+ * A pull maps a mode name this device does not have to the default chat mode
+ * (or none), and mobile's Assistant marker to none. Rebuilding `modeName` from
+ * that local `modeId` on the next unrelated edit — a title, an agent, a
+ * rekeyed folder agent — would overwrite the sender's mode with the default
+ * mode's name, or drop it, and hand every peer a different job. So a name is
+ * kept while:
+ *   - no local chat mode has it (the marker always counts as unresolved: it
+ *     wins over a chat mode of the same name, as on mobile), and
+ *   - the job's `modeId` is still what a pull gave it for that name. A mode the
+ *     user picked or renamed locally fails this, so a stale name cannot shadow
+ *     it.
+ */
+function preservedModeName(job: JobRow, settingsScope: string): string | null {
+  const name = job.syncDeps?.modeName
+  if (!name || !name.trim()) return null
+  const modes = chatModeRepo.list(settingsScope)
+  let pulledModeId: string | null
+  if (isAssistantJobMode(name)) {
+    pulledModeId = null
+  } else {
+    const want = modeKey(name)
+    if (modes.some((m) => modeKey(m.name) === want)) return null
+    pulledModeId = modes.find((m) => m.isDefault)?.id ?? null
+  }
+  return (job.modeId ?? null) === pulledModeId ? name : null
+}
+
+export function buildJobManifest(
+  userId: string,
+  job: JobRow,
+  options: BuildJobManifestOptions = {}
+): JobSyncManifest {
   const { agentRefs, mcpRefs } = jobsRepo.listRefs(job.id)
   const settingsScope = getSettingsScopeUserId()
   const serverUrl = profileServerUrl(userId)
@@ -94,9 +140,10 @@ export function buildJobManifest(userId: string, job: JobRow): JobSyncManifest {
     }
   }
 
-  const modeName = job.modeId
-    ? chatModeRepo.getOwned(settingsScope, job.modeId)?.name ?? null
-    : null
+  const preserved = options.explicitMode ? null : preservedModeName(job, settingsScope)
+  const modeName =
+    preserved ??
+    (job.modeId ? chatModeRepo.getOwned(settingsScope, job.modeId)?.name ?? null : null)
 
   return { modeName, deps }
 }
@@ -106,10 +153,14 @@ export function buildJobManifest(userId: string, job: JobRow): JobSyncManifest {
  * from the service layer after any local edit that changes a job's
  * agents/MCPs/mode. Does not bump `updatedAt` (the edit already did).
  */
-export function rebuildJobManifest(userId: string, jobId: string): void {
+export function rebuildJobManifest(
+  userId: string,
+  jobId: string,
+  options: BuildJobManifestOptions = {}
+): void {
   const job = jobsRepo.getById(userId, jobId)
   if (!job) return
-  jobsRepo.setSyncDeps(userId, jobId, buildJobManifest(userId, job))
+  jobsRepo.setSyncDeps(userId, jobId, buildJobManifest(userId, job, options))
 }
 
 /** Convenience for IPC handlers that already know the active profile. */

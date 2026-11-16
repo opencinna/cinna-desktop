@@ -18,6 +18,7 @@ import {
 } from './identity'
 import { createLogger } from '../logger/logger'
 import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
+import { isAssistantJobMode } from '../../shared/jobMode'
 
 const logger = createLogger('sync-resolvers')
 
@@ -58,9 +59,14 @@ export function profileServerUrl(userId: string): string | null {
 /**
  * Resolve a chat mode by portable name (case-insensitive). Falls back to the
  * profile's default mode, then null. Modes live in Default Scope.
+ *
+ * Mobile's Assistant marker (`@assistant`) resolves to null, with no default
+ * fallback and even when a chat mode carries that name: the job runs on mobile
+ * as the Assistant and never here (`shared/jobMode.ts`).
  */
 export function resolveMode(name: string | null): string | null {
   if (!name) return null
+  if (isAssistantJobMode(name)) return null
   const scope = getSettingsScopeUserId()
   const modes = chatModeRepo.list(scope)
   const want = modeKey(name)
@@ -290,7 +296,9 @@ export function manifestNeedsSetup(
   idx: ResolveIndex
 ): boolean {
   if (!manifest) return false
-  if (manifest.modeName) {
+  // The Assistant marker is not a dependency this device lacks: the job runs
+  // on mobile, and the run guard says so instead of a setup badge.
+  if (manifest.modeName && !isAssistantJobMode(manifest.modeName)) {
     const ok = idx.modeNames.has(modeKey(manifest.modeName)) || idx.hasDefaultMode
     if (!ok) return true
   }

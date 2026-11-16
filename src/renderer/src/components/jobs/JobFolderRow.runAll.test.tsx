@@ -52,6 +52,7 @@ function job(id: string, over: Partial<JobData> = {}): JobData {
     needsSetup: false,
     incompleteSetup: false,
     lastRunResult: null,
+    runsOnMobile: false,
     ...over
   }
 }
@@ -105,6 +106,13 @@ describe('folder menu', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
+  it('skips a job mobile runs as the Assistant', async () => {
+    openMenu([job('a', { runsOnMobile: true }), job('b')])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Run All Jobs' }))
+    await waitFor(() => expect(executeMutateAsync).toHaveBeenCalledTimes(1))
+    expect(executeMutateAsync.mock.calls[0][0]).toEqual({ jobId: 'b', navigate: false })
+  })
+
   it('keeps going after one job is refused', async () => {
     executeMutateAsync.mockRejectedValueOnce(new Error('refused'))
     openMenu([job('a'), job('b')])
@@ -115,6 +123,7 @@ describe('folder menu', () => {
 
   it.each([
     ['nothing in it can start', [job('a', { inProgressRunsCount: 1 })], 'Each job is running or cannot run on this device'],
+    ['its only job runs on mobile', [job('a', { runsOnMobile: true })], 'Each job is running or cannot run on this device'],
     ['it has no jobs', [], 'This folder has no jobs']
   ])('is unavailable when %s, and says why in text, not a tooltip', (_case, jobs, reason) => {
     openMenu(jobs)

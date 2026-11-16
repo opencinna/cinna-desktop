@@ -64,6 +64,7 @@ function job(over: Partial<JobData> = {}): JobData {
     needsSetup: false,
     incompleteSetup: false,
     lastRunResult: null,
+    runsOnMobile: false,
     ...over
   }
 }
@@ -147,5 +148,19 @@ describe('an ordinary job', () => {
     fireEvent.mouseEnter(row())
     fireEvent.click(screen.getByLabelText('Run this job'))
     expect(executeMutate).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('a job mobile runs as the Assistant', () => {
+  it('shows the run-now button disabled on hover, with where it runs', () => {
+    render(<JobItem job={job({ runsOnMobile: true })} />)
+    fireEvent.mouseEnter(row())
+    const button = screen.getByLabelText('Run this job') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.parentElement?.getAttribute('title')).toBe(
+      'Runs on mobile as the Assistant. Pick a desktop mode in Edit to run it here.'
+    )
+    fireEvent.click(button)
+    expect(executeMutate).not.toHaveBeenCalled()
   })
 })

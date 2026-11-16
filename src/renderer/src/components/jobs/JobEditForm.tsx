@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { Bot, ChevronDown, Plug, Plus, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { AlertTriangle, Bot, ChevronDown, Plug, Plus, X } from 'lucide-react'
 import type { JobDetailData, JobPatchDto } from '../../../../shared/jobs'
 import { newChatRouter } from '../../../../shared/chatRouting'
 import { useAgents } from '../../hooks/useAgents'
@@ -12,6 +13,7 @@ import { RouterBadge } from '../chat/RouterBadge'
 import { useAgentColor } from '../../utils/agentColors'
 import { getPreset, type ColorPreset } from '../../constants/chatModeColors'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { ASSISTANT_JOB_MODE, ASSISTANT_JOB_MODE_LABEL } from '../../../../shared/jobMode'
 
 interface JobEditFormProps {
   job: JobDetailData
@@ -20,14 +22,20 @@ interface JobEditFormProps {
 export type JobEditFormFlushResult =
   | { ok: true }
   | { ok: false; error: string }
+  /** The user cancelled a confirm the save needed; nothing was saved, nothing to show. */
+  | { ok: false; cancelled: true }
 
 export interface JobEditFormHandle {
   /**
    * Apply any pending local changes synchronously (bypassing the debounce) and
    * resolve once the server roundtrip completes. Used by the "Save" button in
    * `JobEditPage` so navigation only happens after the patch is persisted.
+   *
+   * A held change away from the Assistant opens a confirm first and resolves
+   * when the user answers it; `onConfirmOpen` fires as it opens, so the caller
+   * can drop its own busy state while the question waits for the user.
    */
-  flush: () => Promise<JobEditFormFlushResult>
+  flush: (options?: { onConfirmOpen?: () => void }) => Promise<JobEditFormFlushResult>
 }
 
 const DEBOUNCE_MS = 600
@@ -37,6 +45,16 @@ const inputClass =
 
 const CINNA_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const
 type CinnaPriority = (typeof CINNA_PRIORITIES)[number]
+
+/**
+ * The form's mode value: a chat mode id, '' for Default, or — for a job mobile
+ * runs as the Assistant, whose stored `modeId` is null — the marker, so the
+ * Assistant pill starts selected rather than Default. Choosing Default or a
+ * mode is then a change, sent even though Default equals the stored null.
+ */
+function formModeId(job: Pick<JobDetailData, 'modeId' | 'runsOnMobile'>): string {
+  return job.runsOnMobile ? ASSISTANT_JOB_MODE : (job.modeId ?? '')
+}
 
 function asPriority(value: string | null): CinnaPriority {
   if (value && (CINNA_PRIORITIES as readonly string[]).includes(value)) {
@@ -65,7 +83,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
   const [description, setDescription] = useState(job.description ?? '')
   const [prompt, setPrompt] = useState(job.prompt)
   const [agentIds, setAgentIds] = useState<Set<string>>(new Set(job.agentIds))
-  const [modeId, setModeId] = useState<string>(job.modeId ?? '')
+  const [modeId, setModeId] = useState<string>(formModeId(job))
   const [mcpIds, setMcpIds] = useState<Set<string>>(new Set(job.mcpProviderIds))
   const [cinnaAgentId, setCinnaAgentId] = useState<string>(job.cinnaAgentId ?? '')
   const [cinnaPriority, setCinnaPriority] = useState<CinnaPriority>(asPriority(job.cinnaPriority))
@@ -79,7 +97,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     setDescription(job.description ?? '')
     setPrompt(job.prompt)
     setAgentIds(new Set(job.agentIds))
-    setModeId(job.modeId ?? '')
+    setModeId(formModeId(job))
     setMcpIds(new Set(job.mcpProviderIds))
     setCinnaAgentId(job.cinnaAgentId ?? '')
     setCinnaPriority(asPriority(job.cinnaPriority))
@@ -92,7 +110,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     title: job.title,
     description: job.description ?? '',
     prompt: job.prompt,
-    modeId: job.modeId ?? '',
+    modeId: formModeId(job),
     cinnaAgentId: job.cinnaAgentId ?? '',
     cinnaPriority: asPriority(job.cinnaPriority)
   })
@@ -102,11 +120,20 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
       title: job.title,
       description: job.description ?? '',
       prompt: job.prompt,
-      modeId: job.modeId ?? '',
+      modeId: formModeId(job),
       cinnaAgentId: job.cinnaAgentId ?? '',
       cinnaPriority: asPriority(job.cinnaPriority)
     }
   }, [job])
+
+  // Leaving the Assistant waits for a confirm on Save (`flush`), so the
+  // debounced auto-save holds the mode back meanwhile.
+  const [confirmingMode, setConfirmingMode] = useState(false)
+  const [confirmPending, setConfirmPending] = useState(false)
+  const [confirmError, setConfirmError] = useState<string | null>(null)
+  const confirmResolveRef = useRef<((result: JobEditFormFlushResult) => void) | null>(null)
+  const leavesAssistant = (patch: JobPatchDto): boolean =>
+    job.runsOnMobile && patch.modeId !== undefined
 
   const buildPatch = (): JobPatchDto => {
     const snap = snapshotRef.current
@@ -114,7 +141,8 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     if (title !== snap.title) patch.title = title
     if (description !== snap.description) patch.description = description || null
     if (prompt !== snap.prompt) patch.prompt = prompt
-    if (modeId !== snap.modeId) patch.modeId = modeId || null
+    // The marker is never written back: it is not a mode id.
+    if (modeId !== snap.modeId && modeId !== ASSISTANT_JOB_MODE) patch.modeId = modeId || null
     if (cinnaAgentId !== snap.cinnaAgentId) patch.cinnaAgentId = cinnaAgentId || null
     if (cinnaPriority !== snap.cinnaPriority) patch.cinnaPriority = cinnaPriority
     return patch
@@ -122,6 +150,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
 
   useEffect(() => {
     const patch = buildPatch()
+    if (leavesAssistant(patch)) delete patch.modeId
     if (Object.keys(patch).length === 0) return
 
     const handle = setTimeout(() => {
@@ -142,11 +171,20 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
   useImperativeHandle(
     ref,
     () => ({
-      flush: async () => {
+      flush: async (options) => {
         if (!title.trim()) return { ok: false, error: 'Title is required' }
         if (!prompt.trim()) return { ok: false, error: 'Prompt is required' }
         const patch = buildPatch()
         if (Object.keys(patch).length === 0) return { ok: true }
+        if (leavesAssistant(patch)) {
+          // Settled by the confirm's own buttons (`confirmMode` / `cancelMode`).
+          setConfirmError(null)
+          setConfirmingMode(true)
+          options?.onConfirmOpen?.()
+          return new Promise<JobEditFormFlushResult>((resolve) => {
+            confirmResolveRef.current = resolve
+          })
+        }
         try {
           await updateJob.mutateAsync({ jobId: job.id, patch })
           return { ok: true }
@@ -166,9 +204,42 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
       cinnaAgentId,
       cinnaPriority,
       job.id,
+      job.runsOnMobile,
       updateJob
     ]
   )
+
+  const confirmMode = async (): Promise<void> => {
+    setConfirmPending(true)
+    setConfirmError(null)
+    try {
+      await updateJob.mutateAsync({ jobId: job.id, patch: buildPatch() })
+      setConfirmingMode(false)
+      confirmResolveRef.current?.({ ok: true })
+      confirmResolveRef.current = null
+    } catch (err) {
+      // The confirm stays open with the reason in it (ux_rules §6).
+      setConfirmError(unwrapIpcError(err, 'Could not save the job.'))
+    } finally {
+      setConfirmPending(false)
+    }
+  }
+
+  // Left by other navigation (the sidebar) with the confirm open: the held
+  // pick is discarded, and whoever awaits `flush` hears so.
+  useEffect(
+    () => () => {
+      confirmResolveRef.current?.({ ok: false, cancelled: true })
+      confirmResolveRef.current = null
+    },
+    []
+  )
+
+  const cancelMode = (): void => {
+    setConfirmingMode(false)
+    confirmResolveRef.current?.({ ok: false, cancelled: true })
+    confirmResolveRef.current = null
+  }
 
   const enabledAgents = useMemo(
     // `enabled` and nothing else: it is the user's own toggle for this agent.
@@ -421,6 +492,20 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
               Chat Mode <span className="text-[var(--color-text-muted)]">(optional)</span>
             </label>
             <div className="flex flex-wrap gap-1.5">
+              {/*
+                Shown for as long as the job is an Assistant job, so leaving it
+                moves no pill. Until Save confirms, it can be picked again.
+              */}
+              {job.runsOnMobile && (
+                <ModePill
+                  label={ASSISTANT_JOB_MODE_LABEL}
+                  color={null}
+                  selected={modeId === ASSISTANT_JOB_MODE}
+                  title="Set on mobile. Picking another mode makes this a desktop job."
+                  // Re-picking it before Save drops the held change.
+                  onClick={() => setModeId(ASSISTANT_JOB_MODE)}
+                />
+              )}
               <ModePill
                 label="Default"
                 color={null}
@@ -511,9 +596,108 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
           <RouterBadge router={router} connectionAgent={directAgent} agentName={directAgent?.name} />
         </div>
       )}
+
+      {confirmingMode && (
+        <LeaveAssistantConfirm
+          jobTitle={title.trim() || job.title}
+          pending={confirmPending}
+          error={confirmError}
+          onCancel={cancelMode}
+          onConfirm={() => void confirmMode()}
+        />
+      )}
     </div>
   )
 })
+
+/**
+ * Saving a mode choice on a job mobile runs as the Assistant turns it into a
+ * desktop job, and mobile stops running it as the Assistant — the desktop
+ * cannot set the marker back. Built like `DeleteJobConfirm`: anchored at a
+ * fixed top, undismissable while the save runs, and a failure keeps it open
+ * with the reason last (ux_rules §5, §6).
+ */
+function LeaveAssistantConfirm({
+  jobTitle,
+  pending,
+  error,
+  onCancel,
+  onConfirm
+}: {
+  jobTitle: string
+  pending: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}): React.JSX.Element {
+  const modalRef = useRef<HTMLDivElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const pendingRef = useRef(pending)
+  pendingRef.current = pending
+  useEffect(() => cancelRef.current?.focus(), [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !pendingRef.current) onCancel()
+    }
+    const onClick = (e: MouseEvent): void => {
+      if (pendingRef.current) return
+      if (modalRef.current && !modalRef.current.contains(e.target as Node)) onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('mousedown', onClick)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onClick)
+    }
+  }, [onCancel])
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/25 pt-[20vh]">
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-label="Make this a desktop job"
+        className="app-popover-surface w-96 rounded-lg border border-[var(--color-border)] shadow-xl p-5 space-y-4"
+      >
+        <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-danger)]">
+          <AlertTriangle size={16} />
+          Make this a desktop job
+        </div>
+        <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+          <strong className="text-[var(--color-text)]">{jobTitle}</strong> keeps its prompt and
+          history and becomes a normal desktop job. Mobile will no longer run it as the
+          Assistant, and it can't be switched back from the desktop.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            ref={cancelRef}
+            type="button"
+            onClick={onCancel}
+            disabled={pending}
+            className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={pending}
+            className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-danger)] hover:brightness-110 text-white transition-colors disabled:opacity-50"
+          >
+            {pending ? 'Saving…' : 'Make desktop job'}
+          </button>
+        </div>
+        {error && (
+          <div role="alert" className="text-[11px] leading-relaxed text-[var(--color-danger)]">
+            {error}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
 
 /**
  * Chat-mode selector pill. Selected pills adopt the mode's color preset
@@ -525,12 +709,14 @@ function ModePill({
   label,
   color,
   selected,
-  onClick
+  onClick,
+  title
 }: {
   label: string
   color: ColorPreset | null
   selected: boolean
   onClick: () => void
+  title?: string
 }): React.JSX.Element {
   const base =
     'flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors'
@@ -539,6 +725,7 @@ function ModePill({
       <button
         type="button"
         onClick={onClick}
+        title={title}
         className={`${base} ${
           color ? '' : 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
         }`}
@@ -556,6 +743,7 @@ function ModePill({
     <button
       type="button"
       onClick={onClick}
+      title={title}
       className={`${base} border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/40`}
     >
       <span

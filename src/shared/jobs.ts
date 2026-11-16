@@ -86,6 +86,14 @@ export interface JobData extends JobRuntimeDefinition {
    * `job:get`.
    */
   lastRunResult: ChatRunResult | null
+  /**
+   * The job synced from mobile as an Assistant job (manifest `modeName`
+   * `@assistant`, `shared/jobMode.ts`). It never runs on this device: every
+   * Run control is disabled for it, and main refuses it at each run entry
+   * point. Its `modeId` is null, which here means "no desktop mode", not the
+   * default one. Populated by `job:list` and `job:get`.
+   */
+  runsOnMobile: boolean
 }
 
 /**

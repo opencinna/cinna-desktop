@@ -1418,6 +1418,17 @@ describe('stamp_identity with a job already depending on the folder', () => {
     const newId = stamp(legacyId)
     expect(folderDeps(jobId)[0].manifestId).toBe(newId.replace('folder:', ''))
   })
+  it.each(['@assistant', 'Research'])('keeps a mode name %j this device could not resolve', (modeName) => {
+    // A job pulled from mobile as the Assistant (or naming a mode this device
+    // lacks) holds no local mode, so a rebuild from local state alone would
+    // drop the sender's name on a repair the user never connected to the job.
+    const { legacyId, jobId } = legacyAgentWithJob()
+    const prior = jobsRepo.getById(JOB_OWNER, jobId)!.syncDeps!
+    jobsRepo.setSyncDeps(JOB_OWNER, jobId, { ...prior, modeName })
+    stamp(legacyId)
+    expect(jobsRepo.getById(JOB_OWNER, jobId)?.syncDeps?.modeName).toBe(modeName)
+    expect(folderDeps(jobId)).toHaveLength(1)
+  })
 })
 
 /**

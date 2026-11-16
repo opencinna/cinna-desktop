@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { LocalScheduleItem } from '../../../../shared/localSchedules'
@@ -11,6 +11,7 @@ import { ScheduleEditor, catchUpExplanation, scheduleButtonClass, scheduleDialog
 import { ScheduleHistory, scheduleStatusLabels, scheduleTime } from '../agents/local/ScheduleHistory'
 import { ScheduleActions, ScheduleNextLine, ScheduleSwitch, ScheduleTimingLine, scheduleRowVersion } from '../agents/local/SchedulesTab'
 import { useNow } from '../agents/local/scheduleClock'
+import { ASSISTANT_JOB_SCHEDULE_HINT } from '../../../../shared/jobMode'
 
 function DeleteJobSchedule({ item, pending, error, onClose, onDelete }: { item: LocalScheduleItem; pending: boolean; error: string | null; onClose(): void; onDelete(): void }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -42,7 +43,7 @@ export function useJobScheduleCount(jobId: string, enabled = true): number {
   return query.data?.items.length ?? 0
 }
 
-function JobSchedulesContent({ jobId, profileUserId }: { jobId: string; profileUserId: string | null }) {
+function JobSchedulesContent({ jobId, profileUserId, runsOnMobile }: { jobId: string; profileUserId: string | null; runsOnMobile: boolean }) {
   const client = useQueryClient()
   const openTask = useOpenTask()
   const queryKey = ['job-schedules', profileUserId, jobId]
@@ -83,9 +84,13 @@ function JobSchedulesContent({ jobId, profileUserId }: { jobId: string; profileU
     finally { pendingRef.current = false; setPending(null) }
   }
   const busy = !!pending || !!editing || !!removing
+  const hintId = useId()
   return <section aria-label="Job schedules" className="min-w-0">
     <SettingsSection title="Schedules on this device" info={<SettingsInfoTip label="How Job schedules run">{catchUpExplanation} Each occurrence starts a task for this Job. Disabling stops future runs; use the task’s Stop control for work already started.</SettingsInfoTip>}
-      action={<button type="button" className={scheduleButtonClass} disabled={busy || !query.data || !!query.error} onClick={() => setEditing({ snapshot: query.data! })}>New schedule</button>}>
+      action={<button type="button" className={scheduleButtonClass} disabled={busy || runsOnMobile || !query.data || !!query.error}
+        aria-describedby={runsOnMobile ? hintId : undefined} onClick={() => setEditing({ snapshot: query.data! })}>New schedule</button>}>
+      {/* Main refuses new and re-enabled schedules for such a Job; existing ones are skipped when due. */}
+      {runsOnMobile && <p id={hintId} className="text-[13px] text-[var(--color-text-muted)]">{ASSISTANT_JOB_SCHEDULE_HINT}</p>}
       {query.isPending && <p className="text-[13px] text-[var(--color-text-muted)]">Loading schedules…</p>}
       {!query.isPending && !query.error && query.data?.items.length === 0 && <p className="text-[13px] text-[var(--color-text-muted)]">No schedules yet. Choose when this Job should start a task.</p>}
       {query.data?.items.map((item) => <article key={item.binding?.id ?? item.name} aria-label={item.name} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
@@ -95,7 +100,7 @@ function JobSchedulesContent({ jobId, profileUserId }: { jobId: string; profileU
             {/* A Job-changed problem does not block turning it on: enabling
                 records the Job as it is now, which is what the list shows. */}
             <ScheduleSwitch item={item} checked={!!item.binding?.enabled} onToggle={() => void mutate(item, item.binding?.enabled ? 'disable' : 'enable')}
-              disabled={busy || !!query.error || !item.binding || (!item.binding.enabled && !item.revision)} />
+              disabled={busy || !!query.error || !item.binding || (!item.binding.enabled && (!item.revision || runsOnMobile))} />
             <ScheduleActions item={item} disabled={busy || !!query.error} historyOpen={history === item.binding?.id} onEdit={() => setEditing({ item, snapshot: query.data! })} onDelete={() => { setError(null); setRemoving(item) }} onHistory={() => setHistory(history === item.binding?.id ? null : item.binding!.id)} />
           </div>
         </div>
@@ -115,7 +120,8 @@ function JobSchedulesContent({ jobId, profileUserId }: { jobId: string; profileU
   </section>
 }
 
-export function JobSchedules({ jobId }: { jobId: string }) {
+/** `runsOnMobile`: the Job runs on mobile as the Assistant, so nothing new is scheduled here. */
+export function JobSchedules({ jobId, runsOnMobile = false }: { jobId: string; runsOnMobile?: boolean }) {
   const profileUserId = useAuthStore((state) => state.currentUser?.id ?? null)
-  return <JobSchedulesContent key={`${profileUserId}:${jobId}`} jobId={jobId} profileUserId={profileUserId} />
+  return <JobSchedulesContent key={`${profileUserId}:${jobId}`} jobId={jobId} profileUserId={profileUserId} runsOnMobile={runsOnMobile} />
 }

@@ -38,6 +38,7 @@ import { DeleteJobConfirm } from './JobItem'
 import { useTaskRowsInPlace } from '../tasks/useTaskRowsInPlace'
 import type { JobDetailData, JobRunData } from '../../../../shared/jobs'
 import { canScheduleJob } from '../../../../shared/localJobSchedules'
+import { ASSISTANT_JOB_MODE_LABEL, ASSISTANT_JOB_RUN_HINT } from '../../../../shared/jobMode'
 import { JobSchedules, useJobScheduleCount } from './JobSchedules'
 import type { JobDependencyStatus as JobDependencyStatusDto } from '../../../../shared/sync'
 import { isFolderAgentId } from '../../../../shared/localAgents'
@@ -46,6 +47,8 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { documentMarkdownComponents } from '../../utils/markdownComponents'
 
 const CINNA_DEFAULT_PRIORITY = 'normal'
+/** One job page at a time, so a fixed id is unique. */
+const RUN_HINT_ID = 'job-run-hint'
 
 
 /**
@@ -155,15 +158,18 @@ export function JobDetail(): React.JSX.Element {
             <span
               className="flex"
               title={
-                job.incompleteSetup
-                  ? "This job can't run on this device — incomplete setup"
-                  : undefined
+                job.runsOnMobile
+                  ? ASSISTANT_JOB_RUN_HINT
+                  : job.incompleteSetup
+                    ? "This job can't run on this device — incomplete setup"
+                    : undefined
               }
             >
               <button
                 type="button"
                 onClick={handleRun}
-                disabled={running || job.incompleteSetup}
+                disabled={running || job.incompleteSetup || job.runsOnMobile}
+                aria-describedby={job.runsOnMobile ? RUN_HINT_ID : undefined}
                 className={`${HEADER_BUTTON} border-[var(--color-success)] px-3
                   bg-[var(--color-success)] hover:brightness-110 text-white
                   disabled:opacity-30 disabled:cursor-not-allowed transition-all`}
@@ -194,12 +200,28 @@ export function JobDetail(): React.JSX.Element {
           Always rendered, exactly one line: a refused run must not push the
           page down under the pointer (§1). The full text is in `title`.
         */}
-        <div
-          role="alert"
-          title={runError ?? undefined}
-          className="h-4 truncate text-right text-[11px] leading-4 text-[var(--color-danger)]"
-        >
-          {runError}
+        {/*
+          A job mobile runs as the Assistant says why Run is greyed out in the
+          same one-line slot, so the page is laid out the same either way. The
+          hint is not an alert: only a refused run is announced.
+        */}
+        <div className="relative h-4 text-right text-[11px] leading-4">
+          <div
+            role="alert"
+            title={runError ?? undefined}
+            className="h-4 truncate text-[var(--color-danger)]"
+          >
+            {runError}
+          </div>
+          {!runError && job.runsOnMobile && (
+            <p
+              id={RUN_HINT_ID}
+              title={ASSISTANT_JOB_RUN_HINT}
+              className="absolute inset-0 m-0 truncate text-[var(--color-text-muted)]"
+            >
+              {ASSISTANT_JOB_RUN_HINT}
+            </p>
+          )}
         </div>
 
         {/*
@@ -301,7 +323,7 @@ export function JobDetail(): React.JSX.Element {
                   })}
                 </nav>
                 <div role="tabpanel" className="pt-3">
-                  {tab === 'schedules' ? <JobSchedules jobId={job.id} /> : <JobPrompt prompt={job.prompt} />}
+                  {tab === 'schedules' ? <JobSchedules jobId={job.id} runsOnMobile={job.runsOnMobile} /> : <JobPrompt prompt={job.prompt} />}
                 </div>
               </div>
             ) : (
@@ -582,7 +604,13 @@ function JobDetailsPanel({ job }: { job: JobDetailData }): React.JSX.Element {
             </ul>
           </Detail>
         )}
-        {isLocal && mode && (
+        {/* No default-mode fallback: the job has no desktop mode at all. */}
+        {isLocal && job.runsOnMobile && (
+          <Detail label="Chat mode">
+            <span title={`Chat mode: ${ASSISTANT_JOB_MODE_LABEL}`}>{ASSISTANT_JOB_MODE_LABEL}</span>
+          </Detail>
+        )}
+        {isLocal && !job.runsOnMobile && mode && (
           <Detail label="Chat mode">
             <span className="inline-flex items-center gap-1.5" title={`Chat mode: ${mode.name}`}>
               <span

@@ -6,6 +6,7 @@ import { useExecuteJob } from '../../hooks/useJobs'
 import type { JobData } from '../../../../shared/jobs'
 import { useJobsDrag } from './dragContext'
 import { unreadResultIndicator } from '../ui/runResultIndicators'
+import { ASSISTANT_JOB_RUN_HINT } from '../../../../shared/jobMode'
 
 interface JobItemProps {
   job: JobData
@@ -45,7 +46,7 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
 
   const handleRunNow = (e: React.MouseEvent): void => {
     e.stopPropagation()
-    if (isRunning) return
+    if (isRunning || job.runsOnMobile) return
     // navigate=false: fire-and-forget from the sidebar so the user can kick
     // off multiple jobs without losing their place in the list.
     executeJob.mutate({ jobId: job.id, navigate: false })
@@ -200,7 +201,26 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
         // so the button would only ever produce an error the sidebar has no
         // room to show. The red marker above holds the slot and says why.
         hovering &&
-        !job.incompleteSetup && (
+        !job.incompleteSetup &&
+        (job.runsOnMobile ? (
+          /*
+            Disabled rather than absent: a job mobile runs as the Assistant is
+            not broken, and the hover says where it runs. The title hangs on a
+            wrapper because a disabled button swallows its own mouse events.
+          */
+          <span className="inline-flex shrink-0" title={ASSISTANT_JOB_RUN_HINT} onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              disabled
+              className="inline-flex items-center justify-center w-4 h-4 rounded
+                bg-[var(--color-success)] text-white opacity-30 cursor-not-allowed shrink-0"
+              aria-label="Run this job"
+              title={ASSISTANT_JOB_RUN_HINT}
+            >
+              <Play size={10} />
+            </button>
+          </span>
+        ) : (
           <button
             type="button"
             onClick={handleRunNow}
@@ -214,7 +234,7 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
           >
             <Play size={10} />
           </button>
-        )
+        ))
       )}
     </div>
   )
@@ -241,6 +261,9 @@ export function DeleteJobConfirm({
   error
 }: DeleteJobConfirmProps): React.JSX.Element {
   const modalRef = useRef<HTMLDivElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  // Cancel takes focus, so Enter does not delete (ux_rules §5).
+  useEffect(() => cancelRef.current?.focus(), [])
   // Undismissable while the delete runs (`ux_rules.md` §5): closing would
   // cancel nothing and only hide what is happening.
   const pendingRef = useRef(pending)
@@ -282,6 +305,7 @@ export function DeleteJobConfirm({
         </p>
         <div className="flex justify-end gap-2">
           <button
+            ref={cancelRef}
             type="button"
             onClick={onCancel}
             disabled={pending}

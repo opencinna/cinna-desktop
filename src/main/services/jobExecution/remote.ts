@@ -8,6 +8,7 @@ import { jobRuntimeDefinition } from '../../tasks/jobRuntimeDefinition'
 import { taskService } from '../taskService'
 import { taskSyncService } from '../taskSyncService'
 import type { JobExecutor } from './contract'
+import { refuseMobileOnlyJob } from './mobileOnly'
 const logger = createLogger('job')
 export const remoteJobExecutor: JobExecutor = {
   async execute(scope, job) {
@@ -16,6 +17,7 @@ export const remoteJobExecutor: JobExecutor = {
   async executeRemote(scope, job) {
     const userId = scope.profileUserId
     const jobId = job.id
+    refuseMobileOnlyJob(job)
     if (job.router != null || job.script != null || job.budget != null) jobRuntimeDefinition(job)
     if (!job.cinnaAgentId) {
       throw new JobError('missing_dependency', 'Cinna agent is required to run this job')

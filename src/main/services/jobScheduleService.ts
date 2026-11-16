@@ -19,12 +19,19 @@ import { prepareScheduledJob } from './jobExecution/scheduled'
 import { runExecutionService, type RunScope } from './runExecutionService'
 import { taskRuntimeService } from './taskRuntimeService'
 import { taskService } from './taskService'
+import { jobRunsOnMobile } from './jobExecution/mobileOnly'
+import { ASSISTANT_JOB_MODE_LABEL } from '../../shared/jobMode'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('job-schedule')
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 type JobBinding = Omit<ScheduleBindingRow, 'definition'> & { definition: LocalJobScheduleDefinition }
 const isJobBinding = (row: ScheduleBindingRow): row is JobBinding => row.definition.executionType === 'job'
 const pending = new Set<string>()
+/** A Job mobile runs as the Assistant never runs here, so it is not scheduled here either. */
+export const SCHEDULE_ON_MOBILE_MESSAGE = 'This Job runs on mobile as the Assistant. Pick a desktop mode in Edit to schedule it here.'
 
 /** Include attachments: changing tools/participants is an execution change too. */
 export function jobScheduleRevision(job: JobRow): string {
@@ -68,7 +75,8 @@ function summary(scope: RunScope, job: JobRow): string {
     ? Object.entries(job.script.agents).map(([alias, descriptor]) => descriptor.name || alias)
     : jobAgentRepo.listAgentIds(job.id).map(id => (agentRepo.getOwned(scope.settingsUserId, id) ?? agentRepo.getOwned(scope.profileUserId, id))?.name ?? 'Unavailable agent')
   const tools = jobMcpRepo.listProviderIds(job.id).map(id => mcpProviderRepo.getOwned(scope.settingsUserId, id)?.name ?? 'Unavailable tool')
-  const mode = job.modeId ? chatModeRepo.getOwned(scope.settingsUserId, job.modeId)?.name ?? 'Unavailable chat mode' : 'Default chat mode'
+  const mode = jobRunsOnMobile(job) ? ASSISTANT_JOB_MODE_LABEL
+    : job.modeId ? chatModeRepo.getOwned(scope.settingsUserId, job.modeId)?.name ?? 'Unavailable chat mode' : 'Default chat mode'
   const routing = job.router === 'script' ? 'Script Job' : job.router === 'coordinator' ? 'Coordinator Job' : 'Ordinary Job'
   const budget = job.router ? `${job.budget?.maxRounds ?? 20} turns / ${job.budget?.maxMinutes ?? 60} minutes` : 'Same routing and turn controls as Run'
   return `${routing} · Agents: ${agents.join(', ') || 'none'} · Tools: ${tools.join(', ') || 'none'} · ${mode} · ${budget}`
@@ -91,6 +99,8 @@ export const jobScheduleService = {
   save(scope: RunScope, input: JobScheduleSaveInput, now = Date.now()): LocalJobScheduleSnapshot {
     assertScope(scope, input)
     const job = requireJob(scope, input.jobId), jobRevision = jobScheduleRevision(job)
+    // `enable` saves through here too. Existing schedules stay; `check` skips them.
+    if (jobRunsOnMobile(job)) throw new Error(SCHEDULE_ON_MOBILE_MESSAGE)
     if (jobRevision !== input.jobRevision) throw new Error('The Job changed a moment ago. Try again.')
     if (typeof input.name !== 'string' || !input.name.trim() || input.name !== input.name.trim() || input.name.length > 255) throw new Error('Enter a schedule name of 1–255 characters without surrounding spaces.')
     if (typeof input.enabled !== 'boolean' || typeof input.cron !== 'string' || typeof input.timezone !== 'string') throw new Error('The schedule form is invalid.')
@@ -156,11 +166,28 @@ export const jobScheduleService = {
       if (observed <= binding.watermark) continue
       if (binding.nextDueAt == null || binding.nextDueAt > observedAt) { localScheduleRepo.observe(scope.profileUserId, binding.id, observed); continue }
       if (pending.has(binding.id)) continue
+      if (skipMobileOnlyJob(scope, binding, observedAt)) continue
       pending.add(binding.id)
       due.push(admit(scope, binding, current, now, observedAt).finally(() => pending.delete(binding.id)))
     }
     await Promise.all(due)
   }
+}
+
+/**
+ * A due occurrence of a job mobile runs as the Assistant is passed over, not
+ * failed: no task, run or occurrence row, just the cursor moved to the next
+ * occurrence so the skip is logged once per occurrence rather than every check.
+ * `prepareScheduledJob` refuses the same job as a backstop.
+ */
+function skipMobileOnlyJob(scope: RunScope, binding: JobBinding, observedAt: number): boolean {
+  const job = jobsRepo.getById(scope.profileUserId, binding.jobId)
+  if (!job || !jobRunsOnMobile(job)) return false
+  const minute = scheduleMinute(parseScheduleCron(binding.definition.cron), binding.definition.timezone, binding.nextDueAt!)
+  const nextDueAt = nextScheduleOccurrence(binding.definition.cron, binding.definition.timezone, observedAt, minute.civilKey)
+  localScheduleRepo.claim(binding, nextDueAt, observedAt)
+  logger.info('skipped a scheduled job that runs on mobile as the Assistant', { jobId: job.id, bindingId: binding.id })
+  return true
 }
 
 async function admit(scope: RunScope, binding: JobBinding, current: () => boolean, now: () => number, observedAt: number): Promise<void> {

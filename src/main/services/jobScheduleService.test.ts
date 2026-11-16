@@ -15,7 +15,7 @@ vi.mock('./scriptRuntimeService', () => ({ scriptRuntimeService: {} }))
 vi.mock('./taskRuntimeService', () => ({ taskRuntimeService: { cancel: vi.fn() } }))
 vi.mock('./runExecutionService', () => ({ runExecutionService: { isRunning: () => false, cancelChat: vi.fn() } }))
 vi.mock('./taskService', () => ({ taskService: { setStatus: vi.fn() } }))
-const { jobScheduleService } = await import('./jobScheduleService')
+const { jobScheduleService, jobScheduleRevision, SCHEDULE_ON_MOBILE_MESSAGE } = await import('./jobScheduleService')
 const { localScheduleService } = await import('./localScheduleService')
 const { localScheduleRepo } = await import('../db/localSchedules')
 const { jobsRepo, jobRunsRepo, jobAgentRepo, jobMcpRepo } = await import('../db/jobs')
@@ -307,5 +307,33 @@ describe('device-local Job schedules', () => {
     await check(Date.parse('2026-09-14T08:00:00Z'))
     expect(localScheduleRepo.get(USER, binding.id)?.enabled).toBe(false)
     expect(localScheduleRepo.occurrences(USER, binding.id)).toEqual([])
+  })
+  it('skips a due occurrence of a Job mobile runs as the Assistant, quietly and once', async () => {
+    const saved = save()
+    // A schedule from before the Job became an Assistant Job, re-reviewed so
+    // the revision check does not disable it first: the skip is what is left.
+    jobsRepo.setSyncDeps(USER, job.id, { modeName: '@assistant', deps: [] })
+    job = jobsRepo.getById(USER, job.id)!
+    localScheduleRepo.save({ ...saved, definition: { ...saved.definition, jobRevision: jobScheduleRevision(job) } as typeof saved.definition })
+    const binding = localScheduleRepo.get(USER, saved.id)!
+    await check(Date.parse('2026-09-14T08:00:00Z'))
+    expect(state.prepare).not.toHaveBeenCalled()
+    expect(localScheduleRepo.occurrences(USER, binding.id)).toEqual([])
+    expect(jobRunsRepo.listByJob(USER, job.id)).toEqual([])
+    // Not disabled, not failed: the cursor moves on to the next occurrence.
+    expect(localScheduleRepo.get(USER, binding.id)).toMatchObject({ enabled: true, reason: null,
+      nextDueAt: Date.parse('2026-09-15T08:00:00Z') })
+  })
+
+  it('refuses a new schedule or turning one on for a Job mobile runs as the Assistant, and names it in the summary', () => {
+    const saved = save({ enabled: false })
+    jobsRepo.setSyncDeps(USER, job.id, { modeName: '@assistant', deps: [] })
+    job = jobsRepo.getById(USER, job.id)!
+    expect(jobScheduleService.list(scope, job.id).jobSummary).toContain('Assistant (runs on mobile)')
+    expect(jobScheduleService.list(scope, job.id).jobSummary).not.toContain('Default chat mode')
+    expect(() => jobScheduleService.save(scope, input({ name: 'Another' }), BASE)).toThrow(SCHEDULE_ON_MOBILE_MESSAGE)
+    expect(() => jobScheduleService.enable(scope, { ...mutation(saved), jobRevision: input().jobRevision }, BASE)).toThrow(SCHEDULE_ON_MOBILE_MESSAGE)
+    expect(localScheduleRepo.list(USER)).toHaveLength(1)
+    expect(localScheduleRepo.get(USER, saved.id)?.enabled).toBe(false)
   })
 })

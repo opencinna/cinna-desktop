@@ -13,10 +13,13 @@ import { taskService } from '../taskService'
 import { unresolvableAgentLabels } from './dependencies'
 import type { JobExecutor } from './contract'
 import { isVaultAgent, VaultAgentRefused } from '../../vault/isVaultAgent'
+import { refuseMobileOnlyJob } from './mobileOnly'
 const logger = createLogger('job')
 
 export const desktopJobExecutor: JobExecutor = {
   async execute(scope, job) {
+    // Before any router branch: coordinator and script jobs start here too.
+    refuseMobileOnlyJob(job)
     jobRuntimeDefinition(job)
     if (job.router === 'coordinator') {
       const { startCoordinatorJob } = await import('../coordinatorJobService')
@@ -31,6 +34,8 @@ export const desktopJobExecutor: JobExecutor = {
   prepareRendererTurn(scope, job) {
     const userId = scope.profileUserId
     const jobId = job.id
+    // `executeLocal` and a scheduled ordinary job reach here without `execute`.
+    refuseMobileOnlyJob(job)
     // Definitions must never fall through to the legacy renderer-started turn.
     if (job.router != null || job.script != null || job.budget != null) {
       jobRuntimeDefinition(job)
