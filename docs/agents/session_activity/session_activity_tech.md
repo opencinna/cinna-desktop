@@ -8,7 +8,7 @@ Implementation reference for [Session Activity](session_activity.md). Follow-up 
 2. **Activity is read before the follow-up gate, not after it.** A task's end must not be lost with traffic the gate later drops. `SessionActivity.observe` skips a notification object it has already seen, because the same frame can reach both the between-turn listener and, replayed, the turn that took it
 3. **The translator ignores every activity kind.** `AcpMessageStream.apply` returns `{}` for `async_task_*` and `subagent_*`. They are not transcript content
 4. **A Claude subagent's `Agent` call is synthesized** (`SubagentFrames`), because with `nativeSubagentSessions` the parent never receives the `tool_call`. Removing it changes the saved transcript of every subagent turn, which the "transcript unchanged" tests in `acpActivity.driver.test.ts` catch
-5. **`lost` is written by whoever loses sight:** the pool's `onStatus` (a process leaving `running`) and `releaseChatSessions` (a chat that no longer answers to the agent). Nothing else infers it
+5. **`lost` is written by whoever loses sight or is told nothing runs:** the pool's `onStatus` (a process leaving `running`), `releaseChatSessions` (a chat that no longer answers to the agent), the Claude turn-end safety net (a subagent the CLI no longer lists), `endOpencodeChildrenLeftRunning` (an OpenCode child cut off by the next prompt), the busy-reap ceiling (via the pool stopping the process), and `stopSessionActivity` when a stopper answers `already_ended`. Unknown wire states also map to `lost`. Nothing else infers it; a later real end still overwrites `lost`
 
 ## File Locations
 
@@ -161,6 +161,8 @@ A child's status after the prompt answered still reaches the hub: the session ob
 ### Stop (`sessionActivityStop.ts`, `acpActivityStop.ts`)
 
 `stopSessionActivity` looks the item up in the hub: missing → `not_stoppable`; ended → `already_ended`; `canStop` false → `not_stoppable`. It then asks each installed stopper in turn. `null` means "not mine"; a throw counts as `unavailable`. An `unavailable` for an item that ended meanwhile becomes `already_ended`.
+
+**A stopper's `already_ended` ends the item `lost`.** The agent says nothing by that id runs, so its end never reached the hub: Claude kills a subagent's background shells when the subagent hands back, without a state update. Left alone, the row stayed running with a Stop that could only refuse again, and the idle reaper's busy hold (`hub.hasRunning`) kept the process alive to the ceiling. `stopSessionActivity` therefore calls `hub.endAll({chatId, ids: {itemId}}, 'lost')` (how it ended is unknown, so not `stopped`) and still returns the refusal. `unavailable` writes nothing: the agent did not answer, so nothing is known. A real end that arrives later overwrites `lost`.
 
 The ACP stopper handles only `background` items it can find in its registry. `stopAcpAsyncTask` sends `_session/async_task/stop {sessionId, asyncTaskId}` and races the answer against `ACP_ASYNC_TASK_STOP_TIMEOUT_MS` and the connection's exit. `{stopped: true}` → `stopped`; any other answer → `already_ended`; timeout, exit, a dead connection or a rejection → `unavailable`. Success needs no hub write: both engines send the task's `stopped` state update before they answer.
 

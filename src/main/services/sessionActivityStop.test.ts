@@ -52,6 +52,25 @@ describe('stopSessionActivity', () => {
     expect(await stopSessionActivity(CHAT, 'ses:bg', hubWith())).toEqual({ ok: false, code: outcome, reason })
   })
 
+  it('ends the item as lost when the agent answers that nothing by that id runs', async () => {
+    const hub = hubWith()
+    const listener = vi.fn()
+    hub.onChange(listener)
+    install('p', answer('already_ended'))
+
+    expect(await stopSessionActivity(CHAT, 'ses:bg', hub)).toMatchObject({ ok: false, code: 'already_ended' })
+    expect(hub.snapshot(CHAT).items).toEqual([expect.objectContaining({ id: 'ses:bg', state: 'lost' })])
+    expect(listener).toHaveBeenCalled()
+  })
+
+  it('leaves the item running when the agent did not answer', async () => {
+    const hub = hubWith()
+    install('p', answer('unavailable'))
+
+    await stopSessionActivity(CHAT, 'ses:bg', hub)
+    expect(hub.snapshot(CHAT).items).toEqual([expect.objectContaining({ id: 'ses:bg', state: 'running' })])
+  })
+
   it('says already_ended for an item the hub has ended, without asking anyone', async () => {
     const hub = hubWith()
     hub.report(CHAT, 'agent', { type: 'end', id: 'ses:bg', state: 'completed' })

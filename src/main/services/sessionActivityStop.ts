@@ -61,6 +61,15 @@ export async function stopSessionActivity(
     }
     if (outcome === null) continue
     if (outcome === 'stopped') return { ok: true }
+    // The agent says nothing by that id runs: its end never reached the hub (a
+    // Claude subagent's handback kills its background shells without a word).
+    // The agent is the authority here, so the row ends now — `lost`, since how
+    // it ended is unknown — rather than keeping a timer and a Stop that can only
+    // refuse again.
+    if (outcome === 'already_ended') {
+      hub.endAll({ chatId, ids: new Set([itemId]) }, 'lost')
+      return sessionActivityStopRefusal('already_ended')
+    }
     // The item may have ended while the request ran: say so rather than "no answer".
     const now = find()
     if (outcome === 'unavailable' && now && now.state !== 'running') {
