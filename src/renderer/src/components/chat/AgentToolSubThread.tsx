@@ -6,7 +6,7 @@ import { AgentContribution, AskLine } from './AgentContribution'
 import { isPermissionRequestTool } from '../../../../shared/localAgentRequests'
 import { isAskUserQuestionTool } from '../../utils/askUserQuestion'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { TranscriptVisibleContext, useTranscriptDisclosure } from './transcriptExpansion'
+import { TranscriptVisibleContext, useMountLatch, useTranscriptDisclosure } from './transcriptExpansion'
 
 interface AgentToolSubThreadProps {
   agentName: string
@@ -78,7 +78,9 @@ export function AgentToolSubThread({
     !!isStreaming || !!verbose || status === 'error'
   )
   const expanded = userExpanded || !!holdOpen
-  // The body stays mounted while closed, so blocks inside must know it is hidden.
+  // The thread's work mounts on its first open (a held ask opens it) and then
+  // stays mounted while closed, so blocks inside must know it is hidden.
+  const mounted = useMountLatch(expanded)
   const visible = useContext(TranscriptVisibleContext)
   const colorOf = useAgentColor()
 
@@ -203,7 +205,7 @@ export function AgentToolSubThread({
             className="subthread-surface ambient-button mt-1 rounded-lg border border-[var(--color-border)] px-2.5 py-2 pl-3"
             style={{ '--thread-tint': color.border } as React.CSSProperties}
           >
-            {parts.length === 0 && status === 'pending' ? (
+            {!mounted ? null : parts.length === 0 && status === 'pending' ? (
               // The prompt on the same line `AgentContribution` draws it on,
               // so it stays put when the first part arrives and takes the
               // "Working…" line's place below it.
@@ -222,7 +224,7 @@ export function AgentToolSubThread({
                 renderNested={renderNested}
               />
             )}
-            {errorText && (
+            {mounted && errorText && (
               <pre className="mt-2 text-[11px] bg-[var(--color-bg)] p-2 rounded font-mono whitespace-pre-wrap break-words text-[var(--color-danger)]">
                 {errorText}
               </pre>

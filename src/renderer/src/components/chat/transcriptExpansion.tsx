@@ -69,12 +69,29 @@ export function createTranscriptExpansionStore(): TranscriptExpansionStore {
 export const TranscriptExpansionContext = createContext<TranscriptExpansionStore | null>(null)
 
 /**
- * False inside a closed group. A group keeps its steps mounted while closed
- * (its height animates), so a block the user opened inside it is still
- * "expanded" — but nothing of it is on screen, and a "Collapse expanded" pill
- * offered for it would point at nothing (ux_rules §7).
+ * False inside a closed group. A group keeps its steps mounted once it has
+ * been opened (its height animates closed), so a block the user opened inside
+ * it is still "expanded" — but nothing of it is on screen, and a "Collapse
+ * expanded" pill offered for it would point at nothing (ux_rules §7).
  */
 export const TranscriptVisibleContext = createContext(true)
+
+/**
+ * Whether a collapsible body's content should be mounted: not until the body
+ * first opens, then for good. A long chat holds hundreds of closed groups and
+ * sub-threads; mounting their content only on demand keeps every render of
+ * the transcript from reconciling it. Staying mounted afterwards lets the
+ * close animate (the content is still there while the height shrinks), and
+ * the open animates as before: the content mounts in the same commit as the
+ * height starts to grow.
+ */
+export function useMountLatch(open: boolean): boolean {
+  const [mounted, setMounted] = useState(open)
+  // Set during render, React's pattern for state derived from a prop: the
+  // content mounts in the very render that opens the body.
+  if (open && !mounted) setMounted(true)
+  return mounted || open
+}
 
 /**
  * Expand state for a transcript block, registered with the enclosing

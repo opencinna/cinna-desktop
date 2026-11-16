@@ -92,11 +92,13 @@ export function ApplyPatchBlock({ files, animate, animateDelay }: ApplyPatchBloc
       animate={animate}
       animateDelay={animateDelay}
     >
-      <div className="px-2.5 pb-2.5 pt-0 space-y-2">
-        {files.map((f, i) => (
-          <FileDiffCard key={`${f.path}-${i}`} file={f} />
-        ))}
-      </div>
+      {() => (
+        <div className="px-2.5 pb-2.5 pt-0 space-y-2">
+          {files.map((f, i) => (
+            <FileDiffCard key={`${f.path}-${i}`} file={f} />
+          ))}
+        </div>
+      )}
     </DisclosureBlock>
   )
 }

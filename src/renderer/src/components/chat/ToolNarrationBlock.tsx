@@ -58,11 +58,10 @@ export function ToolNarrationBlock({
   // requires the `/word:word` colon-separated shape so it matches `/run:foo`
   // but NOT generic paths like `/etc/hosts` or `/usr/local/bin` that an LLM
   // might legitimately narrate as a single line.
-  const isSlashCommandEcho =
+  const isSlashCommandEcho = (): boolean =>
     !!content &&
     ((!!commandInvocation && content.trim() === commandInvocation) ||
       /^\s*\/[\w\-]+:[\w\-.]+\s*$/.test(content))
-  const showContent = !!content && !isSlashCommandEcho
 
   return (
     <DisclosureBlock
@@ -84,6 +83,7 @@ export function ToolNarrationBlock({
       animate={animate}
       animateDelay={animateDelay}
     >
+      {() => (
       <div
         className="px-3 pb-2.5 pt-0 text-[12.5px] leading-relaxed
           text-[var(--color-text-secondary)] markdown-body opacity-90 space-y-2"
@@ -95,10 +95,11 @@ export function ToolNarrationBlock({
         )}
         {/* Keep the model's narration text below the structured summary so
             the user can still read any surrounding prose. */}
-        {showContent && (
+        {!!content && !isSlashCommandEcho() && (
           <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</Markdown>
         )}
       </div>
+      )}
     </DisclosureBlock>
   )
 }

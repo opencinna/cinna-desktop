@@ -72,7 +72,8 @@ export function useCreateChat() {
 
 export function useDeleteChat() {
   const queryClient = useQueryClient()
-  const { activeChatId, setActiveChatId } = useChatStore()
+  const activeChatId = useChatStore((state) => state.activeChatId)
+  const setActiveChatId = useChatStore((state) => state.setActiveChatId)
 
   return useMutation({
     mutationFn: (chatId: string) => window.api.chat.delete(chatId),

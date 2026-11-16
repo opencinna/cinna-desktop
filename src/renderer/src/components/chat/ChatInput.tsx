@@ -11,6 +11,7 @@ import { useChatDetail, useSetChatCoordinator, useSetChatRouter } from '../../ho
 import { useModels } from '../../hooks/useModels'
 import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
+import { useShallow } from 'zustand/react/shallow'
 import { useAuthStore } from '../../stores/auth.store'
 import { useHintsStore } from '../../stores/hints.store'
 import { AgentMentionPopup } from './AgentMentionPopup'
@@ -620,7 +621,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     el.style.height = Math.min(el.scrollHeight, 180) + 'px'
   }, [textValue, draftKey])
   const { cancel: cancelStream } = useChatStream()
-  const { isStreaming: hasPortStream, activeRequestId, activeChatId: storeChatId, streamingBlocks } = useChatStore()
+  const hasPortStream = useChatStore((state) => state.isStreaming)
+  const activeRequestId = useChatStore((state) => state.activeRequestId)
+  const storeChatId = useChatStore((state) => state.activeChatId)
+  // Only what the running turn took in from the user: subscribing to the
+  // whole block list re-rendered the composer on every streamed chunk.
+  const steeredTexts = useChatStore(useShallow((state) =>
+    state.streamingBlocks.flatMap((block) => (block.type === 'user' && block.content.trim() ? [block.content] : []))))
   // The store holds one port stream: the chat last on screen's. It is this
   // composer's only when it is this chat's — a new-chat composer (on the agent
   // page, say) must not inherit another chat's running turn as its own.
@@ -732,14 +739,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const delivered = (chatData?.messages ?? [])
       .filter((message) => message.role === 'user' && typeof message.content === 'string' && message.content.trim())
       .map((message) => ({ text: message.content }))
-    const steered = storeChatId === chatId
-      ? streamingBlocks.flatMap((block) => (block.type === 'user' && block.content.trim() ? [{ text: block.content }] : []))
-      : []
+    const steered = storeChatId === chatId ? steeredTexts.map((text) => ({ text })) : []
     const queued = runQueue && !runQueue.held
       ? (runQueue.items ?? []).flatMap((item) => (item.content.trim() ? [{ text: item.content, queuedId: item.id }] : []))
       : []
     return [...delivered, ...steered, ...queued]
-  }, [chatId, chatData?.messages, storeChatId, streamingBlocks, runQueue])
+  }, [chatId, chatData?.messages, storeChatId, steeredTexts, runQueue])
 
   // Editing a recalled queued message. The bubble shows it. If the message
   // leaves the queue first, edit mode ends and the text stays here as an

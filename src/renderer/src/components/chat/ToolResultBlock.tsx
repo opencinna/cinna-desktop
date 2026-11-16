@@ -22,6 +22,7 @@ export function ToolResultBlock({
 }: ToolResultBlockProps): React.JSX.Element {
   const isErr = toolStream === 'stderr'
 
+  // The body is a function, built only while open: the output can be a megabyte.
   return (
     <DisclosureBlock
       tone={isErr ? 'error' : 'default'}
@@ -38,7 +39,7 @@ export function ToolResultBlock({
       animate={animate}
       animateDelay={animateDelay}
     >
-      {content && (
+      {() => content && (
         <pre
           className={`px-3 pb-2.5 pt-0 text-[12px] leading-[1.25] font-mono whitespace-pre max-h-96 overflow-auto ${
             isErr ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'

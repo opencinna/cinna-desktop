@@ -9,6 +9,7 @@ import {
   Lock,
   RefreshCw
 } from 'lucide-react'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatDetail } from '../../hooks/useChat'
 import { isLiveInputRequest, isSettledInputRequest, useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
@@ -695,7 +696,20 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
     }
     return map
   }, [artifactCards, artifactsSupport.supported, chatId])
-  const { streamingBlocks, isStreaming, liveBaselineMessageIds, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds, sentVersion } = useChatStore()
+  // Each field on its own: a whole-store subscription re-rendered on every
+  // store write, not only on the ones this transcript draws.
+  const { streamingBlocks, isStreaming, liveBaselineMessageIds, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds, sentVersion } = useChatStore(
+    useShallow((state) => ({
+      streamingBlocks: state.streamingBlocks,
+      isStreaming: state.isStreaming,
+      liveBaselineMessageIds: state.liveBaselineMessageIds,
+      pendingUserMessage: state.pendingUserMessage,
+      streamedIncrementallyChatId: state.streamedIncrementallyChatId,
+      inputRequests: state.inputRequests,
+      settledInputRequestIds: state.settledInputRequestIds,
+      sentVersion: state.sentVersion
+    }))
+  )
   const verboseMode = useUIStore((s) => s.verboseMode)
   const stickyTableHeaders = useUIStore((s) => s.stickyTableHeaders)
   // With no sidebar docked, the top bar's buttons float over the transcript,
@@ -826,8 +840,10 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
     }
     return messages.size > 0 ? { chatId, messages } : null
   }, [agents, chatData?.messages, rootAgentId, chatId])
-  const fileRefScopeFor = (agentId: string | null): FileRefScope | null =>
-    agentId ? fileRefScopes.get(agentId) ?? null : null
+  const fileRefScopeFor = useCallback(
+    (agentId: string | null): FileRefScope | null => (agentId ? fileRefScopes.get(agentId) ?? null : null),
+    [fileRefScopes]
+  )
   const prevRef = useRef<{ chatId: string | null; messageIds: string[] }>({
     chatId: null,
     messageIds: []
@@ -848,9 +864,14 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
 
   // A model can persist completed tool rounds while its turn is still live.
   // Replay represents those same rows until the terminal transcript refetch.
-  const baselineIds = liveBaselineMessageIds && new Set(liveBaselineMessageIds)
-  const messages = (vaultLocked ? [] : chatData?.messages ?? []).filter((message) =>
-    !baselineIds || message.role === 'user' || message.role === 'system' || baselineIds.has(message.id))
+  // One array per saved transcript, not per render: the saved messages' nodes
+  // are built from it once (`persisted` below), and a streamed chunk must not
+  // rebuild them.
+  const messages = useMemo(() => {
+    const baselineIds = liveBaselineMessageIds && new Set(liveBaselineMessageIds)
+    return (vaultLocked ? [] : chatData?.messages ?? []).filter((message) =>
+      !baselineIds || message.role === 'user' || message.role === 'system' || baselineIds.has(message.id))
+  }, [vaultLocked, chatData?.messages, liveBaselineMessageIds])
   const hasStreamingContent = streamingBlocks.length > 0
   // Nothing to show but the locked card (the transcript is inside the vault).
   const lockedEmpty = vaultLocked && messages.length === 0 && !isStreaming && !hasStreamingContent
@@ -881,19 +902,14 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
    * request still open" has exactly one right answer and four copies of it
    * would drift.
    */
-  const isOpenRequest = (toolId?: string): boolean =>
-    !!toolId &&
-    !isSettledInputRequest({ settledInputRequestIds }, toolId) &&
-    (isPending(toolId) || isLiveInputRequest({ inputRequests }, toolId))
-  /** What a subagent group needs from the transcript to show its asks answerable. */
-  const subagentRender = (verbose: boolean, live = false): SubagentGroupRender => ({
-    verbose,
-    live,
-    renderRequest: (part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision),
-    isOpenRequest
-  })
-
-  const renderRequestBlock = (
+  const isOpenRequest = useCallback(
+    (toolId?: string): boolean =>
+      !!toolId &&
+      !isSettledInputRequest({ settledInputRequestIds }, toolId) &&
+      (isPending(toolId) || isLiveInputRequest({ inputRequests }, toolId)),
+    [settledInputRequestIds, isPending, inputRequests]
+  )
+  const renderRequestBlock = useCallback((
     key: string,
     part: { toolName?: string; toolId?: string; toolInput?: Record<string, unknown> },
     questionInteractive: boolean,
@@ -961,7 +977,14 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
       )
     }
     return null
-  }
+  }, [isOpenRequest, isStreaming, settledInputRequestIds, answerPermission, answerQuestion, chatId])
+  /** What a subagent group needs from the transcript to show its asks answerable. */
+  const subagentRender = useCallback((verbose: boolean, live = false): SubagentGroupRender => ({
+    verbose,
+    live,
+    renderRequest: (part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision),
+    isOpenRequest
+  }), [renderRequestBlock, isOpenRequest])
 
   const lastMsg = messages[messages.length - 1]
   const activeQuestionMsgId =
@@ -988,6 +1011,19 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
   useEffect(() => {
     prevRef.current = { chatId, messageIds: messages.map((m) => m.id) }
   }, [chatId, messages])
+  // The one message that pops in, if any. Not an assistant row whose turn was
+  // just drawn live: the streamed text is already on screen. Not a user row
+  // taking over from the optimistic bubble mid-handoff (same content, pending
+  // not yet retired) or from a queued bubble that was sent: that bubble
+  // already played its expand animation, and the swap must be silent.
+  const newMessage = newMessageId ? messages[messages.length - 1] : null
+  const animateMessageId =
+    newMessage &&
+    !(newMessage.role === 'assistant' && streamedIncrementallyChatId === chatId) &&
+    !(newMessage.role === 'user' &&
+      (pendingUserMessage?.content === newMessage.content || queuedView.handsOver(newMessage.content)))
+      ? newMessage.id
+      : null
 
   // A guided build's brief card: only the latest brief, with nothing the user
   // said after it, has controls. A live brief is the latest; a persisted one
@@ -1008,7 +1044,10 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
     return null
   }, [messages, streamingBlocks, pendingUserMessage])
 
-  // One card per artifact: what the transcript already draws as a card.
+  // One card per artifact: what the transcript already draws as a card. The
+  // same set while its ids are the same: it is a context, and a new value on
+  // every streamed chunk re-rendered every card under it.
+  const shownArtifactIdsRef = useRef<Set<string>>(new Set())
   const shownArtifactIds = useMemo(() => {
     const ids = new Set<string>()
     for (const card of artifactCards) ids.add(card.artifact.id)
@@ -1022,8 +1061,495 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
       const result = parsePublishResult(block.result)
       if (result) ids.add(result.artifact_id)
     }
+    const previous = shownArtifactIdsRef.current
+    if (previous.size === ids.size && [...ids].every((id) => previous.has(id))) return previous
+    shownArtifactIdsRef.current = ids
     return ids
   }, [artifactCards, messages, streamingBlocks])
+
+  // The saved messages' nodes, built once per saved transcript and kept while
+  // the turn streams: the same elements on every render, so React skips all
+  // of them and a streamed chunk redraws only the live turn. Nothing here may
+  // read the live blocks; what a saved message needs from the live state
+  // (an open ask, the streaming flag) comes in through the deps below, which
+  // change when a turn starts, ends or asks — not per chunk. A trailing run
+  // of dot steps is left ungrouped (`tail`): the live turn's first steps may
+  // join its group, as they always have.
+  const persisted = useMemo(() => {
+    const renderNodes: RenderNode[] = []
+    // Artifact cards go right after the message they were published
+    // from: pushed when the next message starts, and after the last.
+    const pushArtifactCards = (messageId: string | null): void => {
+      for (const card of (messageId ? artifactCardsByMessage.get(messageId) : undefined) ?? []) {
+        renderNodes.push({
+          slot: 'plain',
+          key: `artifact-card-${card.id}`,
+          node: <ArtifactCard artifact={card.artifact} instanceName={artifactsSupport.instanceName} />
+        })
+      }
+    }
+    let cardAnchor: string | null = null
+
+    for (const msg of messages) {
+      pushArtifactCards(cardAnchor)
+      cardAnchor = msg.id
+      const align: 'left' | 'right' = msg.role === 'user' ? 'right' : 'left'
+      const footer = verboseMode ? <MessageMetaFooter msg={msg} align={align} /> : null
+
+      if (msg.role === 'error') {
+        const node = <ErrorRow content={msg.content} />
+        renderNodes.push({
+          slot: 'plain',
+          key: msg.id,
+          node: <>{node}{footer}</>
+        })
+        continue
+      }
+      // `agent_transition` rows are agent-side system messages — the
+      // streaming pipeline persists `cinna.content_kind: 'notice'` parts
+      // here (e.g. "Starting up the agent environment, this may take a
+      // moment..."). In compact mode the persisted row collapses to a
+      // small info-toned dot so it doesn't crowd the transcript; in
+      // verbose mode it stays inline alongside the rest of the surfaced
+      // meta. Excluded from catch-up replay + LLM history rebuilds by role.
+      if (msg.role === 'agent_transition') {
+        renderNodes.push({
+          slot: 'plain',
+          key: msg.id,
+          node: <NoticeBlock content={msg.content} defaultExpanded={verboseMode} />
+        })
+        continue
+      }
+      if (msg.role === 'tool_call') {
+        // A guided build's `build_brief_propose`: the brief card. A refused call keeps its plain row.
+        if (msg.toolName === BUILD_BRIEF_TOOL && msg.toolProvider === BUILD_BRIEF_PROVIDER_NAME && !msg.toolError) {
+          renderNodes.push({
+            slot: 'plain',
+            key: msg.id,
+            node: (
+              <>
+                <BuildBriefCard chatId={chatId} agentId={rootAgentId} input={msg.toolInput as Record<string, unknown> | undefined}
+                  active={activeBriefKey === msg.id} />
+                {footer}
+              </>
+            )
+          })
+          continue
+        }
+        // An agent's `artifacts_publish`: the artifact's card, or what became of the request.
+        if (msg.toolName === ARTIFACTS_PUBLISH_TOOL && msg.toolProvider === ARTIFACTS_PROVIDER_NAME) {
+          renderNodes.push({
+            slot: 'plain',
+            key: msg.id,
+            node: (
+              <>
+                <ArtifactPublishToolBlock chatId={chatId} toolCallId={msg.toolCallId ?? msg.id} input={msg.toolInput as Record<string, unknown> | undefined}
+                  status={msg.toolError ? 'error' : 'done'} result={msg.content} parts={msg.parts} />
+                {footer}
+              </>
+            )
+          })
+          continue
+        }
+        // Agent-backed tool call (orchestrated mode): the rich agent
+        // `parts[]` were persisted on the row — render the nested,
+        // expandable sub-thread instead of the bare tool block. Plain
+        // slot (not collapsible-grouped) since it's a substantial thread.
+        if (Array.isArray(msg.parts) && msg.parts.length > 0) {
+          // The delegated agent's own subagents nest inside its thread.
+          const subNested = nestSubagentParts(msg.parts)
+          const askMessage =
+            msg.toolInput && typeof (msg.toolInput as Record<string, unknown>).message === 'string'
+              ? ((msg.toolInput as Record<string, unknown>).message as string)
+              : undefined
+          renderNodes.push({
+            slot: 'plain',
+            key: msg.id,
+            node: (
+              <>
+                <AgentToolSubThread
+                  agentName={msg.toolProvider ?? msg.toolName ?? 'Agent'}
+                  agentId={msg.toolAgentId}
+                  parts={subNested.items}
+                  renderRequest={(part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision)}
+                  renderNested={(index) => {
+                    const group = subNested.groups.get(index)
+                    return group ? renderSubagentGroup(group, subagentRender(verboseMode)) : null
+                  }}
+                  askMessage={askMessage}
+                  status={msg.toolError ? 'error' : 'done'}
+                  errorText={msg.toolError ? msg.content : undefined}
+                  verbose={verboseMode}
+                />
+                {footer}
+              </>
+            )
+          })
+          continue
+        }
+        const toolBlock = (
+          <ToolCallBlock
+            name={msg.toolName ?? 'unknown'}
+            input={msg.toolInput as Record<string, unknown>}
+            result={msg.content}
+            error={msg.toolError ? msg.content : undefined}
+            status={msg.toolError ? 'error' : 'done'}
+            provider={msg.toolProvider}
+          />
+        )
+        // In verbose mode the per-message footer must stay attached, so
+        // skip grouping (push as plain) — otherwise circles can be grouped
+        // across consecutive tool_call blocks.
+        if (verboseMode) {
+          renderNodes.push({
+            slot: 'plain',
+            key: msg.id,
+            node: <>{toolBlock}{footer}</>
+          })
+        } else {
+          renderNodes.push({
+            slot: 'collapsible',
+            item: {
+              key: msg.id,
+              kind: 'tool_call',
+              status: msg.toolError ? 'error' : 'done',
+              preview: () => buildToolStepPreview({
+                call: { toolName: msg.toolName ?? undefined, toolInput: msg.toolInput as Record<string, unknown> | undefined },
+                outputs: [{ text: msg.content, toolStream: msg.toolError ? 'stderr' : 'stdout' }]
+              }),
+              node: toolBlock
+            }
+          })
+        }
+        continue
+      }
+      // A subagent's parts come out of the flat list, into its Agent call's
+      // group; every index below refers to this filtered list.
+      const nested = Array.isArray(msg.parts) ? nestSubagentParts(msg.parts) : null
+      const parts = nested ? nested.items : msg.parts
+      // Skip empty assistant rows — but NOT when they carry structured
+      // parts (e.g. an agent turn that only attached a file has no text
+      // content yet still renders a download badge from `parts[]`).
+      if (
+        msg.role === 'assistant' &&
+        !msg.content &&
+        !(Array.isArray(parts) && parts.length > 0)
+      ) {
+        continue
+      }
+      const shouldAnimate = msg.id === animateMessageId
+      const sourceAgentId = msg.role === 'assistant' ? msg.sourceAgentId ?? null : null
+      const sourceAgentName =
+        sourceAgentId && sourceAgentId !== rootAgentId
+          ? agentNameById.get(sourceAgentId) ?? null
+          : null
+      // A system row carries the agent it was addressed to as well — a
+      // handover's report is addressed to the agent that asked for it —
+      // and that is the scope its file references resolve in.
+      const addressedAgentId =
+        msg.role === 'user' || msg.role === 'system' ? msg.addressedAgentId ?? null : null
+      const addressedAgentName =
+        addressedAgentId && addressedAgentId !== rootAgentId
+          ? agentNameById.get(addressedAgentId) ?? null
+          : null
+      if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
+        const { pairResultIdx, consumed } = pairCommandTools(parts)
+        const cli = pairCinnaCliTools(parts)
+        cli.consumed.forEach((index) => consumed.add(index))
+        if (verboseMode) {
+          renderNodes.push({
+            slot: 'plain',
+            key: msg.id,
+            node: (
+              <div className="space-y-2">
+                {parts.map((p, idx) => {
+                  const k = `${msg.id}-${idx}`
+                  const group = nested?.groups.get(idx)
+                  if (group) return <div key={k}>{renderSubagentGroup(group, subagentRender(verboseMode))}</div>
+                  // tool_result already absorbed into a CommandToolFrame
+                  // alongside its paired tool — skip the standalone render.
+                  if (consumed.has(idx)) return null
+                  const cliCall = cli.calls.get(idx)
+                  if (cliCall) return <CinnaCliBlock key={k} command={cliCall.command} narration={p.text} results={cliCall.resultIndices.map((index) => parts[index])} animate={shouldAnimate} animateDelay={idx * 80} />
+                  if (p.kind === 'tool' && p.commandInvocation) {
+                    const ri = pairResultIdx.get(idx)
+                    const result = ri !== undefined ? parts[ri] : undefined
+                    return renderCommandToolPair({
+                      key: k,
+                      commandInvocation: p.commandInvocation,
+                      toolText: p.text,
+                      toolName: p.toolName,
+                      toolInput: p.toolInput,
+                      result: result ? { text: result.text, toolStream: result.toolStream } : undefined,
+                      frameDefaultExpanded: true,
+                      animate: shouldAnimate,
+                      animateDelay: idx * 80
+                    })
+                  }
+                  if (p.kind === 'thinking') {
+                    return <ThinkingBlock key={k} content={p.text} defaultExpanded animate={shouldAnimate} animateDelay={idx * 80} />
+                  }
+                  if (
+                    p.kind === 'tool' &&
+                    (isAskUserQuestionTool(p.toolName) || isPermissionRequestTool(p.toolName))
+                  ) {
+                    const dri = pairResultIdx.get(idx)
+                    const block = renderRequestBlock(
+                      k,
+                      p,
+                      msg.id === activeQuestionMsgId,
+                      dri !== undefined ? parts[dri].text : undefined
+                    )
+                    if (block) return block
+                  }
+                  if (p.kind === 'tool') {
+                    return (
+                      <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
+                    )
+                  }
+                  if (p.kind === 'tool_result') {
+                    return (
+                      <ToolResultBlock key={k} content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
+                    )
+                  }
+                  if (p.kind === 'command_result') {
+                    return (
+                      <CommandResultBlock
+                        key={k}
+                        content={p.text}
+                        commandInvocation={p.commandInvocation}
+                        animate={shouldAnimate}
+                        animateDelay={idx * 80}
+                      />
+                    )
+                  }
+                  if (p.kind === 'file' && p.file) {
+                    return <AgentAttachment key={k} file={p.file} align="left" />
+                  }
+                  return (
+                    <FileRefContext.Provider key={k} value={fileRefScopeFor(sourceAgentId ?? rootAgentId)}>
+                      <MessageIdContext.Provider value={msg.id}>
+                        <MessageBubble
+                          role="assistant"
+                          content={p.text}
+                          animate={shouldAnimate}
+                          animateDelay={idx * 80}
+                          agentName={idx === 0 ? sourceAgentName : null}
+                          agentId={sourceAgentId}
+                        />
+                      </MessageIdContext.Provider>
+                    </FileRefContext.Provider>
+                  )
+                })}
+                {footer}
+              </div>
+            )
+          })
+        } else {
+          // Each call's dot and its output's dot preview the whole step.
+          const steps = pairToolSteps(parts)
+          parts.forEach((p, idx) => {
+            const k = `${msg.id}-${idx}`
+            const group = nested?.groups.get(idx)
+            if (group) {
+              renderNodes.push({ slot: 'plain', key: k, node: renderSubagentGroup(group, subagentRender(verboseMode)) })
+              return
+            }
+            if (consumed.has(idx)) return
+            const cliCall = cli.calls.get(idx)
+            if (cliCall) {
+              const results = cliCall.resultIndices.map((index) => parts[index])
+              renderNodes.push({
+                slot: 'collapsible',
+                item: {
+                  key: k, kind: 'tool_narration', groupWhenAlone: true,
+                  status: results.some((result) => result.toolStream === 'stderr') ? 'error' : 'done',
+                  preview: () => buildToolStepPreview({ call: { toolName: p.toolName, input: cliCall.command, narration: p.text }, outputs: results }),
+                  node: <CinnaCliBlock command={cliCall.command} narration={p.text} results={results} animate={shouldAnimate} animateDelay={idx * 80} />
+                }
+              })
+              return
+            }
+            if (p.kind === 'tool' && p.commandInvocation) {
+              const ri = pairResultIdx.get(idx)
+              const result = ri !== undefined ? parts[ri] : undefined
+              // `/run:*` pair — frame as a slash-command UI, not as bare
+              // tool plumbing. Plain slot (same as command_result) since
+              // this IS the assistant turn, not auxiliary narration.
+              renderNodes.push({
+                slot: 'plain',
+                key: k,
+                node: renderCommandToolPair({
+                  key: k,
+                  commandInvocation: p.commandInvocation,
+                  toolText: p.text,
+                  toolName: p.toolName,
+                  toolInput: p.toolInput,
+                  result: result ? { text: result.text, toolStream: result.toolStream } : undefined,
+                  animate: shouldAnimate,
+                  animateDelay: idx * 80
+                })
+              })
+            } else if (p.kind === 'thinking') {
+              // Never folded into a dots group: open, on its own, so it
+              // breaks a long run of tool dots into readable steps.
+              renderNodes.push({
+                slot: 'plain',
+                key: k,
+                node: <ThinkingBlock content={p.text} defaultExpanded animate={shouldAnimate} animateDelay={idx * 80} />
+              })
+            } else if (
+              p.kind === 'tool' &&
+              (isAskUserQuestionTool(p.toolName) || isPermissionRequestTool(p.toolName))
+            ) {
+              // Interactive prompt — never collapse it into a dots group;
+              // the user must be able to act on it directly.
+              renderNodes.push({
+                slot: 'plain',
+                key: k,
+                node: renderRequestBlock(
+                  k,
+                  p,
+                  msg.id === activeQuestionMsgId,
+                  pairResultIdx.get(idx) !== undefined
+                    ? parts[pairResultIdx.get(idx) as number].text
+                    : undefined
+                )
+              })
+            } else if (p.kind === 'tool') {
+              renderNodes.push({
+                slot: 'collapsible',
+                item: {
+                  key: k,
+                  kind: 'tool_narration',
+                  status: 'done',
+                  ...toolStepPreview(parts, idx, steps, { keyPrefix: msg.id }),
+                  node: <ToolNarrationBlock content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
+                }
+              })
+            } else if (p.kind === 'tool_result') {
+              renderNodes.push({
+                slot: 'collapsible',
+                item: {
+                  key: k,
+                  kind: 'tool_result',
+                  status: p.toolStream === 'stderr' ? 'error' : 'done',
+                  ...toolStepPreview(parts, idx, steps, { keyPrefix: msg.id }),
+                  node: <ToolResultBlock content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
+                }
+              })
+            } else if (p.kind === 'command_result') {
+              // Slash-command output — render inline as the assistant
+              // turn, default-expanded. Not collapsible-grouped because
+              // it IS the answer, not auxiliary narration.
+              renderNodes.push({
+                slot: 'plain',
+                key: k,
+                node: (
+                  <CommandResultBlock
+                    content={p.text}
+                    commandInvocation={p.commandInvocation}
+                    animate={shouldAnimate}
+                    animateDelay={idx * 80}
+                  />
+                )
+              })
+            } else if (p.kind === 'file' && p.file) {
+              // Agent-attached file — downloadable badge inline at the
+              // position the agent declared it. Plain slot, left-aligned
+              // like the rest of the assistant turn.
+              renderNodes.push({
+                slot: 'plain',
+                key: k,
+                node: <AgentAttachment file={p.file} align="left" />
+              })
+            } else {
+              renderNodes.push({
+                slot: 'plain',
+                key: k,
+                node: (
+                  <FileRefContext.Provider value={fileRefScopeFor(sourceAgentId ?? rootAgentId)}>
+                    <MessageIdContext.Provider value={msg.id}>
+                      <MessageBubble
+                        role="assistant"
+                        content={p.text}
+                        animate={shouldAnimate}
+                        animateDelay={idx * 80}
+                        agentName={idx === 0 ? sourceAgentName : null}
+                        agentId={sourceAgentId}
+                      />
+                    </MessageIdContext.Provider>
+                  </FileRefContext.Provider>
+                )
+              })
+            }
+          })
+        }
+        continue
+      }
+      // A `system` row is the desktop's own turn in the conversation — a
+      // task runner's prompt, a handover's returned report. Without this
+      // branch it reaches the tail below and is drawn as an assistant
+      // bubble, which puts words in the agent's mouth.
+      if (msg.role === 'system') {
+        renderNodes.push({
+          slot: 'plain',
+          key: msg.id,
+          node: (
+            <>
+              <FileRefContext.Provider value={fileRefScopeFor(addressedAgentId ?? rootAgentId)}>
+                <MessageIdContext.Provider value={msg.id}>
+                  <SystemTurnBlock content={msg.content} animate={shouldAnimate} />
+                </MessageIdContext.Provider>
+              </FileRefContext.Provider>
+              {footer}
+            </>
+          )
+        })
+        continue
+      }
+      renderNodes.push({
+        slot: 'plain',
+        key: msg.id,
+        node: (
+          <>
+            <FileRefContext.Provider
+              value={fileRefScopeFor(
+                msg.role === 'user' ? addressedAgentId ?? rootAgentId : sourceAgentId ?? rootAgentId
+              )}
+            >
+              <MessageIdContext.Provider value={msg.id}>
+                <MessageBubble
+                  role={msg.role as 'user' | 'assistant'}
+                  content={msg.content}
+                  animate={shouldAnimate}
+                  agentName={sourceAgentName}
+                  agentId={sourceAgentId}
+                  addressedAgentName={addressedAgentName}
+                  addressedAgentId={addressedAgentId}
+                  attachments={msg.role === 'user' ? msg.attachments ?? null : null}
+                />
+              </MessageIdContext.Provider>
+            </FileRefContext.Provider>
+            {footer}
+          </>
+        )
+      })
+    }
+
+    pushArtifactCards(cardAnchor)
+    let tailStart = renderNodes.length
+    while (tailStart > 0 && renderNodes[tailStart - 1].slot === 'collapsible') tailStart--
+    return {
+      head: groupConsecutiveCollapsibles(renderNodes.slice(0, tailStart)),
+      tail: renderNodes.slice(tailStart)
+    }
+  }, [messages, verboseMode, chatId, rootAgentId, agentNameById, artifactCardsByMessage, artifactsSupport.instanceName,
+    activeBriefKey, activeQuestionMsgId, animateMessageId, fileRefScopeFor, renderRequestBlock, subagentRender])
+  const persistedUserCount = useMemo(
+    () => messages.reduce((n, m) => (m.role === 'user' ? n + 1 : n), 0),
+    [messages]
+  )
 
   return (
     <ShownArtifactsContext.Provider value={shownArtifactIds}>
@@ -1077,481 +1603,7 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
         )}
 
         {(() => {
-          const renderNodes: RenderNode[] = []
-          // Artifact cards go right after the message they were published
-          // from: pushed when the next message starts, and after the last.
-          const pushArtifactCards = (messageId: string | null): void => {
-            for (const card of (messageId ? artifactCardsByMessage.get(messageId) : undefined) ?? []) {
-              renderNodes.push({
-                slot: 'plain',
-                key: `artifact-card-${card.id}`,
-                node: <ArtifactCard artifact={card.artifact} instanceName={artifactsSupport.instanceName} />
-              })
-            }
-          }
-          let cardAnchor: string | null = null
-
-          for (const msg of messages) {
-            pushArtifactCards(cardAnchor)
-            cardAnchor = msg.id
-            const align: 'left' | 'right' = msg.role === 'user' ? 'right' : 'left'
-            const footer = verboseMode ? <MessageMetaFooter msg={msg} align={align} /> : null
-
-            if (msg.role === 'error') {
-              const node = <ErrorRow content={msg.content} />
-              renderNodes.push({
-                slot: 'plain',
-                key: msg.id,
-                node: <>{node}{footer}</>
-              })
-              continue
-            }
-            // `agent_transition` rows are agent-side system messages — the
-            // streaming pipeline persists `cinna.content_kind: 'notice'` parts
-            // here (e.g. "Starting up the agent environment, this may take a
-            // moment..."). In compact mode the persisted row collapses to a
-            // small info-toned dot so it doesn't crowd the transcript; in
-            // verbose mode it stays inline alongside the rest of the surfaced
-            // meta. Excluded from catch-up replay + LLM history rebuilds by role.
-            if (msg.role === 'agent_transition') {
-              renderNodes.push({
-                slot: 'plain',
-                key: msg.id,
-                node: <NoticeBlock content={msg.content} defaultExpanded={verboseMode} />
-              })
-              continue
-            }
-            if (msg.role === 'tool_call') {
-              // A guided build's `build_brief_propose`: the brief card. A refused call keeps its plain row.
-              if (msg.toolName === BUILD_BRIEF_TOOL && msg.toolProvider === BUILD_BRIEF_PROVIDER_NAME && !msg.toolError) {
-                renderNodes.push({
-                  slot: 'plain',
-                  key: msg.id,
-                  node: (
-                    <>
-                      <BuildBriefCard chatId={chatId} agentId={rootAgentId} input={msg.toolInput as Record<string, unknown> | undefined}
-                        active={activeBriefKey === msg.id} />
-                      {footer}
-                    </>
-                  )
-                })
-                continue
-              }
-              // An agent's `artifacts_publish`: the artifact's card, or what became of the request.
-              if (msg.toolName === ARTIFACTS_PUBLISH_TOOL && msg.toolProvider === ARTIFACTS_PROVIDER_NAME) {
-                renderNodes.push({
-                  slot: 'plain',
-                  key: msg.id,
-                  node: (
-                    <>
-                      <ArtifactPublishToolBlock chatId={chatId} toolCallId={msg.toolCallId ?? msg.id} input={msg.toolInput as Record<string, unknown> | undefined}
-                        status={msg.toolError ? 'error' : 'done'} result={msg.content} parts={msg.parts} />
-                      {footer}
-                    </>
-                  )
-                })
-                continue
-              }
-              // Agent-backed tool call (orchestrated mode): the rich agent
-              // `parts[]` were persisted on the row — render the nested,
-              // expandable sub-thread instead of the bare tool block. Plain
-              // slot (not collapsible-grouped) since it's a substantial thread.
-              if (Array.isArray(msg.parts) && msg.parts.length > 0) {
-                // The delegated agent's own subagents nest inside its thread.
-                const subNested = nestSubagentParts(msg.parts)
-                const askMessage =
-                  msg.toolInput && typeof (msg.toolInput as Record<string, unknown>).message === 'string'
-                    ? ((msg.toolInput as Record<string, unknown>).message as string)
-                    : undefined
-                renderNodes.push({
-                  slot: 'plain',
-                  key: msg.id,
-                  node: (
-                    <>
-                      <AgentToolSubThread
-                        agentName={msg.toolProvider ?? msg.toolName ?? 'Agent'}
-                        agentId={msg.toolAgentId}
-                        parts={subNested.items}
-                        renderRequest={(part, decision) => renderRequestBlock(`nested-${part.toolId}`, part, false, decision)}
-                        renderNested={(index) => {
-                          const group = subNested.groups.get(index)
-                          return group ? renderSubagentGroup(group, subagentRender(verboseMode)) : null
-                        }}
-                        askMessage={askMessage}
-                        status={msg.toolError ? 'error' : 'done'}
-                        errorText={msg.toolError ? msg.content : undefined}
-                        verbose={verboseMode}
-                      />
-                      {footer}
-                    </>
-                  )
-                })
-                continue
-              }
-              const toolBlock = (
-                <ToolCallBlock
-                  name={msg.toolName ?? 'unknown'}
-                  input={msg.toolInput as Record<string, unknown>}
-                  result={msg.content}
-                  error={msg.toolError ? msg.content : undefined}
-                  status={msg.toolError ? 'error' : 'done'}
-                  provider={msg.toolProvider}
-                />
-              )
-              // In verbose mode the per-message footer must stay attached, so
-              // skip grouping (push as plain) — otherwise circles can be grouped
-              // across consecutive tool_call blocks.
-              if (verboseMode) {
-                renderNodes.push({
-                  slot: 'plain',
-                  key: msg.id,
-                  node: <>{toolBlock}{footer}</>
-                })
-              } else {
-                renderNodes.push({
-                  slot: 'collapsible',
-                  item: {
-                    key: msg.id,
-                    kind: 'tool_call',
-                    status: msg.toolError ? 'error' : 'done',
-                    preview: () => buildToolStepPreview({
-                      call: { toolName: msg.toolName ?? undefined, toolInput: msg.toolInput as Record<string, unknown> | undefined },
-                      outputs: [{ text: msg.content, toolStream: msg.toolError ? 'stderr' : 'stdout' }]
-                    }),
-                    node: toolBlock
-                  }
-                })
-              }
-              continue
-            }
-            // A subagent's parts come out of the flat list, into its Agent call's
-            // group; every index below refers to this filtered list.
-            const nested = Array.isArray(msg.parts) ? nestSubagentParts(msg.parts) : null
-            const parts = nested ? nested.items : msg.parts
-            // Skip empty assistant rows — but NOT when they carry structured
-            // parts (e.g. an agent turn that only attached a file has no text
-            // content yet still renders a download badge from `parts[]`).
-            if (
-              msg.role === 'assistant' &&
-              !msg.content &&
-              !(Array.isArray(parts) && parts.length > 0)
-            ) {
-              continue
-            }
-            const suppressStreamReanimation =
-              msg.role === 'assistant' && streamedIncrementallyChatId === chatId
-            // The optimistic user bubble already played its expand animation;
-            // when its persisted row lands mid-handoff (same content, pending
-            // not yet retired) the swap must be silent — otherwise the bubble
-            // animates a second time. Mirrors the assistant suppression above.
-            // Likewise a row taking over from a queued bubble that was sent.
-            const suppressOptimisticReanimation =
-              msg.role === 'user' &&
-              (pendingUserMessage?.content === msg.content || queuedView.handsOver(msg.content))
-            const shouldAnimate =
-              msg.id === newMessageId &&
-              !suppressStreamReanimation &&
-              !suppressOptimisticReanimation
-            const sourceAgentId = msg.role === 'assistant' ? msg.sourceAgentId ?? null : null
-            const sourceAgentName =
-              sourceAgentId && sourceAgentId !== rootAgentId
-                ? agentNameById.get(sourceAgentId) ?? null
-                : null
-            // A system row carries the agent it was addressed to as well — a
-            // handover's report is addressed to the agent that asked for it —
-            // and that is the scope its file references resolve in.
-            const addressedAgentId =
-              msg.role === 'user' || msg.role === 'system' ? msg.addressedAgentId ?? null : null
-            const addressedAgentName =
-              addressedAgentId && addressedAgentId !== rootAgentId
-                ? agentNameById.get(addressedAgentId) ?? null
-                : null
-            if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
-              const { pairResultIdx, consumed } = pairCommandTools(parts)
-              const cli = pairCinnaCliTools(parts)
-              cli.consumed.forEach((index) => consumed.add(index))
-              if (verboseMode) {
-                renderNodes.push({
-                  slot: 'plain',
-                  key: msg.id,
-                  node: (
-                    <div className="space-y-2">
-                      {parts.map((p, idx) => {
-                        const k = `${msg.id}-${idx}`
-                        const group = nested?.groups.get(idx)
-                        if (group) return <div key={k}>{renderSubagentGroup(group, subagentRender(verboseMode))}</div>
-                        // tool_result already absorbed into a CommandToolFrame
-                        // alongside its paired tool — skip the standalone render.
-                        if (consumed.has(idx)) return null
-                        const cliCall = cli.calls.get(idx)
-                        if (cliCall) return <CinnaCliBlock key={k} command={cliCall.command} narration={p.text} results={cliCall.resultIndices.map((index) => parts[index])} animate={shouldAnimate} animateDelay={idx * 80} />
-                        if (p.kind === 'tool' && p.commandInvocation) {
-                          const ri = pairResultIdx.get(idx)
-                          const result = ri !== undefined ? parts[ri] : undefined
-                          return renderCommandToolPair({
-                            key: k,
-                            commandInvocation: p.commandInvocation,
-                            toolText: p.text,
-                            toolName: p.toolName,
-                            toolInput: p.toolInput,
-                            result: result ? { text: result.text, toolStream: result.toolStream } : undefined,
-                            frameDefaultExpanded: true,
-                            animate: shouldAnimate,
-                            animateDelay: idx * 80
-                          })
-                        }
-                        if (p.kind === 'thinking') {
-                          return <ThinkingBlock key={k} content={p.text} defaultExpanded animate={shouldAnimate} animateDelay={idx * 80} />
-                        }
-                        if (
-                          p.kind === 'tool' &&
-                          (isAskUserQuestionTool(p.toolName) || isPermissionRequestTool(p.toolName))
-                        ) {
-                          const dri = pairResultIdx.get(idx)
-                          const block = renderRequestBlock(
-                            k,
-                            p,
-                            msg.id === activeQuestionMsgId,
-                            dri !== undefined ? parts[dri].text : undefined
-                          )
-                          if (block) return block
-                        }
-                        if (p.kind === 'tool') {
-                          return (
-                            <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
-                          )
-                        }
-                        if (p.kind === 'tool_result') {
-                          return (
-                            <ToolResultBlock key={k} content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
-                          )
-                        }
-                        if (p.kind === 'command_result') {
-                          return (
-                            <CommandResultBlock
-                              key={k}
-                              content={p.text}
-                              commandInvocation={p.commandInvocation}
-                              animate={shouldAnimate}
-                              animateDelay={idx * 80}
-                            />
-                          )
-                        }
-                        if (p.kind === 'file' && p.file) {
-                          return <AgentAttachment key={k} file={p.file} align="left" />
-                        }
-                        return (
-                          <FileRefContext.Provider key={k} value={fileRefScopeFor(sourceAgentId ?? rootAgentId)}>
-                            <MessageIdContext.Provider value={msg.id}>
-                              <MessageBubble
-                                role="assistant"
-                                content={p.text}
-                                animate={shouldAnimate}
-                                animateDelay={idx * 80}
-                                agentName={idx === 0 ? sourceAgentName : null}
-                                agentId={sourceAgentId}
-                              />
-                            </MessageIdContext.Provider>
-                          </FileRefContext.Provider>
-                        )
-                      })}
-                      {footer}
-                    </div>
-                  )
-                })
-              } else {
-                // Each call's dot and its output's dot preview the whole step.
-                const steps = pairToolSteps(parts)
-                parts.forEach((p, idx) => {
-                  const k = `${msg.id}-${idx}`
-                  const group = nested?.groups.get(idx)
-                  if (group) {
-                    renderNodes.push({ slot: 'plain', key: k, node: renderSubagentGroup(group, subagentRender(verboseMode)) })
-                    return
-                  }
-                  if (consumed.has(idx)) return
-                  const cliCall = cli.calls.get(idx)
-                  if (cliCall) {
-                    const results = cliCall.resultIndices.map((index) => parts[index])
-                    renderNodes.push({
-                      slot: 'collapsible',
-                      item: {
-                        key: k, kind: 'tool_narration', groupWhenAlone: true,
-                        status: results.some((result) => result.toolStream === 'stderr') ? 'error' : 'done',
-                        preview: () => buildToolStepPreview({ call: { toolName: p.toolName, input: cliCall.command, narration: p.text }, outputs: results }),
-                        node: <CinnaCliBlock command={cliCall.command} narration={p.text} results={results} animate={shouldAnimate} animateDelay={idx * 80} />
-                      }
-                    })
-                    return
-                  }
-                  if (p.kind === 'tool' && p.commandInvocation) {
-                    const ri = pairResultIdx.get(idx)
-                    const result = ri !== undefined ? parts[ri] : undefined
-                    // `/run:*` pair — frame as a slash-command UI, not as bare
-                    // tool plumbing. Plain slot (same as command_result) since
-                    // this IS the assistant turn, not auxiliary narration.
-                    renderNodes.push({
-                      slot: 'plain',
-                      key: k,
-                      node: renderCommandToolPair({
-                        key: k,
-                        commandInvocation: p.commandInvocation,
-                        toolText: p.text,
-                        toolName: p.toolName,
-                        toolInput: p.toolInput,
-                        result: result ? { text: result.text, toolStream: result.toolStream } : undefined,
-                        animate: shouldAnimate,
-                        animateDelay: idx * 80
-                      })
-                    })
-                  } else if (p.kind === 'thinking') {
-                    // Never folded into a dots group: open, on its own, so it
-                    // breaks a long run of tool dots into readable steps.
-                    renderNodes.push({
-                      slot: 'plain',
-                      key: k,
-                      node: <ThinkingBlock content={p.text} defaultExpanded animate={shouldAnimate} animateDelay={idx * 80} />
-                    })
-                  } else if (
-                    p.kind === 'tool' &&
-                    (isAskUserQuestionTool(p.toolName) || isPermissionRequestTool(p.toolName))
-                  ) {
-                    // Interactive prompt — never collapse it into a dots group;
-                    // the user must be able to act on it directly.
-                    renderNodes.push({
-                      slot: 'plain',
-                      key: k,
-                      node: renderRequestBlock(
-                        k,
-                        p,
-                        msg.id === activeQuestionMsgId,
-                        pairResultIdx.get(idx) !== undefined
-                          ? parts[pairResultIdx.get(idx) as number].text
-                          : undefined
-                      )
-                    })
-                  } else if (p.kind === 'tool') {
-                    renderNodes.push({
-                      slot: 'collapsible',
-                      item: {
-                        key: k,
-                        kind: 'tool_narration',
-                        status: 'done',
-                        ...toolStepPreview(parts, idx, steps, { keyPrefix: msg.id }),
-                        node: <ToolNarrationBlock content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
-                      }
-                    })
-                  } else if (p.kind === 'tool_result') {
-                    renderNodes.push({
-                      slot: 'collapsible',
-                      item: {
-                        key: k,
-                        kind: 'tool_result',
-                        status: p.toolStream === 'stderr' ? 'error' : 'done',
-                        ...toolStepPreview(parts, idx, steps, { keyPrefix: msg.id }),
-                        node: <ToolResultBlock content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
-                      }
-                    })
-                  } else if (p.kind === 'command_result') {
-                    // Slash-command output — render inline as the assistant
-                    // turn, default-expanded. Not collapsible-grouped because
-                    // it IS the answer, not auxiliary narration.
-                    renderNodes.push({
-                      slot: 'plain',
-                      key: k,
-                      node: (
-                        <CommandResultBlock
-                          content={p.text}
-                          commandInvocation={p.commandInvocation}
-                          animate={shouldAnimate}
-                          animateDelay={idx * 80}
-                        />
-                      )
-                    })
-                  } else if (p.kind === 'file' && p.file) {
-                    // Agent-attached file — downloadable badge inline at the
-                    // position the agent declared it. Plain slot, left-aligned
-                    // like the rest of the assistant turn.
-                    renderNodes.push({
-                      slot: 'plain',
-                      key: k,
-                      node: <AgentAttachment file={p.file} align="left" />
-                    })
-                  } else {
-                    renderNodes.push({
-                      slot: 'plain',
-                      key: k,
-                      node: (
-                        <FileRefContext.Provider value={fileRefScopeFor(sourceAgentId ?? rootAgentId)}>
-                          <MessageIdContext.Provider value={msg.id}>
-                            <MessageBubble
-                              role="assistant"
-                              content={p.text}
-                              animate={shouldAnimate}
-                              animateDelay={idx * 80}
-                              agentName={idx === 0 ? sourceAgentName : null}
-                              agentId={sourceAgentId}
-                            />
-                          </MessageIdContext.Provider>
-                        </FileRefContext.Provider>
-                      )
-                    })
-                  }
-                })
-              }
-              continue
-            }
-            // A `system` row is the desktop's own turn in the conversation — a
-            // task runner's prompt, a handover's returned report. Without this
-            // branch it reaches the tail below and is drawn as an assistant
-            // bubble, which puts words in the agent's mouth.
-            if (msg.role === 'system') {
-              renderNodes.push({
-                slot: 'plain',
-                key: msg.id,
-                node: (
-                  <>
-                    <FileRefContext.Provider value={fileRefScopeFor(addressedAgentId ?? rootAgentId)}>
-                      <MessageIdContext.Provider value={msg.id}>
-                        <SystemTurnBlock content={msg.content} animate={shouldAnimate} />
-                      </MessageIdContext.Provider>
-                    </FileRefContext.Provider>
-                    {footer}
-                  </>
-                )
-              })
-              continue
-            }
-            renderNodes.push({
-              slot: 'plain',
-              key: msg.id,
-              node: (
-                <>
-                  <FileRefContext.Provider
-                    value={fileRefScopeFor(
-                      msg.role === 'user' ? addressedAgentId ?? rootAgentId : sourceAgentId ?? rootAgentId
-                    )}
-                  >
-                    <MessageIdContext.Provider value={msg.id}>
-                      <MessageBubble
-                        role={msg.role as 'user' | 'assistant'}
-                        content={msg.content}
-                        animate={shouldAnimate}
-                        agentName={sourceAgentName}
-                        agentId={sourceAgentId}
-                        addressedAgentName={addressedAgentName}
-                        addressedAgentId={addressedAgentId}
-                        attachments={msg.role === 'user' ? msg.attachments ?? null : null}
-                      />
-                    </MessageIdContext.Provider>
-                  </FileRefContext.Provider>
-                  {footer}
-                </>
-              )
-            })
-          }
-
-          pushArtifactCards(cardAnchor)
+          const renderNodes: RenderNode[] = [...persisted.tail]
 
           // Optimistic user bubble — shown immediately while the DB round-trip
           // is in flight so the dots always appear BELOW the user message.
@@ -1559,7 +1611,6 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
           // growing past the send-time baseline means this message's own row is
           // now in `messages`. Count- (not content-) keyed so repeating the
           // previous turn's exact text still shows the optimistic bubble.
-          const persistedUserCount = messages.reduce((n, m) => (m.role === 'user' ? n + 1 : n), 0)
           if (pendingUserMessage && persistedUserCount <= pendingUserMessage.baselineUserCount) {
             renderNodes.push({
               slot: 'plain',
@@ -1952,7 +2003,7 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
             }
           })
 
-          return groupConsecutiveCollapsibles(renderNodes)
+          return [...persisted.head, ...groupConsecutiveCollapsibles(renderNodes)]
         })()}
 
         {/* Persistent streaming indicator — stays at the bottom of all blocks

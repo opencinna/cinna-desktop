@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { RunWatchMessage } from '../../../shared/runWatch'
 import type { RunEvent } from '../../../shared/runEvents'
 ;(window as unknown as { api: unknown }).api = { app: { setTheme: async () => {} } }
@@ -25,9 +25,17 @@ function mount() {
   const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
   return renderHook(() => useLiveRunWatch(), { wrapper })
 }
-function emit(message: RunWatchMessage, index = callbacks.length - 1) { act(() => callbacks[index](message)) }
+// Streamed events wait for the next frame (`runEventBatch.ts`); `emit` delivers
+// a message and then runs that frame, so each test reads the store as applied.
+let frames: FrameRequestCallback[] = []
+function runFrames() { const due = frames; frames = []; due.forEach((frame) => frame(0)) }
+function emit(message: RunWatchMessage, index = callbacks.length - 1) { act(() => callbacks[index](message)); act(() => runFrames()) }
 function text() { return useChatStore.getState().streamingBlocks.map((b) => b.type === 'text' ? b.content : '').join('') }
+afterEach(() => { vi.unstubAllGlobals() })
 beforeEach(() => {
+  frames = []
+  vi.stubGlobal('requestAnimationFrame', (frame: FrameRequestCallback) => frames.push(frame))
+  vi.stubGlobal('cancelAnimationFrame', () => {})
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   callbacks = []; detach = vi.fn(); cancel = vi.fn()
   get = vi.fn().mockResolvedValue({ messages: [], activeRunId: null })
@@ -220,6 +228,8 @@ describe('selected chat live subscription', () => {
       expect(useChatStore.getState().isStreaming).toBe(true)
       expect(useChatStore.getState().liveRunId).toBe('r2')
       emit({ type: 'event', runId: 'r2', sequence: 2, agentId: null, event: delta('!') })
+      // Fake timers fake the frame too: the streamed chunk lands with the next one.
+      await act(async () => { await vi.advanceTimersByTimeAsync(50) })
       expect(text()).toBe('second and more!')
 
       await act(async () => { land({ messages: [], activeRunId: null }); await vi.advanceTimersByTimeAsync(10) })

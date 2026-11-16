@@ -20,6 +20,7 @@ export function CinnaCliBlock({
   // ACP repeats "Bash: <command>" as narration. Preserve any actual explanation.
   const note = narration?.trim()
   const isEcho = !note || note === command || note.replace(/^(?:bash|shell):\s*/i, '') === command
+  // The body is a function, so the output is unwrapped only while the block is open.
   return (
     <DisclosureBlock
       icon={<Terminal size={12} className="shrink-0 text-[var(--color-accent)]" />}
@@ -36,6 +37,7 @@ export function CinnaCliBlock({
       animate={animate}
       animateDelay={animateDelay}
     >
+      {() => <>
       {!isEcho && <p className="px-3 pb-2 text-xs whitespace-pre-wrap break-words text-[var(--color-text-secondary)]">{note}</p>}
       <div className="border-t border-[var(--color-border)]/40">
         {results.length ? <div className="max-h-96 overflow-auto px-3 py-2.5" tabIndex={0} role="region" aria-label="Cinna CLI output">
@@ -46,6 +48,7 @@ export function CinnaCliBlock({
           ))}
         </div> : <p className="px-3 py-2.5 text-xs text-[var(--color-text-muted)]">{isStreaming ? 'Waiting for output…' : 'No output recorded.'}</p>}
       </div>
+      </>}
     </DisclosureBlock>
   )
 }

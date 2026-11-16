@@ -65,7 +65,17 @@ export function useAgentRequests(
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      setPending(await window.api.agents.pendingRequests(chatId))
+      const next = await window.api.agents.pendingRequests(chatId)
+      // The same list keeps its identity: `isPending` follows it, and the
+      // transcript rebuilds its saved messages when `isPending` changes — a
+      // fresh array every poll tick rebuilt them all while a turn streamed.
+      setPending((prev) =>
+        Array.isArray(next) &&
+        prev.length === next.length &&
+        prev.every((p, i) => p.requestId === next[i].requestId && p.kind === next[i].kind)
+          ? prev
+          : next
+      )
     } catch {
       // A failed lookup must not blank a prompt the user is mid-way through
       // answering — keep the last known list rather than clearing it.

@@ -1,7 +1,7 @@
 import { useContext, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle, ChevronRight, Terminal, Wrench } from 'lucide-react'
-import { TranscriptVisibleContext, useTranscriptDisclosure } from './transcriptExpansion'
+import { TranscriptVisibleContext, useMountLatch, useTranscriptDisclosure } from './transcriptExpansion'
 import { usePopover, type PopoverPlacement } from '../ui/usePopover'
 import { HOVER_CLOSE_DELAY_MS } from '../ui/useHoverPopover'
 import type { ToolStepPreview } from '../../utils/toolStepPairs'
@@ -359,6 +359,8 @@ function DotPreviewCard({ preview }: { preview: ToolStepPreview }): React.JSX.El
 
 export function CollapsibleGroup({ items }: CollapsibleGroupProps): React.JSX.Element {
   const [expanded, setExpanded] = useTranscriptDisclosure(false)
+  // Steps mount on the first open and stay: a closed group costs its dots only.
+  const mounted = useMountLatch(expanded)
   const visible = useContext(TranscriptVisibleContext)
   const preview = useDotPreview(items, expanded)
   const tooltipId = useId()
@@ -453,7 +455,7 @@ export function CollapsibleGroup({ items }: CollapsibleGroupProps): React.JSX.El
             }`}
           >
             <TranscriptVisibleContext.Provider value={visible && expanded}>
-              {items.map((it) => (
+              {mounted && items.map((it) => (
                 <div key={it.key}>{it.node}</div>
               ))}
             </TranscriptVisibleContext.Provider>

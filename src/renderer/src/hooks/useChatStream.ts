@@ -30,13 +30,16 @@ export interface StartRunOptions {
 
 /** Apply the shared event vocabulary to the selected chat's projection. */
 export function useRunEventHandler(): (chatId: string, event: RunEvent) => void {
-  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, appendUserMessage, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming } = useChatStore()
   // One handler for both send paths: an LLM chat and an agent chat post the
   // same vocabulary, so a case cannot exist on one path and silently not on
   // the other.
   const handleRun = useCallback(
     (chatId: string, event: RunEvent): void => {
-      if (useChatStore.getState().activeChatId !== chatId) return
+      // Actions read at call time, never subscribed to: a whole-store
+      // subscription here re-rendered the hook's owner on every streamed chunk.
+      const store = useChatStore.getState()
+      if (store.activeChatId !== chatId) return
+      const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, appendUserMessage, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming } = store
       switch (event.type) {
         case 'request-id':
           startStreaming(event.requestId)
@@ -126,7 +129,7 @@ export function useRunEventHandler(): (chatId: string, event: RunEvent) => void 
           break
       }
     },
-    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, appendUserMessage, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming]
+    []
   )
 
   return handleRun

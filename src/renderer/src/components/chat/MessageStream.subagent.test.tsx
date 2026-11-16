@@ -34,7 +34,19 @@ beforeEach(() => {
   useChatStore.setState({ streamingBlocks: [], isStreaming: false, liveBaselineMessageIds: null, inputRequests: [], settledInputRequestIds: [], pendingUserMessage: null })
 })
 
+/**
+ * Open the named sub-threads that are closed, outermost first: a closed thread
+ * mounts its work only on its first open.
+ */
+function openThreads(...names: string[]): void {
+  for (const name of names) {
+    const header = screen.getByRole('button', { name: new RegExp(name) })
+    if (header.getAttribute('aria-expanded') === 'false') fireEvent.click(header)
+  }
+}
+
 function expectNested(): void {
+  openThreads('check pg')
   const thread = screen.getByText('check pg').closest('.text-xs') as HTMLElement
   expect(thread.textContent).toContain('Confirmed pg for the subagent.')
   expect(thread.textContent).not.toContain('Traffective')
@@ -240,6 +252,7 @@ describe('a subagent’s own subagent', () => {
     useUIStore.setState({ verboseMode })
     data.messages = [{ id: 'message', role: 'assistant', content: 'All done.', parts: tree }]
     render(<MessageStream chatId="chat" />)
+    openThreads('outer', 'inner')
     expect(structure()).toEqual(['outer', 'outer > inner'])
     expect(thread('inner').textContent).toContain('Inner report.')
     expect(thread('inner').textContent).not.toContain('Outer report.')
@@ -263,6 +276,7 @@ describe('a subagent’s own subagent', () => {
     data.messages = [{ id: 'message', role: 'assistant', content: 'All done.', parts: tree }]
     useChatStore.setState({ streamingBlocks: [], isStreaming: false })
     view.rerender(<MessageStream chatId="chat" />)
+    openThreads('outer', 'inner')
     expect(structure()).toEqual(['outer', 'outer > inner'])
     expect(thread('inner').textContent).toContain('Inner report.')
   })

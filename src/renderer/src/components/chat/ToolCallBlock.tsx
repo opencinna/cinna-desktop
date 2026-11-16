@@ -1,6 +1,6 @@
 import { Wrench, X, Loader2, Plug, ChevronRight } from 'lucide-react'
-import { useRef } from 'react'
-import { useTranscriptDisclosure } from './transcriptExpansion'
+import { useMemo, useRef } from 'react'
+import { useMountLatch, useTranscriptDisclosure } from './transcriptExpansion'
 import { ToolCallSummary } from './ToolCallSummary'
 import { ApplyPatchBlock } from './ApplyPatchBlock'
 import { parsePatch } from '../../utils/applyPatch'
@@ -122,6 +122,8 @@ export function ToolCallBlock({
   // or stops parsing as a patch (or gains an error) must keep its hook order.
   const verboseMode = useUIStore((s) => s.verboseMode)
   const [expanded, setExpanded] = useTranscriptDisclosure(false)
+  // The details mount on the first open and stay, so the close still animates.
+  const mounted = useMountLatch(expanded)
   const contentRef = useRef<HTMLDivElement>(null)
 
   // OpenCode / Codex `apply_patch` renders as a git-diff view rather than the
@@ -134,10 +136,9 @@ export function ToolCallBlock({
 
   const isPending = status === 'pending'
 
-  const parsedResult = result != null ? parseResult(result) : null
-
   const cliCommand = cinnaCliCommand(name, input)
   if (cliCommand) {
+    const parsedResult = result != null ? parseResult(result) : null
     return <CinnaCliBlock command={cliCommand} isStreaming={isPending} results={
       error ? [{ text: error, toolStream: 'stderr' }] : parsedResult ? [{
         text: parsedResult.type === 'text' ? parsedResult.value : JSON.stringify(parsedResult.value, null, 2),
@@ -186,41 +187,56 @@ export function ToolCallBlock({
       >
         <div className="overflow-hidden">
           <div ref={contentRef} className="mt-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-2 space-y-2">
-            <div>
-              <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Method</p>
-              <div className="font-mono text-[11px] text-[var(--color-accent)]">{name}</div>
-            </div>
-            <div>
-              <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Input</p>
-              <div className="text-[11px] bg-[var(--color-bg)] p-2 rounded">
-                <ToolCallSummary name={name} input={input} variant="block" hideName />
-              </div>
-            </div>
-            {parsedResult && !error && (
-              <div>
-                <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Result</p>
-                {parsedResult.type === 'object' ? (
-                  <div className="text-[11px] bg-[var(--color-bg)] p-2 rounded font-mono max-h-64 overflow-y-auto">
-                    <JsonView data={parsedResult.value} />
-                  </div>
-                ) : (
-                  <pre className="text-[11px] bg-[var(--color-bg)] p-2 rounded font-mono whitespace-pre-wrap break-words overflow-x-auto max-h-64 overflow-y-auto">
-                    {parsedResult.value}
-                  </pre>
-                )}
-              </div>
-            )}
-            {error && (
-              <div>
-                <p className="text-[10px] font-medium text-[var(--color-danger)] uppercase tracking-wide mb-1">Error</p>
-                <pre className="text-[11px] bg-[var(--color-bg)] p-2 rounded font-mono whitespace-pre-wrap break-words text-[var(--color-danger)]">
-                  {error}
-                </pre>
-              </div>
-            )}
+            {mounted && <ToolCallDetails name={name} input={input} result={result} error={error} />}
           </div>
         </div>
       </div>
     </div>
+  )
+}
+
+/** The open block's method, input, result and error; the result is parsed only here. */
+function ToolCallDetails({
+  name,
+  input,
+  result,
+  error
+}: Pick<ToolCallBlockProps, 'name' | 'input' | 'result' | 'error'>): React.JSX.Element {
+  const parsedResult = useMemo(() => (result != null ? parseResult(result) : null), [result])
+  return (
+    <>
+      <div>
+        <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Method</p>
+        <div className="font-mono text-[11px] text-[var(--color-accent)]">{name}</div>
+      </div>
+      <div>
+        <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Input</p>
+        <div className="text-[11px] bg-[var(--color-bg)] p-2 rounded">
+          <ToolCallSummary name={name} input={input} variant="block" hideName />
+        </div>
+      </div>
+      {parsedResult && !error && (
+        <div>
+          <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Result</p>
+          {parsedResult.type === 'object' ? (
+            <div className="text-[11px] bg-[var(--color-bg)] p-2 rounded font-mono max-h-64 overflow-y-auto">
+              <JsonView data={parsedResult.value} />
+            </div>
+          ) : (
+            <pre className="text-[11px] bg-[var(--color-bg)] p-2 rounded font-mono whitespace-pre-wrap break-words overflow-x-auto max-h-64 overflow-y-auto">
+              {parsedResult.value}
+            </pre>
+          )}
+        </div>
+      )}
+      {error && (
+        <div>
+          <p className="text-[10px] font-medium text-[var(--color-danger)] uppercase tracking-wide mb-1">Error</p>
+          <pre className="text-[11px] bg-[var(--color-bg)] p-2 rounded font-mono whitespace-pre-wrap break-words text-[var(--color-danger)]">
+            {error}
+          </pre>
+        </div>
+      )}
+    </>
   )
 }

@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/auth.store'
 import { useRunEventHandler } from './useChatStream'
 import { useAfterTurnAgentStatus } from './useAgentStatus'
 import { pinnedFilesKey } from './usePinnedFiles'
+import { createRunEventBatch } from './runEventBatch'
 
 /** The longest a next turn waits on the ended turn's saved read before it shows anyway. */
 export const HELD_RUN_MAX_MS = 2000
@@ -39,9 +40,16 @@ export function useLiveRunWatch(): void {
       held = null
       if (!waiting) return
       releasing = true
-      try { waiting.forEach(receive) } finally { releasing = false }
+      // Applied in this task, streamed events included, so the saved rows and
+      // the held run render together.
+      try { waiting.forEach(receive); batch.flush() } finally { releasing = false }
     }
     const current = (): boolean => !disposed && useChatStore.getState().activeChatId === chatId && useAuthStore.getState().currentUser?.id === userId
+    // Streamed events are applied once a frame (`runEventBatch.ts`); every
+    // other message applies what is queued first, so order never changes.
+    const batch = createRunEventBatch((event) => {
+      if (current()) handleRun(chatId, event)
+    })
     const settle = async (): Promise<void> => {
       if (settling || !needsSettlement || !current()) return
       settling = true
@@ -86,6 +94,7 @@ export function useLiveRunWatch(): void {
         held.push(message)
         return
       }
+      if (message.type !== 'event') batch.flush()
       if (message.type === 'snapshot') {
         if (message.active) {
           // Persist activity outside the selected transcript before switching
@@ -149,7 +158,7 @@ export function useLiveRunWatch(): void {
         return
       }
       if (message.type !== 'event') return
-      if (replayAvailable) handleRun(chatId, message.event)
+      if (replayAvailable) batch.push(message.event)
       if (message.event.type === 'done' || message.event.type === 'error') {
         refreshPins()
         const agentId = message.agentId
@@ -160,6 +169,6 @@ export function useLiveRunWatch(): void {
       }
     }
     const unwatch = window.api.run.watch(chatId, receive)
-    return () => { disposed = true; clearTimeout(heldTimer); stopReading(); unwatch() }
+    return () => { batch.flush(); batch.dispose(); disposed = true; clearTimeout(heldTimer); stopReading(); unwatch() }
   }, [chatId, userId, handleRun, queryClient, refreshStatus])
 }

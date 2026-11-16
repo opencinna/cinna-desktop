@@ -21,8 +21,12 @@ interface DisclosureBlockProps {
   icon?: ReactNode
   /** Header label content, right of the icon. Truncates when narrow. */
   header: ReactNode
-  /** Body, rendered only while expanded. Caller owns its padding. */
-  children?: ReactNode
+  /**
+   * Body, rendered only while expanded. Caller owns its padding. A function
+   * is called only then, so a body that costs work to build (splitting a
+   * megabyte of output, parsing a patch) costs nothing while collapsed.
+   */
+  children?: ReactNode | (() => ReactNode)
   /** Card chrome tint when expanded. */
   tone?: DisclosureTone
   /**
@@ -89,7 +93,7 @@ export function DisclosureBlock({
           <span className="ml-1 inline-block w-1 h-1 rounded-full bg-[var(--color-accent)] animate-pulse shrink-0" />
         )}
       </button>
-      {expanded && children}
+      {expanded && (typeof children === 'function' ? children() : children)}
     </div>
   )
 }
