@@ -10,7 +10,7 @@ PW := npx playwright test -c e2e/playwright.config.ts
 # (CINNA_E2E_LIVE_ENGINE, e2e/fixtures/liveEngine.ts); claude/codex/antigravity use your own login.
 LIVE_ENV = $(if $(LIVE_ENGINE),CINNA_E2E_LIVE_ENGINE=$(LIVE_ENGINE) )
 
-.PHONY: help test test-hub typecheck build speech-helper vault-image vault-helper vault-release vault-clean vault-helper-smoke vault-dev vault-dev-restart vault-move-smoke vault-live vault-switch-live kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build speech-helper vault-image vault-helper vault-release vault-clean vault-helper-smoke vault-dev vault-dev-restart vault-move-smoke vault-live vault-switch-live kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-notes-matrix e2e-live e2e-integration e2e-integration-notes e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -141,6 +141,10 @@ e2e-one: ## One spec file, optionally one test: make e2e-one SPEC=blocked-job GR
 	@test -n "$(SPEC)" || (echo "usage: make e2e-one SPEC=<spec name> [GREP=<test title fragment>] [LIVE_ENGINE=opencode|claude|codex|antigravity]"; exit 2)
 	$(if $(findstring live,$(SPEC)),CINNA_E2E_LIVE=1 )$(LIVE_ENV)$(PW) $(SPEC) $(if $(GREP),-g "$(GREP)")
 
+e2e-notes-matrix: ## Build, then run the timed note-chip matrix (3 time zones x en-US/en-GB/de-DE, plus 12/24-hour overrides)
+	npx electron-vite build
+	$(PW) e2e/specs/notes-timed-matrix.spec.ts
+
 e2e-live: ## Specs whose file name contains "live": the billed live-* specs plus task-live-attach (needs OPENAI_API_KEY in .env, unless LIVE_ENGINE=claude|codex)
 	@case "$(LIVE_ENGINE)" in ""|opencode) grep -qE '^OPENAI_API_KEY=.+' .env 2>/dev/null || (echo "OPENAI_API_KEY is empty in .env (copy .env.example)"; exit 2);; esac
 	CINNA_E2E_LIVE=1 $(LIVE_ENV)$(PW) live
@@ -150,7 +154,11 @@ e2e-integration: ## Cross-repo: desktop + a running cinna-core + cinna-cli (need
 	@grep -qE '^CINNA_E2E_EMAIL=.+' .env 2>/dev/null || (echo "CINNA_E2E_EMAIL is empty in .env"; exit 2)
 	@grep -qE '^CINNA_E2E_PASSWORD=.+' .env 2>/dev/null || (echo "CINNA_E2E_PASSWORD is empty in .env"; exit 2)
 	npx electron-vite build
-	CINNA_E2E_INTEGRATION=1 $(PW) cinna-integration
+	CINNA_E2E_INTEGRATION=1 $(PW) e2e/specs/cinna-integration.spec.ts
+
+e2e-integration-notes: ## Cross-repo: Phase 2d timed dues across two synced desktops on a local cinna-core (CINNA_E2E_SERVER_URL/_EMAIL/_PASSWORD of a superuser, from env or .env)
+	npx electron-vite build
+	CINNA_E2E_INTEGRATION=1 $(PW) e2e/specs/cinna-integration-notes-timed.spec.ts
 
 e2e-offline: ## Everything that needs no network: no key, no engine download
 	OPENAI_API_KEY= CINNA_E2E_SKIP_ENGINE=1 $(PW)

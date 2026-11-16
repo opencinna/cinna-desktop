@@ -198,7 +198,10 @@ export interface CinnaOptions {
    * Extra environment for every launch of this test's app, including
    * `relaunch()` — a restart inherits the machine it is restarting on.
    *
-   * `test.use({ env: { OLLAMA_HOST: 'http://127.0.0.1:1234' } })`. The
+   * `test.use({ env: { OLLAMA_HOST: 'http://127.0.0.1:1234' } })`. Test-only
+   * seams read here include `CINNA_E2E_HOUR_CYCLE` (`h23`/`h12`): the
+   * sandbox's stand-in for macOS's 12/24-hour switch, which an app under
+   * `CINNA_USER_DATA` never reads (unset = follow the locale). The
    * sandbox's own variables (`HOME`, `CINNA_USER_DATA`) are applied after
    * these and cannot be overridden from here. Nothing is written to the test
    * process's `process.env`, so it cannot reach any other spec.

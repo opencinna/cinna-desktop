@@ -24,13 +24,14 @@ loadEnv({ path: join(repoRoot, '.env'), quiet: true })
  * real server and really installs a toolchain — minutes of work and a real
  * account workspace on disk — so a developer who has filled in `.env` for
  * `make e2e-integration` must not then get it as part of every `make e2e`.
- * `make e2e-integration` is the only thing that sets the variable.
+ * `make e2e-integration` and `make e2e-integration-notes` are the only things
+ * that set the variable; the glob covers every `cinna-integration*` spec.
  */
 const integrationOnly = process.env.CINNA_E2E_INTEGRATION === '1'
 
 export default defineConfig({
   testDir: './specs',
-  testIgnore: integrationOnly ? [] : ['**/cinna-integration.spec.ts'],
+  testIgnore: integrationOnly ? [] : ['**/cinna-integration*.spec.ts'],
   // Fills the per-machine engine cache once (see fixtures/engine-cache.ts).
   globalSetup: './global-setup.ts',
   outputDir: './test-results',
