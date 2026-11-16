@@ -60,7 +60,7 @@ The desktop's reading of it, where the contract is silent (`tasks.ts`, tested in
 7. The zone-name rule above: IANA-shaped or `UTC`, then `Intl`-valid; otherwise the offset is used.
 8. Origin day (user, 2026-11-16): when the origin's calendar date (the instant plus the offset used, as a wall date) differs from the device-local date of the instant, the origin part starts with that origin date's weekday as a fixed English three-letter abbreviation (`Sun` `Mon` `Tue` `Wed` `Thu` `Fri` `Sat`, never localised, like the month names) and a space: `Yesterday 20:00 (Mon 09:00 Kiritimati)`. No date is added: the two dates are at most two days apart, so the weekday is never ambiguous, even across a month or year boundary (`Jan 1, 2027 10:00 (Thu 20:00 New York)`). Same date: no weekday (`Today 15:00 (09:00 New York)`).
 9. Offset origin label: `UTC` for zero, else `UTC` + sign (`+`, or U+2212 `−`) + unpadded hours + `:MM` only when the minutes are non-zero (`UTC+1`, `UTC+5:30`, `UTC−5`, `UTC−9:30`). Used for offset-only tokens, `UTC` and `Etc/*` zones.
-10. Clock (user, 2026-11-16): chip and origin times use the device's 12/24-hour setting (the locale's short time); the weekday and month names stay fixed English.
+10. Clock (user, 2026-11-16): chip and origin times use the device's 12/24-hour setting: the locale's short time, overridden on macOS by System Settings → "24-hour time" (desktop reads `AppleICUForce24HourTime` / `AppleICUForce12HourTime`, read only, at launch and on window focus); the weekday and month names stay fixed English.
 
 ### Tags
 

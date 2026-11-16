@@ -19,6 +19,7 @@
 // to the offset; an unusable offset (HH > 23 or MM > 59) falls back to the
 // zone; with neither the token is floating. The text is never normalised.
 
+import type { HourCycle } from '../../../../shared/hourCycle'
 import { fencedLineMask } from './tags'
 
 export interface ParsedTask {
@@ -301,19 +302,36 @@ export function setClockLocale(locale: string | undefined): void {
   clockLocale = locale
 }
 
-/** A UTC-based wall-clock ms as the device shows a time: "09:00" or "9:00 AM". */
-function timeOfWall(wall: number): string {
-  const key = clockLocale ?? ''
+/**
+ * The clock options for `hourCycle`. None: the locale's short time. `h23`:
+ * that form forced to 24 hours ("15:00", "09:00"). `h12`: hour and minute with
+ * the locale's day period, unpadded ("3:00 pm" in en-GB, not the "03:00 pm"
+ * `timeStyle` derives from its 24-hour pattern).
+ */
+function clockOptions(hourCycle: HourCycle | null): Intl.DateTimeFormatOptions {
+  if (hourCycle === 'h12') return { hour: 'numeric', minute: '2-digit', hourCycle, timeZone: 'UTC' }
+  if (hourCycle === 'h23') return { timeStyle: 'short', hourCycle, timeZone: 'UTC' }
+  return { timeStyle: 'short', timeZone: 'UTC' }
+}
+
+/**
+ * A UTC-based wall-clock ms as the device shows a time: "09:00" or "9:00 AM".
+ * `hourCycle` is the device's 12/24-hour override (macOS "24-hour time"),
+ * null to follow the locale.
+ */
+function timeOfWall(wall: number, hourCycle: HourCycle | null): string {
+  const key = `${clockLocale ?? ''}|${hourCycle ?? ''}`
   let f = clockFormatters.get(key)
   if (!f) {
-    f = new Intl.DateTimeFormat(clockLocale, { timeStyle: 'short', timeZone: 'UTC' })
+    f = new Intl.DateTimeFormat(clockLocale, clockOptions(hourCycle))
     clockFormatters.set(key, f)
   }
   return f.format(wall)
 }
 
 /** A floating due's written `HH:mm` as the device shows a time. */
-const timeOfFloating = (time: string): string => timeOfWall(Date.UTC(2000, 0, 1, Number(time.slice(0, 2)), Number(time.slice(3, 5))))
+const timeOfFloating = (time: string, hourCycle: HourCycle | null): string =>
+  timeOfWall(Date.UTC(2000, 0, 1, Number(time.slice(0, 2)), Number(time.slice(3, 5))), hourCycle)
 
 /**
  * The day a due belongs to (Today strip, overdue, the chip): all-day and
@@ -355,7 +373,8 @@ function inSentence(label: string): string {
 
 /**
  * A due chip's text and its title. The day part as `formatDueLabel` names the
- * day bucket; a timed due adds its time in `deviceZone` (the device clock form), and a pinned due
+ * day bucket; a timed due adds its time in `deviceZone` (the device clock form,
+ * forced to 12 or 24 hours by `options.hourCycle`), and a pinned due
  * whose offset differs from the device's at that instant adds where it was
  * written: "Today 15:00 (09:00 New York)". The title says the tone in words
  * (Overdue · … / Due … / Done · due …) and, for a timed due, the token as
@@ -365,17 +384,18 @@ export function formatDueChip(
   due: TaskDue,
   today: string,
   deviceZone: string = deviceTimeZone(),
-  options: { done?: boolean; token?: string } = {}
+  options: { done?: boolean; token?: string; hourCycle?: HourCycle | null } = {}
 ): { label: string; title: string } {
+  const hourCycle = options.hourCycle ?? null
   let label = formatDueLabel(dueDayKey(due, deviceZone), today)
-  if (due.kind === 'floating') label += ` ${timeOfFloating(due.time)}`
+  if (due.kind === 'floating') label += ` ${timeOfFloating(due.time, hourCycle)}`
   if (due.kind === 'pinned') {
-    label += ` ${timeOfWall(wallMs(due.instant, deviceZone))}`
+    label += ` ${timeOfWall(wallMs(due.instant, deviceZone), hourCycle)}`
     if (zoneOffsetMinutes(due.instant, deviceZone) !== due.offsetMinutes) {
       const originWall = due.instant + due.offsetMinutes * 60_000
       const originDay = dayOfWall(originWall)
       const day = originDay === dueDayKey(due, deviceZone) ? '' : `${WEEKDAYS[new Date(originWall).getUTCDay()]} `
-      label += ` (${day}${timeOfWall(originWall)} ${originName(due)})`
+      label += ` (${day}${timeOfWall(originWall, hourCycle)} ${originName(due)})`
     }
   }
   const tone = dueTone(due, options.done === true, today, deviceZone)

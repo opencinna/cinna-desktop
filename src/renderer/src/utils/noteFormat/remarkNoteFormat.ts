@@ -10,6 +10,7 @@
 // drawn only when its token was actually taken out of the text.
 // Display only: the body is never rewritten.
 
+import type { HourCycle } from '../../../../shared/hourCycle'
 import { findTagsInLine, fencedLineMask } from './tags'
 import { TASK, TOKEN, deviceTimeZone, dueTone, findDueTokens, formatDueChip, dueDayKey, wallDateKey, type TaskDue } from './tasks'
 
@@ -27,6 +28,8 @@ export interface RemarkNoteFormatOptions {
   today?: string
   /** The zone times are shown in; defaults to the device's current zone. */
   timeZone?: string
+  /** The device's 12/24-hour override (`useHourCycle`); null or absent follows the locale. */
+  hourCycle?: HourCycle | null
   /**
    * Pills act as links to the Notes tag filter: they get `role="button"`, a
    * tab stop, a pointer and a title. The caller handles the click (the pill
@@ -204,11 +207,11 @@ function pillNode(display: string, key: string, links: boolean): MdNode {
   return { type: 'noteTag', children: [textNode(`#${display}`)], data: { hName: 'span', hProperties } }
 }
 
-function chipNode(due: TaskDue, token: string, done: boolean, today: string, zone: string): MdNode {
+function chipNode(due: TaskDue, token: string, done: boolean, today: string, zone: string, hourCycle: HourCycle | null): MdNode {
   const tone = dueTone(due, done, today, zone)
   // The tone is not colour alone: the title and accessible name say it.
-  const { label, title } = formatDueChip(due, today, zone, { done })
-  const titled = formatDueChip(due, today, zone, { done, token }).title
+  const { label, title } = formatDueChip(due, today, zone, { done, hourCycle })
+  const titled = formatDueChip(due, today, zone, { done, token, hourCycle }).title
   return {
     type: 'noteDue',
     children: [textNode(label)],
@@ -317,7 +320,7 @@ export function remarkNoteFormat(options: RemarkNoteFormatOptions = {}) {
     for (const { node, task } of items) {
       // No chip unless its token left the text: a date never shows twice.
       if (!task.due || !task.dueToken || task.dueStart === null || !applied.has(task.dueStart)) continue
-      const chip = chipNode(task.due, task.dueToken, task.done, today, zone)
+      const chip = chipNode(task.due, task.dueToken, task.done, today, zone, options.hourCycle ?? null)
       const children = node.children ?? (node.children = [])
       const paragraph = children.find((c) => c.type === 'paragraph')
       if (paragraph) (paragraph.children ?? (paragraph.children = [])).push(chip)

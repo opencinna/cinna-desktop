@@ -13,6 +13,8 @@ import { installDesktopVaultBackend } from './host/desktop/vault/installVaultBac
 import { vaultService } from './vault/vaultService'
 import { installExtraCaCertificates } from './host/desktop/extraCaCertificates'
 import { recoverExtraCaCertsEnv } from './host/desktop/extraCaRecovery'
+import { installHourCycleSource } from './host/desktop/hourCycle'
+import { parseHourCycle } from '../shared/hourCycle'
 import { taskRuntimeService } from './services/taskRuntimeService'
 import { app, shell, BrowserWindow, Menu, dialog, powerMonitor, clipboard } from 'electron'
 import { join } from 'path'
@@ -97,6 +99,18 @@ connectIntentService.installClipboardSource(
       ? () => clipboard.readText()
       : null
 )
+
+// Note chips follow the macOS 12/24-hour override. The E2E sandbox never reads
+// the developer's real setting (it would decide a spec's expected labels): it
+// takes `CINNA_E2E_HOUR_CYCLE` (`h23`/`h12`) or follows the locale. The seam is
+// ignored outside the sandbox. It is gated on `CINNA_USER_DATA` alone, so
+// anyone launching with that variable set also stops following the macOS
+// switch (and may force a clock with `CINNA_E2E_HOUR_CYCLE`); that is a
+// display-only effect, accepted for the test seam.
+if (overrideUserData) {
+  const e2eHourCycle = parseHourCycle(process.env['CINNA_E2E_HOUR_CYCLE'])
+  installHourCycleSource(() => e2eHourCycle)
+}
 
 let mainWindow: BrowserWindow | null = null
 let startupComplete = false

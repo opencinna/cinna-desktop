@@ -1,10 +1,11 @@
 import { NotebookPen, X } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import Markdown from 'react-markdown'
+import Markdown, { type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { useNote } from '../../hooks/useNotes'
+import { useHourCycle } from '../../hooks/useHourCycle'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { remarkNoteFormat } from '../../utils/noteFormat/remarkNoteFormat'
 import { useFrontmatter } from '../ui/FrontmatterTable'
@@ -47,6 +48,11 @@ export function NotePreviewModal({
   const title = note?.title || fallbackTitle || 'Untitled note'
   const body = note?.body ?? ''
   const rendered = useFrontmatter(body, 'mb-4')
+  const hourCycle = useHourCycle()
+  const remarkPlugins = useMemo(
+    () => [remarkGfm, [remarkNoteFormat, { hourCycle }]] as NonNullable<Options['remarkPlugins']>,
+    [hourCycle]
+  )
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4">
@@ -82,7 +88,7 @@ export function NotePreviewModal({
             <div className="markdown-body text-sm text-[var(--color-text)] leading-relaxed">
               {rendered.card}
               <Markdown
-                remarkPlugins={[remarkGfm, remarkNoteFormat]}
+                remarkPlugins={remarkPlugins}
                 rehypePlugins={[rehypeHighlight]}
                 components={markdownComponents}
               >

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Markdown, { type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { useUIStore } from '../../stores/ui.store'
+import { useHourCycle } from '../../hooks/useHourCycle'
 import { FALLBACK_TITLE, useAutosaveNote, useNote } from '../../hooks/useNotes'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { remarkNoteFormat } from '../../utils/noteFormat/remarkNoteFormat'
@@ -12,7 +13,10 @@ import { useFrontmatter } from '../ui/FrontmatterTable'
 type PluggableList = NonNullable<Options['remarkPlugins']>
 
 // `#tag` pills here are links to the sidebar's tag filter.
-const REMARK_PLUGINS: PluggableList = [remarkGfm, [remarkNoteFormat, { tagLinks: true }]]
+const remarkPlugins = (hourCycle: ReturnType<typeof useHourCycle>): PluggableList => [
+  remarkGfm,
+  [remarkNoteFormat, { tagLinks: true, hourCycle }]
+]
 
 /**
  * Inline editor — no edit-mode toggle, no Save button. Title is an always-on
@@ -30,6 +34,9 @@ export function NoteDetail(): React.JSX.Element {
   const [editingBody, setEditingBody] = useState(false)
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null)
   const rendered = useFrontmatter(body, 'mb-4')
+  // Due chips follow the device's 12/24-hour switch, re-read on focus.
+  const hourCycle = useHourCycle()
+  const plugins = useMemo(() => remarkPlugins(hourCycle), [hourCycle])
   // Visually blank the title input on first focus when it still holds the
   // placeholder default, so the user can type their title without first
   // deleting "Untitled note". Tracked per-note: reset when the active note
@@ -136,7 +143,7 @@ export function NoteDetail(): React.JSX.Element {
           >
             {rendered.card}
             <Markdown
-              remarkPlugins={REMARK_PLUGINS}
+              remarkPlugins={plugins}
               rehypePlugins={[rehypeHighlight]}
               components={markdownComponents}
             >

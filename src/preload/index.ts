@@ -510,6 +510,7 @@ export interface AgentData {
 
 export type { AgentStatusSeverity, AgentStatusSnapshot } from '../shared/agentStatus'
 import type { AgentStatusSnapshot, StatusRefreshIntent } from '../shared/agentStatus'
+import type { HourCycle } from '../shared/hourCycle'
 
 export interface UserData {
   id: string
@@ -1902,6 +1903,11 @@ const api = {
   },
 
   system: {
+    /**
+     * The device's 12/24-hour override for displayed times: `h23` / `h12`, or
+     * null to follow the locale (always null off macOS). Read fresh per call.
+     */
+    getHourCycle: (): Promise<HourCycle | null> => ipcRenderer.invoke('app:get-hour-cycle'),
     openExternal: (
       url: string
     ): Promise<{ success: true } | { success: false; error: string }> =>

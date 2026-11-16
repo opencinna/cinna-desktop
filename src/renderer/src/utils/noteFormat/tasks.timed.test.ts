@@ -337,6 +337,47 @@ describe('clock format', () => {
     }
   })
 
+  describe('the device 12/24-hour override', () => {
+    const chip = (text: string, zone: string, locale: string, hourCycle: 'h12' | 'h23' | null): string => {
+      setClockLocale(locale)
+      try {
+        return formatDueChip(dueOfText(text)!, '2026-11-16', zone, { hourCycle }).label.replace(/\s/g, ' ')
+      } finally {
+        setClockLocale('en-GB')
+      }
+    }
+    const pinned = 'x due:2026-11-16T09:00-05:00[America/New_York]'
+
+    it('en-US with 24-hour on reads 24-hour, origin included', () => {
+      expect(chip(pinned, 'Europe/Berlin', 'en-US', 'h23')).toBe('Today 15:00 (09:00 New York)')
+      expect(chip('x due:2026-11-16T21:05', 'UTC', 'en-US', 'h23')).toBe('Today 21:05')
+    })
+
+    it('en-GB with 12-hour forced reads 12-hour, unpadded, in its own day-period form', () => {
+      expect(chip(pinned, 'Europe/Berlin', 'en-GB', 'h12')).toBe('Today 3:00 pm (9:00 am New York)')
+      expect(chip('x due:2026-11-16T00:05', 'UTC', 'en-GB', 'h12')).toBe('Today 12:05 am')
+    })
+
+    it('de-DE with 12-hour forced', () => {
+      expect(chip('x due:2026-11-16T21:05', 'UTC', 'de-DE', 'h12')).toBe('Today 9:05 PM')
+    })
+
+    it('null follows the locale', () => {
+      expect(chip(pinned, 'Europe/Berlin', 'en-US', null)).toBe('Today 3:00 PM (9:00 AM New York)')
+      expect(chip(pinned, 'Europe/Berlin', 'en-GB', null)).toBe('Today 15:00 (09:00 New York)')
+    })
+
+    it('the title carries the same clock', () => {
+      setClockLocale('en-US')
+      try {
+        const due = dueOfText('x due:2026-11-16T21:05')!
+        expect(formatDueChip(due, '2026-11-16', 'UTC', { hourCycle: 'h23', token: 'due:2026-11-16T21:05' }).title).toBe('Due today 21:05 · due:2026-11-16T21:05')
+      } finally {
+        setClockLocale('en-GB')
+      }
+    })
+  })
+
   it('keeps the origin weekday in fixed English whatever the locale', () => {
     setClockLocale('de-DE')
     try {
