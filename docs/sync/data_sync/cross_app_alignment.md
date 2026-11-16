@@ -25,8 +25,39 @@ Note bodies sync verbatim between the desktop and the mobile app, so one note mu
 - A task is a GFM task item: `-`, `*` or `+`, then `[ ]` or `[x]`/`[X]`, then text. Spacing is as loose as an editor's checkbox; a trailing `\r` is ignored. Lines inside fenced code are not tasks.
 - Due date: `due:YYYY-MM-DD` (what the Assistant writes) or `📅 YYYY-MM-DD` (Obsidian Tasks). The token starts a word, ends at whitespace or line end, and the date must be a real calendar date. A token wrapped in emphasis is not read.
 - The first valid due token on the line wins. Every due token is stripped from the displayed text; Obsidian's `✅ YYYY-MM-DD` done-date is tolerated and stripped, not interpreted.
-- `due:YYYY-MM-DDTHH:mm` is accepted and the time ignored. Mobile's parser and doc both do this and call times "reserved"; the desktop mirrors the parser.
-- Shown as a due chip: Today / Tomorrow / Yesterday or "Nov 15" (year added when not the current one), the device's local day; warning tone when overdue and open, muted when checked.
+- Shown as a due chip: Today / Tomorrow / Yesterday or "Nov 15" (year added when not the current one) for the due's day bucket (below); warning tone when that day is before today and the task is open, muted when checked.
+
+#### Timed due dates (Phase 2d)
+
+The contract (the orchestrator's `cinna-assistant/feature.md`, "Phase 2d") gives `due:` an optional time, with or without a zone. `📅` stays date-only: a time after it is not part of the token (`📅 2026-11-15T09:00` is not read at all and stays as text; `📅 2026-11-15 09:00` is a date-only due and `09:00` stays in the text). `✅` is unchanged.
+
+| Token | Kind | Meaning |
+|---|---|---|
+| `due:YYYY-MM-DD` | all-day | that day in the device's current zone |
+| `due:YYYY-MM-DDTHH:mm` | floating | wall-clock time in the device's current zone |
+| `due:YYYY-MM-DDTHH:mm±HH:MM` (or `±HHMM`, `Z`) | pinned instant | an exact instant; travel does not move it |
+| `due:YYYY-MM-DDTHH:mm±HH:MM[Area/City]` | pinned zoned | the wall time in that IANA zone; on a mismatch the zone wins |
+
+The desktop's reading of it, where the contract is silent (`tasks.ts`, tested in `tasks.timed.test.ts`; mobile implements the same read rules):
+
+- **Shape.** The date, then optionally `THH:mm`, optionally `:ss`, then optionally an offset `Z`, `±HH:MM` or `±HHMM`, then — only after an offset — optionally `[zone]` (no `]` or whitespace inside). The token still starts a word and ends at whitespace or line end, so `T09:00[Europe/London]` (zone without an offset), `+01` (hours only) and `T9:00` are not tokens at all: the text stays visible and there is no due, as for any unknown token.
+- **Validity.** The date must be a real calendar date and the time real (HH ≤ 23, mm ≤ 59, ss ≤ 59); otherwise the token gives no due, as an impossible date does, and the next valid token on the line wins. A syntactic match is still stripped on a task line either way. Seconds are read (they count in a pinned instant) and never shown.
+- **Kind.** No time → all-day. A time without an offset → floating. An offset without a zone → pinned; `Z` and `-00:00` are UTC. An offset is usable when its HH ≤ 23 and MM ≤ 59 (RFC 3339 / Temporal syntax); an unusable one alone makes the token floating.
+- **Zone name.** A zone is valid when it is IANA-shaped (`^[A-Za-z][A-Za-z_]*(?:/[A-Za-z0-9_+\-]+)+$`) or `UTC` in any case, **and** `Intl.DateTimeFormat` accepts it. So `[+01:00]`, `[EST]`, `[GMT]` are unknown zones, even though `Intl` takes them. A name that `Intl` resolves to the same name in another case takes `Intl`'s casing (`america/new_york` → `America/New_York`, `utc` → `UTC`); an alias keeps its written name, because ICU resolves some current names to legacy ones (`Asia/Kolkata` → `Asia/Calcutta`, `Asia/Kathmandu` → `Asia/Katmandu`).
+- **Zone.** A valid zone wins: the instant is the written wall date-time in that zone, whatever the offset says (a usable offset or not). In a DST gap the time moves forward by the gap (`2026-03-29T01:30` in London is 02:30 BST); in an overlap it is the earlier instant (Temporal's "compatible"). An unknown zone falls back to the offset; if the offset is unusable too, the token is floating.
+- **Day bucket.** All-day and floating use their own written date; pinned uses the instant's date in the device's current zone. Overdue and Today colouring use the day only: a timed due later today is "Today", not overdue, even after its time has passed.
+- **Chip.** The day label, then for a timed due `HH:mm` (24-hour) in the device zone: a floating due its own wall time, a pinned due its instant. A pinned due whose offset at that instant differs from the device's offset at that instant adds where it was written: `Today 15:00 (09:00 New York)`, the zone's last path segment with `_` as a space, or `UTC±HH:MM` / `UTC` for an offset-only token, `UTC` and any `Etc/*` zone (whose names invert the sign: `Etc/GMT+5` shows `UTC-05:00`). The same offset in another zone shows no origin. A timed chip's title adds the token as written; its accessible name is the wording without it.
+- **Text.** Never normalised; the desktop does not write times. `parseTasks` keeps `dueDate` as the token's written date and adds `due` (the kind, time, instant and offset).
+
+**Mobile must mirror exactly** (a difference here moves a todo to another day or time on one app):
+
+1. `TOKEN` groups, in order: leading space, `due:` date, hour, minute, second, offset, zone, `📅` date; `✅` uncaptured. Offset `Z|[+-]\d{2}:?\d{2}`, zone `\[[^\]\s]+\]` only after an offset, then whitespace or line end.
+2. Offset usable only when HH ≤ 23 and MM ≤ 59.
+3. `-00:00` is UTC (offset 0), not RFC 3339's "local offset unknown".
+4. DST gap: the time moves forward by the gap; overlap: the earlier instant.
+5. An impossible date or time gives no due (the next valid token wins), but its token is still stripped from a task line.
+6. A pinned due is bucketed by its instant's date in the device zone, never by its written date.
+7. The zone-name rule above: IANA-shaped or `UTC`, then `Intl`-valid; otherwise the offset is used.
 
 ### Tags
 
