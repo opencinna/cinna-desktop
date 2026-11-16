@@ -258,6 +258,11 @@ export function localDateKey(d: Date = new Date()): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+/** The origin part's day, when it differs from the device-local day: the two
+ *  are at most two days apart, so a weekday alone is never ambiguous. Fixed
+ *  English like MONTHS, so both apps print the same label. */
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /** Whole days from `today` to `date` (both YYYY-MM-DD); negative = past. */
@@ -338,7 +343,10 @@ export function formatDueChip(
   if (due.kind === 'pinned') {
     label += ` ${timeOfWall(wallMs(due.instant, deviceZone))}`
     if (zoneOffsetMinutes(due.instant, deviceZone) !== due.offsetMinutes) {
-      label += ` (${timeOfWall(due.instant + due.offsetMinutes * 60_000)} ${originName(due)})`
+      const originWall = due.instant + due.offsetMinutes * 60_000
+      const originDay = dayOfWall(originWall)
+      const day = originDay === dueDayKey(due, deviceZone) ? '' : `${WEEKDAYS[new Date(originWall).getUTCDay()]} `
+      label += ` (${day}${timeOfWall(originWall)} ${originName(due)})`
     }
   }
   const tone = dueTone(due, options.done === true, today, deviceZone)

@@ -31,7 +31,8 @@ import { test, expect } from '../fixtures/app'
  * - Timed due dates (Phase 2d), in a second test: a floating
  *   `due:<today>T09:00` shows "Today 09:00"; a pinned
  *   `…T09:00+14:00[Pacific/Kiritimati]` shows its time in the app's zone with
- *   the origin "(09:00 Kiritimati)"; no raw `due:` text is left. The expected
+ *   the origin "(09:00 Kiritimati)", with the origin's weekday ("(Mon 09:00
+ *   Kiritimati)") when the app's day differs; no raw `due:` text is left. The expected
  *   labels are computed here from the app's own zone, so any machine zone works
  *   (except one at +14:00, where no origin is shown). The read view is
  *   screenshotted to the test's output dir (`timed-due-chips.png`).
@@ -230,7 +231,10 @@ test('timed due chips: floating at its wall time, pinned in the app zone with it
   const instant = Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, Number(today.slice(8, 10)), 9, 0) - 14 * 3_600_000
   const shown = wallIn(instant, zone)
   const dayLabel = shown.day === today ? 'Today' : shown.day === localDay(-1) ? 'Yesterday' : 'Tomorrow'
-  const pinnedLabel = `${dayLabel} ${shown.time} (09:00 Kiritimati)`
+  // The origin (Kiritimati) day is `today`; it carries its weekday when the
+  // app's own day differs.
+  const originDay = shown.day === today ? '' : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(`${today}T00:00:00Z`).getUTCDay()]} `
+  const pinnedLabel = `${dayLabel} ${shown.time} (${originDay}09:00 Kiritimati)`
 
   await cinna.page.getByRole('button', { name: 'Notes', exact: true }).click()
   await cinna.page.getByText('Timed todos', { exact: true }).click()

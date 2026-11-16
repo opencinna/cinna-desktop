@@ -203,8 +203,38 @@ describe('formatDueChip', () => {
 
   it('names an offset-only origin as UTC±HH:MM, or UTC', () => {
     expect(formatDueChip(due('x due:2026-11-16T09:00+01:00'), '2026-11-16', 'America/New_York').label).toBe('Today 03:00 (09:00 UTC+01:00)')
-    expect(formatDueChip(due('x due:2026-11-15T20:00Z'), '2026-11-15', 'Pacific/Auckland').label).toBe('Tomorrow 09:00 (20:00 UTC)')
+    expect(formatDueChip(due('x due:2026-11-15T20:00Z'), '2026-11-15', 'Pacific/Auckland').label).toBe('Tomorrow 09:00 (Sun 20:00 UTC)')
     expect(formatDueChip(due('x due:2026-11-15T20:00Z'), '2026-11-15', 'America/Los_Angeles').label).toBe('Today 12:00 (20:00 UTC)')
+  })
+
+  it('adds the origin weekday when the origin day is later than the device day', () => {
+    expect(formatDueChip(due('x due:2026-11-16T09:00+14:00[Pacific/Kiritimati]'), '2026-11-16', 'Europe/Berlin').label).toBe(
+      'Yesterday 20:00 (Mon 09:00 Kiritimati)'
+    )
+  })
+
+  it('adds the origin weekday when the origin day is earlier than the device day', () => {
+    expect(formatDueChip(due('x due:2026-11-15T22:00-08:00[America/Los_Angeles]'), '2026-11-16', 'Asia/Tokyo').label).toBe(
+      'Today 15:00 (Sun 22:00 Los Angeles)'
+    )
+  })
+
+  it('adds the origin weekday across a month boundary', () => {
+    expect(formatDueChip(due('x due:2026-12-01T08:00+13:00[Pacific/Auckland]'), '2026-11-16', 'UTC').label).toBe(
+      'Nov 30 19:00 (Tue 08:00 Auckland)'
+    )
+  })
+
+  it('adds the origin weekday across a year boundary', () => {
+    expect(formatDueChip(due('x due:2026-12-31T20:00-05:00[America/New_York]'), '2026-11-16', 'Asia/Tokyo').label).toBe(
+      'Jan 1, 2027 10:00 (Thu 20:00 New York)'
+    )
+  })
+
+  it('omits the origin weekday when both days are the same', () => {
+    const label = formatDueChip(due('x due:2026-11-16T09:00-05:00[America/New_York]'), '2026-11-16', 'Europe/Berlin').label
+    expect(label).toBe('Today 15:00 (09:00 New York)')
+    expect(label).not.toMatch(/\((Sun|Mon|Tue|Wed|Thu|Fri|Sat) /)
   })
 
   it('shows no origin when the offsets agree, even in another zone', () => {

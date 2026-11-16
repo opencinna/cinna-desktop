@@ -160,7 +160,7 @@ describe('remarkNoteFormat timed due chips', () => {
   it('buckets a pinned chip by its day in the device zone', () => {
     // 20:00Z on the 14th is the 15th in Auckland, the 14th in Los Angeles.
     const auckland = chips(view('- [ ] a due:2026-11-14T20:00Z', false, 'Pacific/Auckland'))[0]
-    expect(auckland.textContent).toBe('Today 09:00 (20:00 UTC)')
+    expect(auckland.textContent).toBe('Today 09:00 (Sat 20:00 UTC)')
     expect(auckland.getAttribute('data-tone')).toBe('upcoming')
     const la = chips(view('- [ ] a due:2026-11-14T20:00Z', false, 'America/Los_Angeles'))[0]
     expect(la.textContent).toBe('Yesterday 12:00 (20:00 UTC)')
