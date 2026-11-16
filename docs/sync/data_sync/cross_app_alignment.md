@@ -50,6 +50,18 @@ These match the "Differences from the desktop" list in cinna-mobile's doc.
 - **Derived in memory, no index.** Mobile keeps derived note indexes (rebuilt on upgrade, version 1 → 2, for frontmatter); the desktop derives tags and memory status in memory from the note list on every render, and has no Today view or cross-note task index.
 - **Tag filter is a menu plus a flat list.** The desktop offers a `#` "Filter by tag" menu with parent chips and shows a filtered, undraggable, flat list of regular notes; clicking a tag pill in the note editor sets the same filter.
 
+## Job mode marker (`@assistant`)
+
+A job's manifest carries `modeName`, normally a chat mode's portable name. Mobile has an Assistant that desktop does not, so a mobile job that runs as the Assistant syncs with the reserved value `@assistant` (cinna-mobile `src/jobs/jobMode.ts` <!-- nocheck -->; desktop's copy is `src/shared/jobMode.ts`). The payload is unchanged; only the value is reserved. The comparison trims and ignores case, and the marker wins over a chat mode that happens to carry the same name, on both apps.
+
+A desktop cannot run an Assistant job, and running it on its default chat mode would do different work under the same title. So the desktop:
+
+- **Pull.** `resolveMode` returns no mode for the marker, with no fallback to the default mode. Any other unknown name still falls back to the default mode (or none) locally.
+- **Keeps the marker.** `buildJobManifest` keeps the prior `modeName` when no local chat mode has that name and the job's `modeId` is still what a pull would have given (none for the marker, the default mode's id for any other name). A rename, an agent or MCP change, a non-mode update and the local-agent rekey all rebuild the manifest without dropping it, so the next push does not hand mobile a different job. An explicit mode pick on the desktop replaces it; that is the only way the desktop changes it. A dependency change rebuilds normally. Known limit: for an ordinary unknown name (not the marker), changing which mode is the default after the pull, or renaming the default mode, makes the next rebuild drop the preserved name. The marker is unaffected.
+- **Never runs it.** The desktop, remote and scheduled executors refuse the job, a due schedule occurrence is skipped, and the UI disables Run and scheduling for it and says where the job runs. It is not a needs-setup dependency. See [Jobs](../../jobs/jobs/jobs.md#a-job-mobile-runs-as-the-assistant).
+
+This replaces the earlier behaviour mobile's doc describes (the desktop falls back to the default mode and drops the marker on its next edit).
+
 ## Where it lives
 
 See [Notes — Technical Details](../../notes/notes/notes_tech.md#shared-note-format-in-the-read-view) for the parsers' ports (`src/renderer/src/utils/noteFormat/`), the remark plugin that draws chips and pills, and the surfaces that consume them; [Notes](../../notes/notes/notes.md#reading-assistant-memory-todos-and-tags) for the behaviour. Sync itself is in [Native Client Data Sync](data_sync.md).

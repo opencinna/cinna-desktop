@@ -122,6 +122,8 @@ Truncated stdout cannot qualify as exact `OK`. Command output passed to the foll
 
 Turning a schedule off prevents future occurrences without stopping admitted work. Deleting a definition also prevents new admission; existing work retains its history and ordinary Stop/recovery lifecycle. Renaming a schedule in the editor preserves its history. Renaming it outside Cinna creates a new declaration, off on this device.
 
+A Job that Cinna Mobile runs as the Assistant (mode `@assistant`) cannot be scheduled here: New schedule is disabled with a hint and the switch cannot turn a schedule on; a save or enable is refused in main (an edit of an existing schedule shows the refusal in the editor). A pull that turns a scheduled Job into an Assistant job turns its schedules off through the usual "Job changed" check. Schedules that already exist are not deleted or turned off; each due occurrence is skipped quietly, with no task, run or history row, and the next occurrence is computed as usual. Picking a desktop mode in the Job's Edit page makes it schedulable again.
+
 ## Catch-up
 
 Turning a schedule on, including after its definition or Job changed, starts its timing strictly after the current time. Disabled periods and time before first enablement do not create overdue work. Upgrading from the former scheduler also starts a future baseline, without turning old downtime into owed executions.

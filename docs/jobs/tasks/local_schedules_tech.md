@@ -105,6 +105,10 @@ The follow-up prompt includes schedule name, reviewed command, intended due time
 
 A script holds the schedule's reservation through its command and any follow-up. Release its folder turn lock before launching the agent to avoid self-deadlock. Long command execution is tracked outside the short scheduler admission pass. Profile change/shutdown must cancel or interrupt that tracked execution. Quiet checks create no empty chat or model invocation; their receipts still provide history and a Stop action while running.
 
+### Assistant jobs
+
+`jobScheduleService.check` calls `skipMobileOnlyJob` for each due binding before admission: it claims the binding to the next occurrence (no receipt, task or run) and logs `job-schedule` info once per occurrence. `save` (which `enable` goes through) throws `SCHEDULE_ON_MOBILE_MESSAGE` for such a job, and the list summary shows the mode as the Assistant label. `prepareScheduledJob` refuses the job again as a backstop (`runs_on_mobile`). See [Jobs — Assistant jobs](../jobs/jobs_tech.md#assistant-jobs-assistant).
+
 ## Known limitations
 
 - The queued lock wait has no cap. Exclusive holders are short desktop writes, so in practice a scheduled command waits milliseconds; nothing would mark a late one apart from the gap between its due time and actual start time.
