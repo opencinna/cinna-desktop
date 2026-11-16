@@ -152,15 +152,18 @@ export function zoneOffsetMinutes(instant: number, zone: string): number {
 
 /**
  * The instant of a wall-clock time (as UTC-based ms) in `zone`. In a DST gap
- * it moves forward by the gap; in an overlap it takes the earlier instant
- * (Temporal's "compatible").
+ * it moves forward by the gap. In an overlap the written offset picks the
+ * occurrence when it is one of the zone's two offsets there; otherwise the
+ * earlier instant (Temporal's "compatible", with offset "prefer").
  */
-function zonedInstant(wall: number, zone: string): number {
+function zonedInstant(wall: number, zone: string, written: number | null = null): number {
   const before = zoneOffsetMinutes(wall - 86_400_000, zone)
   const after = zoneOffsetMinutes(wall + 86_400_000, zone)
   const fits = [before, after]
     .map((o) => wall - o * 60_000)
     .filter((t) => zoneOffsetMinutes(t, zone) * 60_000 === wall - t)
+  const chosen = written === null ? undefined : fits.find((t) => wall - t === written * 60_000)
+  if (chosen !== undefined) return chosen
   if (fits.length > 0) return Math.min(...fits)
   return wall - before * 60_000
 }
@@ -184,13 +187,14 @@ function dueOf(m: RegExpMatchArray): TaskDue | null {
   if (!date || !isValidDate(date)) return null
   if (m[3] === undefined) return { kind: 'all-day', date }
   const [h, mi, s] = [Number(m[3]), Number(m[4]), Number(m[5] ?? 0)]
-  if (h > 23 || mi > 59 || s > 59) return null
+  // An impossible time reads as all-day on its date, as builds before times did.
+  if (h > 23 || mi > 59 || s > 59) return { kind: 'all-day', date }
   const time = `${m[3]}:${m[4]}`
   if (m[6] === undefined) return { kind: 'floating', date, time }
   const wall = Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)), h, mi, s)
   const zone = m[7] !== undefined ? resolveZone(m[7]) : null
   if (zone) {
-    const instant = zonedInstant(wall, zone)
+    const instant = zonedInstant(wall, zone, offsetMinutesOf(m[6]))
     return { kind: 'pinned', date, time, instant, offsetMinutes: zoneOffsetMinutes(instant, zone), zone }
   }
   const offset = offsetMinutesOf(m[6])
@@ -284,8 +288,32 @@ export function formatDueLabel(date: string, today: string): string {
 
 /** YYYY-MM-DD of a UTC-based wall-clock ms. */
 const dayOfWall = (wall: number): string => new Date(wall).toISOString().slice(0, 10)
-/** HH:mm of a UTC-based wall-clock ms. */
-const timeOfWall = (wall: number): string => new Date(wall).toISOString().slice(11, 16)
+/**
+ * The clock locale: undefined follows the device (the locale's own 12/24-hour
+ * hour and minute form). Tokens are always written 24-hour; only display uses
+ * this. Tests pin it with `setClockLocale`.
+ */
+let clockLocale: string | undefined
+const clockFormatters = new Map<string, Intl.DateTimeFormat>()
+
+/** Test hook: format chip times as `locale` would (undefined = the device's). */
+export function setClockLocale(locale: string | undefined): void {
+  clockLocale = locale
+}
+
+/** A UTC-based wall-clock ms as the device shows a time: "09:00" or "9:00 AM". */
+function timeOfWall(wall: number): string {
+  const key = clockLocale ?? ''
+  let f = clockFormatters.get(key)
+  if (!f) {
+    f = new Intl.DateTimeFormat(clockLocale, { timeStyle: 'short', timeZone: 'UTC' })
+    clockFormatters.set(key, f)
+  }
+  return f.format(wall)
+}
+
+/** A floating due's written `HH:mm` as the device shows a time. */
+const timeOfFloating = (time: string): string => timeOfWall(Date.UTC(2000, 0, 1, Number(time.slice(0, 2)), Number(time.slice(3, 5))))
 
 /**
  * The day a due belongs to (Today strip, overdue, the chip): all-day and
@@ -301,14 +329,15 @@ export function wallDateKey(instant: number, zone: string = deviceTimeZone()): s
 }
 
 /** Where a pinned due was written: its zone's city, else (offset-only, `UTC`,
- *  `Etc/*`, whose names invert the sign) `UTC±HH:MM` / `UTC`. */
+ *  `Etc/*`, whose names invert the sign) `UTC`, `UTC+5:30`, `UTC−5`. */
 function originName(due: Extract<TaskDue, { kind: 'pinned' }>): string {
   if (due.zone && due.zone.includes('/') && !due.zone.startsWith('Etc/')) return (due.zone.split('/').pop() ?? due.zone).replace(/_/g, ' ')
   const o = due.offsetMinutes
   if (o === 0) return 'UTC'
   const abs = Math.abs(o)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `UTC${o < 0 ? '-' : '+'}${p(Math.floor(abs / 60))}:${p(abs % 60)}`
+  const minutes = abs % 60
+  // Hours unpadded, minutes only when non-zero, a real minus sign (U+2212).
+  return `UTC${o < 0 ? '\u2212' : '+'}${Math.floor(abs / 60)}${minutes ? `:${String(minutes).padStart(2, '0')}` : ''}`
 }
 
 export type DueTone = 'overdue' | 'done' | 'upcoming'
@@ -326,7 +355,7 @@ function inSentence(label: string): string {
 
 /**
  * A due chip's text and its title. The day part as `formatDueLabel` names the
- * day bucket; a timed due adds its HH:mm in `deviceZone`, and a pinned due
+ * day bucket; a timed due adds its time in `deviceZone` (the device clock form), and a pinned due
  * whose offset differs from the device's at that instant adds where it was
  * written: "Today 15:00 (09:00 New York)". The title says the tone in words
  * (Overdue · … / Due … / Done · due …) and, for a timed due, the token as
@@ -339,7 +368,7 @@ export function formatDueChip(
   options: { done?: boolean; token?: string } = {}
 ): { label: string; title: string } {
   let label = formatDueLabel(dueDayKey(due, deviceZone), today)
-  if (due.kind === 'floating') label += ` ${due.time}`
+  if (due.kind === 'floating') label += ` ${timeOfFloating(due.time)}`
   if (due.kind === 'pinned') {
     label += ` ${timeOfWall(wallMs(due.instant, deviceZone))}`
     if (zoneOffsetMinutes(due.instant, deviceZone) !== due.offsetMinutes) {

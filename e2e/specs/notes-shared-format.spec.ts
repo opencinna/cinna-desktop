@@ -29,7 +29,8 @@ import { test, expect } from '../fixtures/app'
  *   offers the parent `inbox`, which lists only the tagged note, and "Clear
  *   tag filter" brings the whole list back.
  * - Timed due dates (Phase 2d), in a second test: a floating
- *   `due:<today>T09:00` shows "Today 09:00"; a pinned
+ *   `due:<today>T09:00` shows "Today 09:00" (in the app's 12/24-hour clock,
+ *   so "Today 9:00 AM" in a 12-hour locale); a pinned
  *   `…T09:00+14:00[Pacific/Kiritimati]` shows its time in the app's zone with
  *   the origin "(09:00 Kiritimati)", with the origin's weekday ("(Mon 09:00
  *   Kiritimati)") when the app's day differs; no raw `due:` text is left. The expected
@@ -230,17 +231,25 @@ test('timed due chips: floating at its wall time, pinned in the app zone with it
   const zone = await cinna.page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)
   const instant = Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, Number(today.slice(8, 10)), 9, 0) - 14 * 3_600_000
   const shown = wallIn(instant, zone)
+  // Times follow the app's clock (its locale's short time, 12- or 24-hour).
+  const [shownTime, nine] = await cinna.page.evaluate(
+    ([at, tz]) => {
+      const f = new Intl.DateTimeFormat(undefined, { timeStyle: 'short', timeZone: tz })
+      return [f.format(at), new Intl.DateTimeFormat(undefined, { timeStyle: 'short', timeZone: 'UTC' }).format(Date.UTC(2000, 0, 1, 9, 0))]
+    },
+    [instant, zone] as const
+  )
   const dayLabel = shown.day === today ? 'Today' : shown.day === localDay(-1) ? 'Yesterday' : 'Tomorrow'
   // The origin (Kiritimati) day is `today`; it carries its weekday when the
   // app's own day differs.
   const originDay = shown.day === today ? '' : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(`${today}T00:00:00Z`).getUTCDay()]} `
-  const pinnedLabel = `${dayLabel} ${shown.time} (${originDay}09:00 Kiritimati)`
+  const pinnedLabel = `${dayLabel} ${shownTime} (${originDay}${nine} Kiritimati)`
 
   await cinna.page.getByRole('button', { name: 'Notes', exact: true }).click()
   await cinna.page.getByText('Timed todos', { exact: true }).click()
   const readView = cinna.page.locator('.markdown-body')
   const chips = readView.locator('[data-note-due]')
-  await expect(chips).toHaveText(['Today 09:00', pinnedLabel])
+  await expect(chips).toHaveText([`Today ${nine}`, pinnedLabel])
   await expect(chips.nth(0)).toHaveAttribute('data-due-kind', 'floating')
   await expect(chips.nth(1)).toHaveAttribute('data-due-kind', 'pinned')
   await expect(chips.nth(1)).toHaveAttribute('title', new RegExp(`${pinnedToken.replace(/[[\]+]/g, '\\$&')}$`))

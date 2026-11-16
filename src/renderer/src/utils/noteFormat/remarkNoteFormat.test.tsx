@@ -1,8 +1,13 @@
 import { render } from '@testing-library/react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { remarkNoteFormat } from './remarkNoteFormat'
+import { setClockLocale } from './tasks'
+
+// Chip times follow the device clock; pin a 24-hour locale so labels are stable.
+beforeAll(() => setClockLocale('en-GB'))
+afterAll(() => setClockLocale(undefined))
 
 const TODAY = '2026-11-15'
 
