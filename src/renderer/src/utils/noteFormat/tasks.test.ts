@@ -53,8 +53,12 @@ describe('parseTasks', () => {
     })
   })
 
-  it('accepts a reserved time on due: but keeps only the date', () => {
-    expect(parseTasks('- [ ] call due:2026-11-15T09:30')[0]).toMatchObject({ text: 'call', dueDate: '2026-11-15' })
+  it('reads a time on due: and keeps dueDate as the written date', () => {
+    expect(parseTasks('- [ ] call due:2026-11-15T09:30')[0]).toMatchObject({
+      text: 'call',
+      dueDate: '2026-11-15',
+      due: { kind: 'floating', date: '2026-11-15', time: '09:30' }
+    })
   })
 
   it('ignores invalid dates and tokens glued to words', () => {

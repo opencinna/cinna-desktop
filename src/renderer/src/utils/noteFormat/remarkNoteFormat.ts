@@ -11,7 +11,7 @@
 // Display only: the body is never rewritten.
 
 import { findTagsInLine, fencedLineMask } from './tags'
-import { TASK, TOKEN, findDueTokens, formatDueLabel, localDateKey } from './tasks'
+import { TASK, TOKEN, deviceTimeZone, dueTone, findDueTokens, formatDueChip, dueDayKey, wallDateKey, type TaskDue } from './tasks'
 
 interface MdNode {
   type: string
@@ -23,8 +23,10 @@ interface MdNode {
 }
 
 export interface RemarkNoteFormatOptions {
-  /** Today as YYYY-MM-DD; defaults to the device's local day. */
+  /** Today as YYYY-MM-DD; defaults to the current day in `timeZone`. */
   today?: string
+  /** The zone times are shown in; defaults to the device's current zone. */
+  timeZone?: string
   /**
    * Pills act as links to the Notes tag filter: they get `role="button"`, a
    * tab stop, a pointer and a title. The caller handles the click (the pill
@@ -40,7 +42,9 @@ type Range =
 
 interface TaskLine {
   done: boolean
-  dueDate: string | null
+  due: TaskDue | null
+  /** The chosen due token as written. */
+  dueToken: string | null
   /** Source offset of the chosen due token's strip range. */
   dueStart: number | null
   strips: Range[]
@@ -97,7 +101,13 @@ function scanSource(source: string): { tags: Range[]; tasks: Map<number, TaskLin
       strips.push({ kind: 'strip', start: itemAt + start, end: itemAt + (token.index ?? 0) + token[0].length })
     }
     const due = findDueTokens(item)[0]
-    tasks.set(index, { done: m[2] !== ' ', dueDate: due?.date ?? null, dueStart: due ? itemAt + due.start : null, strips })
+    tasks.set(index, {
+      done: m[2] !== ' ',
+      due: due?.due ?? null,
+      dueToken: due ? item.slice(due.start, due.end) : null,
+      dueStart: due ? itemAt + due.start : null,
+      strips
+    })
   })
   return { tags, tasks }
 }
@@ -194,23 +204,27 @@ function pillNode(display: string, key: string, links: boolean): MdNode {
   return { type: 'noteTag', children: [textNode(`#${display}`)], data: { hName: 'span', hProperties } }
 }
 
-/** "Today" reads "today" inside a sentence; a date stays as it is. */
-function inSentence(label: string): string {
-  return label === 'Today' || label === 'Tomorrow' || label === 'Yesterday' ? label.toLowerCase() : label
-}
-
-function chipNode(date: string, done: boolean, today: string): MdNode {
-  const tone = done ? 'done' : date < today ? 'overdue' : 'upcoming'
-  const label = formatDueLabel(date, today)
+function chipNode(due: TaskDue, token: string, done: boolean, today: string, zone: string): MdNode {
+  const tone = dueTone(due, done, today, zone)
   // The tone is not colour alone: the title and accessible name say it.
-  const title =
-    tone === 'overdue' ? `Overdue · ${label}` : tone === 'done' ? `Done · due ${inSentence(label)}` : `Due ${inSentence(label)}`
+  const { label, title } = formatDueChip(due, today, zone, { done })
+  const titled = formatDueChip(due, today, zone, { done, token }).title
   return {
     type: 'noteDue',
     children: [textNode(label)],
     data: {
       hName: 'span',
-      hProperties: { className: [...CHIP_BASE, ...CHIP_TONE[tone]], dataNoteDue: date, dataTone: tone, title, ariaLabel: title }
+      hProperties: {
+        className: [...CHIP_BASE, ...CHIP_TONE[tone]],
+        dataNoteDue: dueDayKey(due, zone),
+        dataDueKind: due.kind,
+        dataTone: tone,
+        title: titled,
+        // A named image: the tone in words reaches a screen reader (a span
+        // without a role drops its aria-label).
+        role: 'img',
+        ariaLabel: title
+      }
     }
   }
 }
@@ -259,7 +273,8 @@ export function remarkNoteFormat(options: RemarkNoteFormatOptions = {}) {
   return (tree: MdNode, file: { value?: unknown }): void => {
     const source = typeof file.value === 'string' ? file.value : String(file.value ?? '')
     if (!source.includes('#') && !source.includes('[')) return
-    const today = options.today ?? localDateKey()
+    const zone = options.timeZone ?? deviceTimeZone()
+    const today = options.today ?? wallDateKey(Date.now(), zone)
     const { tags, tasks } = scanSource(source)
 
     // Task items as remark sees them: a line the parser reads as a task is
@@ -301,8 +316,8 @@ export function remarkNoteFormat(options: RemarkNoteFormatOptions = {}) {
 
     for (const { node, task } of items) {
       // No chip unless its token left the text: a date never shows twice.
-      if (!task.dueDate || task.dueStart === null || !applied.has(task.dueStart)) continue
-      const chip = chipNode(task.dueDate, task.done, today)
+      if (!task.due || !task.dueToken || task.dueStart === null || !applied.has(task.dueStart)) continue
+      const chip = chipNode(task.due, task.dueToken, task.done, today, zone)
       const children = node.children ?? (node.children = [])
       const paragraph = children.find((c) => c.type === 'paragraph')
       if (paragraph) (paragraph.children ?? (paragraph.children = [])).push(chip)

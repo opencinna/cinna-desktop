@@ -6,9 +6,9 @@ import { remarkNoteFormat } from './remarkNoteFormat'
 
 const TODAY = '2026-11-15'
 
-function view(markdown: string, tagLinks = false): HTMLElement {
+function view(markdown: string, tagLinks = false, timeZone = 'UTC'): HTMLElement {
   const { container } = render(
-    <Markdown remarkPlugins={[remarkGfm, [remarkNoteFormat, { today: TODAY, tagLinks }]]}>{markdown}</Markdown>
+    <Markdown remarkPlugins={[remarkGfm, [remarkNoteFormat, { today: TODAY, tagLinks, timeZone }]]}>{markdown}</Markdown>
   )
   return container
 }
@@ -49,6 +49,13 @@ describe('remarkNoteFormat due chips', () => {
     expect(chips(view('- [ ] a due:2026-11-12'))[0].getAttribute('aria-label')).toBe('Overdue · Nov 12')
     expect(chips(view('- [ ] a due:2026-11-20'))[0].getAttribute('title')).toBe('Due Nov 20')
     expect(chips(view('- [ ] a due:2026-11-15'))[0].getAttribute('title')).toBe('Due today')
+  })
+
+  it('names the chip as an image, so a screen reader hears the tone', () => {
+    const [chip] = chips(view('- [ ] a due:2026-11-12'))
+    expect(chip.getAttribute('role')).toBe('img')
+    expect(chip.getAttribute('aria-label')).toBe('Overdue · Nov 12')
+    expect(chip.textContent).toBe('Nov 12')
   })
 
   it('keeps an upcoming open task neutral', () => {
@@ -119,6 +126,51 @@ describe('remarkNoteFormat due chips', () => {
     const el = view('- [ ] a due:2026-11-15\r\n- [ ] b #home\r\n')
     expect(chips(el).map((c) => c.textContent)).toEqual(['Today'])
     expect(pills(el)).toEqual(['home'])
+  })
+})
+
+describe('remarkNoteFormat timed due chips', () => {
+  it('draws a floating chip with its wall time and strips the token', () => {
+    const el = view('- [ ] standup due:2026-11-15T09:00 #work', false, 'Pacific/Auckland')
+    const [chip] = chips(el)
+    expect(chip.textContent).toBe('Today 09:00')
+    expect(chip.getAttribute('data-due-kind')).toBe('floating')
+    expect(chip.getAttribute('data-tone')).toBe('upcoming')
+    expect(chip.getAttribute('title')).toBe('Due today 09:00 · due:2026-11-15T09:00')
+    expect(chip.getAttribute('aria-label')).toBe('Due today 09:00')
+    expect(el.textContent).not.toContain('due:')
+    expect(pills(el)).toEqual(['work'])
+  })
+
+  it('draws a pinned chip in the device zone with its origin, stripping the whole zoned token', () => {
+    const token = 'due:2026-11-15T09:00-05:00[America/New_York]'
+    const el = view(`- [ ] call Ann ${token}`, false, 'Europe/Berlin')
+    const [chip] = chips(el)
+    expect(chip.textContent).toBe('Today 15:00 (09:00 New York)')
+    expect(chip.getAttribute('data-note-due')).toBe('2026-11-15')
+    expect(chip.getAttribute('data-due-kind')).toBe('pinned')
+    expect(chip.getAttribute('title')).toBe(`Due today 15:00 (09:00 New York) · ${token}`)
+    expect(chip.className).toContain('leading-none')
+    expect(chip.className).toContain('whitespace-nowrap')
+    expect(el.textContent).not.toContain('due:')
+    expect(el.textContent).not.toContain('America/New_York')
+    expect(el.querySelector('li')?.textContent).toContain('call Ann')
+  })
+
+  it('buckets a pinned chip by its day in the device zone', () => {
+    // 20:00Z on the 14th is the 15th in Auckland, the 14th in Los Angeles.
+    const auckland = chips(view('- [ ] a due:2026-11-14T20:00Z', false, 'Pacific/Auckland'))[0]
+    expect(auckland.textContent).toBe('Today 09:00 (20:00 UTC)')
+    expect(auckland.getAttribute('data-tone')).toBe('upcoming')
+    const la = chips(view('- [ ] a due:2026-11-14T20:00Z', false, 'America/Los_Angeles'))[0]
+    expect(la.textContent).toBe('Yesterday 12:00 (20:00 UTC)')
+    expect(la.getAttribute('data-tone')).toBe('overdue')
+  })
+
+  it('leaves an unread timed form as text, without a chip', () => {
+    const el = view('- [ ] a due:2026-11-15T09:00[Europe/London]')
+    expect(chips(el)).toEqual([])
+    expect(el.textContent).toContain('due:2026-11-15T09:00[Europe/London]')
   })
 })
 

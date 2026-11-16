@@ -28,6 +28,13 @@ import { test, expect } from '../fixtures/app'
  * - `#inbox/to-read` is a pill and `#1984` is not; the sidebar's tag menu
  *   offers the parent `inbox`, which lists only the tagged note, and "Clear
  *   tag filter" brings the whole list back.
+ * - Timed due dates (Phase 2d), in a second test: a floating
+ *   `due:<today>T09:00` shows "Today 09:00"; a pinned
+ *   `…T09:00+14:00[Pacific/Kiritimati]` shows its time in the app's zone with
+ *   the origin "(09:00 Kiritimati)"; no raw `due:` text is left. The expected
+ *   labels are computed here from the app's own zone, so any machine zone works
+ *   (except one at +14:00, where no origin is shown). The read view is
+ *   screenshotted to the test's output dir (`timed-due-chips.png`).
  *
  * ## What it does not
  *
@@ -195,4 +202,48 @@ test('memory notes, due chips and tags from the shared note format', async ({ ci
     await expect(row(PLAIN_TITLE)).toBeVisible()
     await expect(memorySection()).toBeVisible()
   })
+})
+
+/** The app zone's date (YYYY-MM-DD) and time (HH:mm) of an instant. */
+function wallIn(instant: number, zone: string): { day: string; time: string } {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      .formatToParts(instant)
+      .map((p) => [p.type, p.value])
+  )
+  return { day: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` }
+}
+
+test('timed due chips: floating at its wall time, pinned in the app zone with its origin', async ({ cinna }, testInfo) => {
+  const today = localDay(0)
+  const floatingToken = `due:${today}T09:00`
+  const pinnedToken = `due:${today}T09:00+14:00[Pacific/Kiritimati]`
+  const body = `- [ ] standup ${floatingToken}\n- [ ] call Kiri ${pinnedToken}`
+
+  await cinna.skipOnboarding()
+  await cinna.page.evaluate((note) => window.api.notes.create(note), { title: 'Timed todos', body })
+  await cinna.relaunch()
+  await cinna.skipOnboarding()
+
+  // What the chip must say, from the app's own zone.
+  const zone = await cinna.page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)
+  const instant = Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, Number(today.slice(8, 10)), 9, 0) - 14 * 3_600_000
+  const shown = wallIn(instant, zone)
+  const dayLabel = shown.day === today ? 'Today' : shown.day === localDay(-1) ? 'Yesterday' : 'Tomorrow'
+  const pinnedLabel = `${dayLabel} ${shown.time} (09:00 Kiritimati)`
+
+  await cinna.page.getByRole('button', { name: 'Notes', exact: true }).click()
+  await cinna.page.getByText('Timed todos', { exact: true }).click()
+  const readView = cinna.page.locator('.markdown-body')
+  const chips = readView.locator('[data-note-due]')
+  await expect(chips).toHaveText(['Today 09:00', pinnedLabel])
+  await expect(chips.nth(0)).toHaveAttribute('data-due-kind', 'floating')
+  await expect(chips.nth(1)).toHaveAttribute('data-due-kind', 'pinned')
+  await expect(chips.nth(1)).toHaveAttribute('title', new RegExp(`${pinnedToken.replace(/[[\]+]/g, '\\$&')}$`))
+  await expect(readView).toContainText('standup')
+  await expect(readView).toContainText('call Kiri')
+  await expect(readView).not.toContainText('due:')
+  await expect(readView).not.toContainText('Pacific/')
+
+  await readView.screenshot({ path: testInfo.outputPath('timed-due-chips.png') })
 })
