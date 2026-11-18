@@ -197,18 +197,34 @@ export function useVaultWatch(): void {
   }, [queryClient])
 }
 
+/**
+ * Hook-level callbacks for a vault mutation, for a caller that may unmount
+ * before it settles (a sidebar menu): TanStack drops `mutate`-level ones then.
+ */
+export interface VaultMutationCallbacks<TVars, TData> {
+  onSuccess?: (data: TData, vars: TVars) => void
+  onError?: (error: Error, vars: TVars) => void
+}
+
 function useVaultMutation<TVars, TData>(
   run: (api: VaultApi, vars: TVars) => Promise<VaultResult<TData>>,
-  after?: (queryClient: QueryClient, vars: TVars, data: TData) => void
+  after?: (queryClient: QueryClient, vars: TVars, data: TData) => void,
+  callbacks?: VaultMutationCallbacks<TVars, TData>,
+  mutationKey?: readonly unknown[]
 ) {
   const queryClient = useQueryClient()
   return useMutation<TData, Error, TVars>({
+    ...(mutationKey ? { mutationKey } : {}),
     mutationFn: async (vars) => {
       const api = vaultApi()
       if (!api) throw new Error('Agent Vault is not part of this build.')
       return unwrapVault(await run(api, vars))
     },
-    onSuccess: (data, vars) => after?.(queryClient, vars, data)
+    onSuccess: (data, vars) => {
+      after?.(queryClient, vars, data)
+      callbacks?.onSuccess?.(data, vars)
+    },
+    onError: (error, vars) => callbacks?.onError?.(error, vars)
   })
 }
 
@@ -251,11 +267,50 @@ export function useVaultUnlockPercent(agentId: string | null): number | null {
   return progress && progress.agentId === agentId ? progress.percent : null
 }
 
-export function useVaultUnlock() {
-  return useVaultMutation((api, agentId: string) => api.unlock(agentId), storeStatus)
+/**
+ * Every unlock and lock shares one key, with the agent id as its variables:
+ * an unlock started on one surface (the sidebar's menu) shows as pending on
+ * every other (the Security tab, the composer) — see {@link useVaultUnlocking}.
+ */
+const VAULT_UNLOCK_MUTATION_KEY = ['vault', 'unlock'] as const
+const VAULT_LOCK_MUTATION_KEY = ['vault', 'lock'] as const
+
+export function useVaultUnlock(callbacks?: VaultMutationCallbacks<string, VaultStatusDto>) {
+  return useVaultMutation((api, agentId: string) => api.unlock(agentId), storeStatus, callbacks, VAULT_UNLOCK_MUTATION_KEY)
 }
-export function useVaultLock() {
-  return useVaultMutation((api, agentId: string) => api.lock(agentId), storeStatus)
+export function useVaultLock(callbacks?: VaultMutationCallbacks<string, VaultStatusDto>) {
+  return useVaultMutation((api, agentId: string) => api.lock(agentId), storeStatus, callbacks, VAULT_LOCK_MUTATION_KEY)
+}
+
+function useVaultCallPending(mutationKey: readonly unknown[], agentId: string | null): boolean {
+  const pending = useMutationState({
+    filters: { mutationKey, status: 'pending', predicate: (mutation) => mutation.state.variables === agentId },
+    select: (mutation) => mutation.state.variables
+  })
+  return agentId !== null && pending.length > 0
+}
+
+/** Whether an unlock of `agentId` is in flight, started from any surface. */
+export function useVaultUnlocking(agentId: string | null): boolean {
+  return useVaultCallPending(VAULT_UNLOCK_MUTATION_KEY, agentId)
+}
+
+/**
+ * Whether the latest unlock of `agentId`, started from any surface, failed
+ * (a cancelled prompt included). A surface that joined someone else's unlock
+ * learns its outcome here; its own mutation never saw it.
+ */
+export function useVaultUnlockFailed(agentId: string | null): boolean {
+  const statuses = useMutationState({
+    filters: { mutationKey: VAULT_UNLOCK_MUTATION_KEY, predicate: (mutation) => mutation.state.variables === agentId },
+    select: (mutation) => mutation.state.status
+  })
+  return agentId !== null && statuses.length > 0 && statuses[statuses.length - 1] === 'error'
+}
+
+/** Whether a lock of `agentId` is in flight, started from any surface. */
+export function useVaultLocking(agentId: string | null): boolean {
+  return useVaultCallPending(VAULT_LOCK_MUTATION_KEY, agentId)
 }
 export function useVaultSetSize() {
   return useVaultMutation(
@@ -275,11 +330,11 @@ export function useVaultSetLockTimeout() {
     storeStatus
   )
 }
-export function useVaultDestroy() {
-  return useVaultMutation((api, agentId: string) => api.destroy(agentId), (qc, agentId) => dropAgent(qc, agentId))
+export function useVaultDestroy(callbacks?: VaultMutationCallbacks<string, void>) {
+  return useVaultMutation((api, agentId: string) => api.destroy(agentId), (qc, agentId) => dropAgent(qc, agentId), callbacks)
 }
-export function useVaultMoveOut() {
-  return useVaultMutation((api, agentId: string) => api.moveOut(agentId), (qc, agentId) => dropAgent(qc, agentId))
+export function useVaultMoveOut(callbacks?: VaultMutationCallbacks<string, { folderPath: string }>) {
+  return useVaultMutation((api, agentId: string) => api.moveOut(agentId), (qc, agentId) => dropAgent(qc, agentId), callbacks)
 }
 
 export function useVaultHostCopy(agentId: string | null) {

@@ -11,7 +11,8 @@ import { useCapabilities } from '../../hooks/useCapabilities'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { AddToDashboardDialog } from './AddToDashboardDialog'
 import { ComponentPreviewDialog } from './ComponentPreview'
-import { COMPONENT_LINK, ComponentFindings, RetryLink, MissingCredentials, PlacementsLine, VIEW_LABELS, agentPlace, errorFindings, fixRequest, openAgentTab, useCinnaServerName } from './componentParts'
+import { COMPONENT_LINK, ComponentFindings, RetryLink, MissingCredentials, PlacementsLine, VIEW_LABELS, agentPlace, errorFindings, fixRequest, useCinnaServerName } from './componentParts'
+import { openAgentTab } from '../../utils/agentNavigation'
 import type { ComponentRefItem } from './componentReferences'
 
 /**

@@ -52,7 +52,7 @@ import {
 import { useFileDownloadStore } from '../../stores/fileDownload.store'
 import { MAX_PREVIEW_BYTES } from '../../../../shared/filePreview'
 import { agentFileName, agentFileRefActions, isCredentialFileRef, type AgentFileRef } from '../../../../shared/agentFiles'
-import { useVaultUnlock, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
+import { useVaultUnlock, useVaultUnlocking, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
 import { VaultUnlockLabel } from './VaultUnlockLabel'
 import { SettingsButton } from '../settings/SettingsLayout'
 import { pinnedFilesKey, useIsFilePinned, useTogglePinnedFile } from '../../hooks/usePinnedFiles'
@@ -239,6 +239,8 @@ function LockedFileBody({
   onUnlocked: () => void
 }): React.JSX.Element {
   const unlock = useVaultUnlock()
+  // In flight from any surface (the row menu, the composer): one Unlock, not two.
+  const unlocking = useVaultUnlocking(agentId)
   // The first unlock after an update downloads the pinned guest image first.
   const unlockPercent = useVaultUnlockPercent(agentId)
   return (
@@ -247,10 +249,10 @@ function LockedFileBody({
         {folder ? 'Unlock the vault to download this folder.' : 'Unlock the vault to preview this file.'}
       </p>
       <SettingsButton
-        aria-busy={unlock.isPending}
-        aria-disabled={unlock.isPending || undefined}
+        aria-busy={unlocking}
+        aria-disabled={unlocking || undefined}
         onClick={() => {
-          if (unlock.isPending) return
+          if (unlocking) return
           unlock.reset()
           unlock.mutate(agentId, {
             onSuccess: (status) => {
@@ -260,7 +262,7 @@ function LockedFileBody({
         }}
       >
         {/* Fixed width: Unlock, Unlocking… and the download percent swap in place. */}
-        <VaultUnlockLabel pending={unlock.isPending} percent={unlockPercent} />
+        <VaultUnlockLabel pending={unlocking} percent={unlockPercent} />
       </SettingsButton>
       {unlock.error && (
         <p role="alert" className="text-xs text-[var(--color-danger)]">

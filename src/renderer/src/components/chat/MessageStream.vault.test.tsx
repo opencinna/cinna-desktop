@@ -58,6 +58,15 @@ describe('a vault chat', () => {
     expect(screen.queryByText('Start a conversation')).toBeNull()
   })
 
+  it('says why a vault that can’t be opened hides the chat, and offers no Unlock', () => {
+    data.readiness = { state: 'vault_tampered', reason: 'This vault was made by a development build of Cinna.' }
+    render(<MessageStream chatId="chat" />)
+    expect(screen.queryByText('The secret plan')).toBeNull()
+    expect(screen.getByText('This chat is in a vault that can\'t be opened')).toBeTruthy()
+    expect(screen.getByText('This vault was made by a development build of Cinna.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Unlock' })).toBeNull()
+  })
+
   it('unlocks the chat’s agent from the card, saying so while the prompt is up', async () => {
     data.readiness = { state: 'vault_locked', reason: 'Vault locked.' }
     let answer!: (value: unknown) => void

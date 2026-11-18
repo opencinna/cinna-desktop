@@ -14,7 +14,7 @@ import { useChatDetail } from '../../hooks/useChat'
 import { isLiveInputRequest, isSettledInputRequest, useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useAgents } from '../../hooks/useAgents'
-import { useVaultUnlock, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
+import { useVaultUnlock, useVaultUnlocking, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
 import { VaultUnlockLabel } from './VaultUnlockLabel'
 import { SettingsButton } from '../settings/SettingsLayout'
 import { useAuthStore } from '../../stores/auth.store'
@@ -673,9 +673,12 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
   // but that row. A chat from before the agent moved in has no `vaultId`: its
   // history stays on this computer and shows locked or not. The unlock that
   // lands refetches the chat.
+  // A tampered vault (`vault_tampered`) can't be read either: its chat shows the same row.
+  const vaultReadiness = chatData?.agentId ? agents?.find((agent) => agent.id === chatData.agentId)?.readiness : undefined
+  const vaultReadinessState = vaultReadiness?.state
   const vaultLocked =
     !!chatData?.vaultId && !!chatData.agentId &&
-    agents?.find((agent) => agent.id === chatData.agentId)?.readiness?.state === 'vault_locked'
+    (vaultReadinessState === 'vault_locked' || vaultReadinessState === 'vault_tampered')
   const wasVaultLocked = useRef(vaultLocked)
   useEffect(() => {
     if (wasVaultLocked.current && !vaultLocked) void chatQuery.refetch?.()
@@ -1594,7 +1597,11 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
           // Locked, the transcript is not on this Mac: "Start a conversation" would say the chat is empty.
           lockedEmpty && chatData?.agentId ? (
-            <LockedVaultChatCard agentId={chatData.agentId} />
+            <LockedVaultChatCard
+              agentId={chatData.agentId}
+              // A tampered vault (another build's, or a failed check) can't be unlocked: the reason, no Unlock.
+              unopenable={vaultReadinessState === 'vault_tampered' ? (vaultReadiness?.reason ?? null) : null}
+            />
           ) : (
             <div className="text-center text-[var(--color-text-muted)] py-16">
               <p className="text-sm">Start a conversation</p>
@@ -2073,8 +2080,14 @@ function LiveUserBubble({ content, animate }: { content: string; animate: boolea
  * so the empty transcript says so and offers Unlock (the vault helper's own
  * prompt). A refusal stays in the card; the unlock that lands refetches the chat.
  */
-function LockedVaultChatCard({ agentId }: { agentId: string }): React.JSX.Element {
+function LockedVaultChatCard({ agentId, unopenable = null }: {
+  agentId: string
+  /** The vault can't be opened at all (`vault_tampered`): why, in place of Unlock. */
+  unopenable?: string | null
+}): React.JSX.Element {
   const unlock = useVaultUnlock()
+  // In flight from any surface (the row menu, the composer): one Unlock, not two.
+  const unlocking = useVaultUnlocking(agentId)
   // The first unlock after an update downloads the pinned guest image first.
   const unlockPercent = useVaultUnlockPercent(agentId)
   return (
@@ -2087,22 +2100,25 @@ function LockedVaultChatCard({ agentId }: { agentId: string }): React.JSX.Elemen
         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]">
           <Lock size={16} aria-hidden="true" />
         </span>
-        <p className="text-sm font-semibold text-[var(--color-text)]">This chat is in a locked vault</p>
-        <p className="text-[13px] text-[var(--color-text-muted)]">Unlock it to see the conversation.</p>
-        <div className="mt-1">
+        <p className="text-sm font-semibold text-[var(--color-text)]">
+          {unopenable ? "This chat is in a vault that can't be opened" : 'This chat is in a locked vault'}
+        </p>
+        <p className="text-[13px] text-[var(--color-text-muted)]">{unopenable ?? 'Unlock it to see the conversation.'}</p>
+        {!unopenable && <div className="mt-1">
           <SettingsButton
-            aria-busy={unlock.isPending}
-            aria-disabled={unlock.isPending || undefined}
+            aria-busy={unlocking}
+            aria-disabled={unlocking || undefined}
             onClick={() => {
+              if (unlocking) return
               unlock.reset()
               unlock.mutate(agentId)
             }}
           >
             {/* Fixed width: Unlock, Unlocking… and the download percent swap in place. */}
-            <VaultUnlockLabel pending={unlock.isPending} percent={unlockPercent} />
+            <VaultUnlockLabel pending={unlocking} percent={unlockPercent} />
           </SettingsButton>
-        </div>
-        {unlock.error && (
+        </div>}
+        {!unopenable && unlock.error && (
           <p role="alert" className="text-[13px] text-[var(--color-danger)]">
             {vaultErrorText(unlock.error, 'Unlock was cancelled at the prompt.')}
           </p>

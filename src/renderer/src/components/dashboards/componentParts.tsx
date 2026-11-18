@@ -1,6 +1,6 @@
 import type { ComponentFinding, ComponentInfo, ComponentPlacement, DashboardsErrorCode } from '../../../../shared/dashboards'
-import { isFolderAgentId } from '../../../../shared/localAgents'
-import { useUIStore, type AgentPageTabRequest } from '../../stores/ui.store'
+import { useUIStore } from '../../stores/ui.store'
+import { openAgentTab } from '../../utils/agentNavigation'
 import { useAuthStore } from '../../stores/auth.store'
 import { useCapabilities } from '../../hooks/useCapabilities'
 
@@ -22,22 +22,6 @@ export function openDashboard(dashboardId: string): void {
   ui.setActiveDashboardId(dashboardId)
   ui.setSidebarTab('dashboards')
   ui.setActiveView('dashboard')
-}
-
-/**
- * The agent's page, on one of its Settings tabs. A cloud agent (D6) opens its
- * external page, which takes the tabs it has (Dashboards) and shows Overview
- * for the rest.
- */
-export function openAgentTab(agentId: string, tab: AgentPageTabRequest): void {
-  const ui = useUIStore.getState()
-  const folder = isFolderAgentId(agentId)
-  if (folder) ui.setActiveLocalAgentId(agentId)
-  else ui.setActiveExternalAgentId(agentId)
-  ui.setAgentPageMode('settings')
-  ui.setAgentPageTabRequest(tab)
-  ui.setSidebarTab('agents')
-  ui.setActiveView(folder ? 'local-agent' : 'external-agent')
 }
 
 /** Settings → the profile's Agents, where a Cinna session that needs a new sign-in is renewed. */

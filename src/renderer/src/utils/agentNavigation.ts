@@ -6,7 +6,8 @@ export function serverLabel(url: string | undefined): string {
 
 
 import { groupAgentsByRoot } from './localAgents'
-import type { AgentRootDto, LocalAgentDto } from '../../../shared/localAgents'
+import { isFolderAgentId, type AgentRootDto, type LocalAgentDto } from '../../../shared/localAgents'
+import { useUIStore, type AgentPageTabRequest } from '../stores/ui.store'
 
 type Agent = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type Selection = { id: string; source: string }
@@ -30,4 +31,20 @@ export function sidebarAgentOrder(agents: Agent[], local?: { roots: AgentRootDto
 export function nextAgentAfterHiding(order: Selection[], hiddenId: string): Selection | null {
   const index = order.findIndex((agent) => agent.id === hiddenId)
   return (index > 0 ? order[index - 1] : order.find((agent) => agent.id !== hiddenId)) ?? null
+}
+
+/**
+ * The agent's page, on one of its Settings tabs. A cloud agent (D6) opens its
+ * external page, which takes the tabs it has (Dashboards) and shows Overview
+ * for the rest.
+ */
+export function openAgentTab(agentId: string, tab: AgentPageTabRequest): void {
+  const ui = useUIStore.getState()
+  const folder = isFolderAgentId(agentId)
+  if (folder) ui.setActiveLocalAgentId(agentId)
+  else ui.setActiveExternalAgentId(agentId)
+  ui.setAgentPageMode('settings')
+  ui.setAgentPageTabRequest(tab)
+  ui.setSidebarTab('agents')
+  ui.setActiveView(folder ? 'local-agent' : 'external-agent')
 }

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Download, File, Folder, FolderOutput, Loader2, Lock, LockOpen, Plus, SquareTerminal, Trash2 } from 'lucide-react'
 import type { LocalAgentDto } from '../../../../../../shared/localAgents'
-import type { LocalAgentVaultInfo, VaultEngine, VaultStatusDto } from '../../../../../../shared/vault/types'
+import type { HelperFlavor, LocalAgentVaultInfo, VaultEngine, VaultStatusDto } from '../../../../../../shared/vault/types'
 import { VAULT_ENGINE_HOSTS, VAULT_ENGINE_LOGIN, VAULT_ENGINES } from '../../../../../../shared/vault/protocol'
+import { vaultOtherBuildShortText } from '../../../../../../shared/vault/types'
 import {
   onVaultMoveProgress,
   useVaultDeleteHostCopy,
@@ -14,6 +15,7 @@ import {
   useVaultFiles,
   useVaultHostCopy,
   useVaultLock,
+  useVaultLocking,
   useVaultMoveOut,
   useVaultRuntimes,
   useVaultSecrets,
@@ -23,6 +25,7 @@ import {
   useVaultSetSize,
   useVaultStatus,
   useVaultUnlock,
+  useVaultUnlocking,
   useVaultUnlockProgress,
   useVaultAvailability,
   useVaultUpdateDependencies,
@@ -40,7 +43,8 @@ import {
   settingsInputClass
 } from '../../../settings/SettingsLayout'
 import { AnimatedCollapse } from '../../../ui/AnimatedCollapse'
-import { TypeNameConfirmDialog, VaultConfirmDialog } from './VaultDialog'
+import { TypeNameConfirmDialog } from './VaultDialog'
+import { DeleteVaultDialog, MoveOutVaultDialog, moveOutDisabledReason } from './LeaveVaultDialogs'
 import { VaultTerminalDialog } from './VaultTerminalDialog'
 import { GB, LOCKED_VALUE, STATE_LABEL, formatBytes, isHostPattern, isSecretName, lockAfterLabel, sizeLimitProblem, unlockedLabel, VAULT_ENGINE_NAME } from './vaultText'
 
@@ -122,7 +126,7 @@ export function VaultOnPanel({
   const forms: FormSlot = { active, setActive }
   return (
     <>
-      <VaultStatusCard agentId={agent.id} status={status} fallbackState={vault.state} loadError={statusQuery.error} />
+      <VaultStatusCard agentId={agent.id} status={status} fallbackState={vault.state} fallbackOtherBuild={vault.otherBuild ?? null} loadError={statusQuery.error} />
       <HostCopyCard agent={agent} />
       <SettingsRows>
         <LockAfterRow agentId={agent.id} status={status} forms={forms} />
@@ -134,7 +138,11 @@ export function VaultOnPanel({
         <TerminalRow agent={agent} open={open} />
       </SettingsRows>
       <FilesCard agentId={agent.id} open={open} />
-      <LeaveVaultCard agent={agent} />
+      <LeaveVaultCard
+        agent={agent}
+        tampered={state === 'tampered'}
+        otherBuild={state === 'tampered' ? (status?.otherBuild ?? vault.otherBuild ?? null) : null}
+      />
       {/*
         What the user can know, under what they can do. Not the size (the Disk
         size row says it) nor the backend (the Test helper badge's tooltip).
@@ -154,15 +162,21 @@ function VaultStatusCard({
   agentId,
   status,
   fallbackState,
+  fallbackOtherBuild,
   loadError
 }: {
   agentId: string
   status: VaultStatusDto | null
   fallbackState: LocalAgentVaultInfo['state']
+  /** The list's copy of {@link VaultStatusDto.otherBuild}, until the status is in. */
+  fallbackOtherBuild: LocalAgentVaultInfo['otherBuild']
   loadError: Error | null
 }): React.JSX.Element {
   const unlock = useVaultUnlock()
   const lock = useVaultLock()
+  // From any surface: an unlock or lock the sidebar's menu started shows here too.
+  const unlocking = useVaultUnlocking(agentId)
+  const locking = useVaultLocking(agentId)
   // The first unlock after an update downloads the pinned guest image first.
   const unlockDownload = useVaultUnlockProgress(agentId)
   const state = status?.state ?? fallbackState
@@ -170,13 +184,17 @@ function VaultStatusCard({
   const lockAfterMs = status?.lockAfterMs
   const noTimer = lockAfterMs === 0
   const now = useNow(state === 'unlocked' && until !== null && !noTimer)
-  const label = state === 'unlocked' ? unlockedLabel(until, now, lockAfterMs) : STATE_LABEL[state]
+  // Another build made it (its keys are that build's): say so, not "Tampered".
+  const otherBuild = state === 'tampered' ? (status?.otherBuild ?? fallbackOtherBuild ?? null) : null
+  const label = state === 'unlocked' ? unlockedLabel(until, now, lockAfterMs) : otherBuild ? 'Other build' : STATE_LABEL[state]
   // One line in every state, so a state change replaces the line and moves nothing.
   const stateDetail =
     state === 'error'
       ? (status?.error ?? 'The vault stopped with an error.')
       : state === 'tampered'
-        ? 'Its disk image changed outside the vault helper. Nothing was unlocked.'
+        ? otherBuild
+          ? vaultOtherBuildShortText(otherBuild)
+          : 'Its disk image changed outside the vault helper. Nothing was unlocked.'
         : state === 'unlocked'
           // One short line at any width: the timeout itself is the Lock after row's (rules 7, 12).
           ? noTimer
@@ -190,9 +208,9 @@ function VaultStatusCard({
               ? 'Sealing the disk…'
               : 'Unlocking asks for Touch ID or your password.'
   // An unlock downloading the guest image says so on the same line.
-  const detail = (unlock.isPending && unlockDownload) || stateDetail
+  const detail = (unlocking && unlockDownload) || stateDetail
   const canLock = state === 'unlocked' || state === 'booting'
-  const pending = unlock.isPending || lock.isPending
+  const pending = unlocking || locking
   const error = unlock.error ?? lock.error ?? loadError
   return (
     <SettingsCard>
@@ -221,7 +239,7 @@ function VaultStatusCard({
               ) : (
                 <LockOpen size={14} aria-hidden="true" />
               )}
-              {unlock.isPending ? 'Unlocking…' : lock.isPending ? 'Locking…' : canLock ? 'Lock now' : 'Unlock'}
+              {unlocking ? 'Unlocking…' : locking ? 'Locking…' : canLock ? 'Lock now' : 'Unlock'}
             </span>
           </SettingsButton>
         }
@@ -1192,19 +1210,36 @@ function FilesCard({ agentId, open }: { agentId: string; open: boolean }): React
   )
 }
 
-/** Move out of vault… and Delete vault…, each behind its own confirm (ux_rules rule 5). */
-function LeaveVaultCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+/**
+ * Move out of vault… and Delete vault…, each behind its own confirm (ux_rules
+ * rule 5). A tampered vault can only be deleted: moving out reads the vault.
+ */
+function LeaveVaultCard({ agent, tampered, otherBuild }: {
+  agent: LocalAgentDto
+  tampered: boolean
+  /** Set when another build made the vault: Move out's reason and Delete's confirm name it. */
+  otherBuild: HelperFlavor | null
+}): React.JSX.Element {
   const moveOut = useVaultMoveOut()
   const destroy = useVaultDestroy()
   const [asking, setAsking] = useState<'move-out' | 'destroy' | null>(null)
+  const moveOutReasonId = useId()
+  const moveOutReason = tampered ? moveOutDisabledReason(otherBuild) : null
   return (
     <SettingsCard>
       {/* The buttons say what they do; a sentence restating them was removed (rule 7). */}
       <div className="flex items-center justify-end gap-2">
-        <SettingsButton onClick={() => { moveOut.reset(); setAsking('move-out') }}>
+        {/* Off yet focusable, so its reason is reachable: aria-disabled with a description, not `disabled`. */}
+        <SettingsButton
+          aria-disabled={tampered || undefined}
+          aria-describedby={moveOutReason ? moveOutReasonId : undefined}
+          title={moveOutReason ?? undefined}
+          onClick={() => { moveOut.reset(); setAsking('move-out') }}
+        >
           <FolderOutput size={14} aria-hidden="true" />
           Move out of vault…
         </SettingsButton>
+        {moveOutReason && <span id={moveOutReasonId} className="sr-only">{moveOutReason}</span>}
         <button
           type="button"
           onClick={() => { destroy.reset(); setAsking('destroy') }}
@@ -1215,42 +1250,24 @@ function LeaveVaultCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element 
         </button>
       </div>
       {asking === 'move-out' && (
-        <VaultConfirmDialog
-          title="Move out of vault"
-          confirmLabel="Move out"
-          pendingLabel={APPROVAL}
+        <MoveOutVaultDialog
+          agentName={agent.name}
           pending={moveOut.isPending}
-          error={moveOut.error ? vaultErrorText(moveOut.error) : null}
+          error={moveOut.error}
           onCancel={() => setAsking(null)}
           onConfirm={() => moveOut.mutate(agent.id, { onSuccess: () => setAsking(null) })}
-        >
-          <p>
-            {agent.name} goes back to a normal folder in your agents folder, and its vault is deleted. Everything
-            inside — files, chats, secrets, the engine login — becomes readable by other apps and agents on this
-            Mac again.
-          </p>
-          <p>The vault helper asks for your approval before anything leaves.</p>
-        </VaultConfirmDialog>
+        />
       )}
       {asking === 'destroy' && (
-        <TypeNameConfirmDialog
-          title="Delete vault"
+        <DeleteVaultDialog
           agentName={agent.name}
-          confirmLabel="Delete vault"
-          pendingLabel={APPROVAL}
+          otherBuild={otherBuild}
           pending={destroy.isPending}
-          error={destroy.error ? vaultErrorText(destroy.error) : null}
+          error={destroy.error}
           onCancel={() => setAsking(null)}
           onConfirm={() => destroy.mutate(agent.id, { onSuccess: () => setAsking(null) })}
-        >
-          <p>
-            Nothing can be recovered. {agent.name}, its files, its chats, its secrets and its engine login are
-            deleted with the vault. There is no backup, and nothing goes to the Trash.
-          </p>
-          <p>Files you exported earlier stay where you saved them.</p>
-        </TypeNameConfirmDialog>
+        />
       )}
     </SettingsCard>
   )
 }
-

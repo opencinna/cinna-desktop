@@ -25,6 +25,7 @@ import {
   useVaultSwitchEngine,
   useVaultSwitchingTo,
   useVaultUnlock,
+  useVaultUnlocking,
   useVaultUnlockPercent,
   vaultErrorText
 } from '../../../../hooks/useVault'
@@ -72,6 +73,8 @@ export function VaultEnginePanel({ agent }: { agent: LocalAgentDto }): React.JSX
   const switchEngine = useVaultSwitchEngine(agent.id)
   const switchingTo = useVaultSwitchingTo(agent.id)
   const unlock = useVaultUnlock()
+  // From any surface: an unlock the sidebar's menu started shows here too.
+  const unlockInFlight = useVaultUnlocking(agent.id)
   const unlockPercent = useVaultUnlockPercent(agent.id)
   const unlockDownload = unlockPercent === null ? null : vaultImageDownloadText(unlockPercent)
   const [dialog, setDialog] = useState<VaultEngine | null>(null)
@@ -134,7 +137,7 @@ export function VaultEnginePanel({ agent }: { agent: LocalAgentDto }): React.JSX
       ? `model ${model}`
       : 'the CLI’s default model'
   // Unlock is the card's own action, a button on its right (Booting is an unlock already under way).
-  const unlocking = unlock.isPending || state === 'booting'
+  const unlocking = unlockInFlight || state === 'booting'
   const line: Line = !open
     ? unlocking
       ? { text: unlockDownload ?? 'Unlocking…', tone: NOTE, spinner: true }

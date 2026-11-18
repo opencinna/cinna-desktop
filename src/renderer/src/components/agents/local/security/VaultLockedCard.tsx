@@ -6,6 +6,7 @@ import {
   useVaultOpen,
   useVaultStatus,
   useVaultUnlock,
+  useVaultUnlocking,
   useVaultUnlockPercent,
   vaultErrorText
 } from '../../../../hooks/useVault'
@@ -27,8 +28,10 @@ const NOTE = 'text-[12px] text-[var(--color-text-muted)]'
 export function VaultLockedCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   const state = useVaultStatus(agent.id).data?.state ?? agent.vault?.state
   const unlock = useVaultUnlock()
+  // From any surface: an unlock the sidebar's menu started shows here too.
+  const unlockInFlight = useVaultUnlocking(agent.id)
   const percent = useVaultUnlockPercent(agent.id)
-  const unlocking = unlock.isPending || state === 'booting'
+  const unlocking = unlockInFlight || state === 'booting'
   const line = unlocking ? (percent === null ? 'Unlocking…' : vaultImageDownloadText(percent)) : 'Unlock it to read them here.'
   return (
     <SettingsCard>

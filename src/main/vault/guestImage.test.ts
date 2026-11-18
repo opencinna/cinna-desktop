@@ -79,7 +79,7 @@ describe('the guest image of a packaged build', () => {
     host(true)
     setGuestPinForTest({ ...pin(), published: false })
     expect(guestRootfs()).toMatchObject({ ok: false })
-    await expect(ensureGuestImage(secure)).rejects.toThrow(/No vault guest image has been published/)
+    await expect(ensureGuestImage(secure)).rejects.toThrow(/vault system image for this version of Cinna is not available yet/)
     expect(hits).toBe(0)
   })
 

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRootDto, LocalAgentDto } from '../../../../../shared/localAgents'
@@ -99,6 +99,8 @@ const AGENT = {
 } as unknown as LocalAgentDto
 
 vi.mock('../../../hooks/useLocalAgents', () => ({
+  LOCAL_AGENTS_KEY: ['local-agents'],
+  localAgentKey: (id: string) => ['local-agents', id],
   useLocalAgents: () => ({
     data: { roots: [ROOT], agents: AGENTS },
     isLoading: false,
@@ -160,7 +162,17 @@ vi.mock('../CatalogBrowserModal', () => ({
   }
 }))
 
+const openAgentTab = vi.fn()
+vi.mock('../../../utils/agentNavigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../utils/agentNavigation')>()),
+  openAgentTab: (...args: unknown[]) => openAgentTab(...args)
+}))
+vi.mock('./security/VaultTerminalDialog', () => ({
+  VaultTerminalDialog: (props: { agentName: string }) => createElement('div', { role: 'dialog', 'aria-label': `Terminal ${props.agentName}` })
+}))
+
 const { useAuthStore } = await import('../../../stores/auth.store')
+const { useToastStore } = await import('../../../stores/toast.store')
 const { useCatalogInstallStore } = await import('../../../stores/catalogInstall.store')
 const { LocalAgentsList } = await import('./LocalAgentsList')
 
@@ -614,5 +626,199 @@ describe('LocalAgentsList — Add an agent and the empty list', () => {
     newAgentProps = null
     renderList()
     expect(newAgentProps).toBeNull()
+  })
+})
+
+describe('LocalAgentsList — a vault agent’s right-click menu', () => {
+  type State = 'locked' | 'stopped' | 'booting' | 'unlocked' | 'locking' | 'error' | 'tampered'
+  let state: State = 'stopped'
+  let otherBuild: string | null = null
+  const vault = {
+    status: vi.fn(async () => ({ ok: true, data: statusOf() })),
+    unlock: vi.fn(async (): Promise<unknown> => ({ ok: true, data: { ...statusOf(), state: 'unlocked' } })),
+    lock: vi.fn(async (): Promise<unknown> => ({ ok: true, data: { ...statusOf(), state: 'locked' } })),
+    destroy: vi.fn(async (): Promise<unknown> => ({ ok: true, data: undefined })),
+    moveOut: vi.fn(async (): Promise<unknown> => ({ ok: true, data: { folderPath: '/tmp/agents/alpha' } }))
+  }
+  function statusOf(): Record<string, unknown> {
+    return {
+      agentId: 'folder:alpha', vaultId: 'v1', agentName: 'Alpha', engine: 'claude', state, until: null, lockAfterMs: 300_000,
+      sizeBytes: 0, usedBytes: null, egress: { hosts: [] }, createdAt: 0, imageVersion: '', error: null, otherBuild
+    }
+  }
+  function vaultAgent(): LocalAgentDto {
+    return { ...AGENT, kind: 'kit', identity: 'manifest', vault: { vaultId: 'v1', state, engine: 'claude', otherBuild } } as LocalAgentDto
+  }
+  async function openMenu(): Promise<HTMLElement> {
+    renderList()
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Alpha/ }))
+    const menu = screen.getByRole('menu', { name: 'Agent Alpha' })
+    await waitFor(() => expect(vault.status).toHaveBeenCalled())
+    return menu
+  }
+  const items = (menu: HTMLElement): (string | null)[] =>
+    Array.from(menu.querySelectorAll('[role="menuitem"]')).map((el) => el.textContent)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    state = 'stopped'
+    otherBuild = null
+    AGENTS = [vaultAgent()]
+    externalAgents = []
+    showAgentSidebarSections = true
+    shareStatuses = []
+    activeLocalAgentId = null
+    useAuthStore.setState({ currentUser: null })
+    useToastStore.setState({ toast: null })
+    ;(window as unknown as { api: unknown }).api = { vault }
+  })
+
+  it('offers Unlock, the settings and the ways out of a locked vault, without opening the page', async () => {
+    const menu = await openMenu()
+    expect(items(menu)).toEqual(['Unlock', 'Vault settings', 'Move out of vault', 'Delete vault'])
+    expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(2)
+    expect(setActiveLocalAgentId).not.toHaveBeenCalled()
+  })
+
+  it('offers Lock now and Open terminal while unlocked, and a disabled Locking… while it locks', async () => {
+    state = 'unlocked'
+    AGENTS = [vaultAgent()]
+    let menu = await openMenu()
+    await waitFor(() => expect(items(menu)).toEqual(['Lock now', 'Open terminal', 'Vault settings', 'Move out of vault', 'Delete vault']))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open terminal' }))
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Terminal Alpha' })).toBeTruthy()
+    cleanup()
+    state = 'locking'
+    AGENTS = [vaultAgent()]
+    menu = await openMenu()
+    const locking = screen.getByRole('menuitem', { name: 'Locking…' }) as HTMLButtonElement
+    expect(locking.disabled).toBe(true)
+    expect(items(menu)[0]).toBe('Locking…')
+  })
+
+  it('says which build made a vault another build made, offers no state action, and keeps Move out off but reachable', async () => {
+    state = 'tampered'
+    otherBuild = 'dev'
+    AGENTS = [vaultAgent()]
+    const menu = await openMenu()
+    expect(menu.firstElementChild?.textContent).toBe('Made by a development build')
+    expect(items(menu)).toEqual(['Vault settings', 'Move out of vault', 'Delete vault'])
+    const moveOut = screen.getByRole('menuitem', { name: 'Move out of vault', description: 'Open it in the development build of Cinna to move it out.' }) as HTMLButtonElement
+    expect(moveOut.disabled).toBe(false)
+    expect(moveOut.getAttribute('aria-disabled')).toBe('true')
+    // Reachable from the keyboard, and pressing it does nothing.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(moveOut)
+    fireEvent.click(moveOut)
+    expect(screen.getByRole('menu', { name: 'Agent Alpha' })).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: 'Move out of vault' })).toBeNull()
+    // Delete vault's confirm says the build that made it can still open it.
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete vault' }))
+    expect(within(screen.getByRole('dialog', { name: 'Delete vault' })).getByText('The development build of Cinna made this vault and can still open it.')).toBeTruthy()
+  })
+
+  it('says nothing about a build for a genuinely tampered vault, and Move out says it can’t be opened', async () => {
+    state = 'tampered'
+    AGENTS = [vaultAgent()]
+    const menu = await openMenu()
+    expect(menu.textContent).not.toMatch(/Made by/)
+    expect(screen.getByRole('menuitem', { name: 'Move out of vault', description: "This vault can't be opened, so nothing can be moved out of it." })
+      .getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('closes on Unlock and unlocks from the list; a failure is a toast, a cancelled prompt is not', async () => {
+    vault.unlock.mockResolvedValueOnce({ ok: false, code: 'unavailable', message: "The vault system image is missing, so the vault can't start." })
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unlock' }))
+    expect(screen.queryByRole('menu')).toBeNull()
+    await waitFor(() => expect(useToastStore.getState().toast).toMatchObject({
+      message: "Couldn't unlock Alpha: The vault system image is missing, so the vault can't start.", kind: 'error', link: null
+    }))
+    expect(vault.unlock).toHaveBeenCalledWith('folder:alpha')
+
+    useToastStore.setState({ toast: null })
+    vault.unlock.mockResolvedValueOnce({ ok: false, code: 'denied', message: 'cancelled' })
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Alpha/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unlock' }))
+    await waitFor(() => expect(vault.unlock).toHaveBeenCalledTimes(2))
+    await act(async () => {})
+    expect(useToastStore.getState().toast).toBeNull()
+  })
+
+  it('opens the agent page’s Security tab from Vault settings', async () => {
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Vault settings' }))
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(openAgentTab).toHaveBeenCalledWith('folder:alpha', 'security')
+  })
+
+  it('deletes the vault behind the typed-name confirm, and clears the selection when it was this agent', async () => {
+    activeLocalAgentId = 'folder:alpha'
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete vault' }))
+    const dialog = screen.getByRole('dialog', { name: 'Delete vault' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Type Alpha to confirm' }), { target: { value: 'Alpha' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete vault' }))
+    await waitFor(() => expect(vault.destroy).toHaveBeenCalledWith('folder:alpha'))
+    await waitFor(() => expect(setActiveLocalAgentId).toHaveBeenCalledWith(null))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete vault' })).toBeNull())
+    activeLocalAgentId = null
+  })
+
+  it('moves out behind the plain confirm, keeping the selection (the agent keeps its id)', async () => {
+    activeLocalAgentId = 'folder:alpha'
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move out of vault' }))
+    const dialog = screen.getByRole('dialog', { name: 'Move out of vault' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move out' }))
+    await waitFor(() => expect(vault.moveOut).toHaveBeenCalledWith('folder:alpha'))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Move out of vault' })).toBeNull())
+    expect(setActiveLocalAgentId).not.toHaveBeenCalledWith(null)
+    activeLocalAgentId = null
+  })
+
+  it('says a failed Move out in its dialog while it shows, and in a toast naming the agent once it is gone', async () => {
+    let fail: (value: unknown) => void = () => {}
+    vault.moveOut.mockResolvedValueOnce({ ok: false, code: 'locked', message: 'The vault is locked.' })
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move out of vault' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Move out of vault' })).getByRole('button', { name: 'Move out' }))
+    expect(await within(screen.getByRole('dialog', { name: 'Move out of vault' })).findByText('The vault is locked.')).toBeTruthy()
+    expect(useToastStore.getState().toast).toBeNull()
+
+    vault.moveOut.mockImplementationOnce(() => new Promise((resolve) => { fail = resolve }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Move out of vault' })).getByRole('button', { name: 'Move out' }))
+    await waitFor(() => expect(vault.moveOut).toHaveBeenCalledTimes(2))
+    cleanup()
+    await act(async () => fail({ ok: false, code: 'locked', message: 'The vault is locked.' }))
+    await waitFor(() => expect(useToastStore.getState().toast).toMatchObject({
+      message: "Couldn't move Alpha out of its vault: The vault is locked.", kind: 'error'
+    }))
+  })
+
+  it('toasts a failed Delete vault once its dialog is closed', async () => {
+    let fail: (value: unknown) => void = () => {}
+    vault.destroy.mockImplementationOnce(() => new Promise((resolve) => { fail = resolve }))
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete vault' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Type Alpha to confirm' }), { target: { value: 'Alpha' } })
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Delete vault' })).getByRole('button', { name: 'Delete vault' }))
+    await waitFor(() => expect(vault.destroy).toHaveBeenCalled())
+    cleanup()
+    await act(async () => fail({ ok: false, code: 'unavailable', message: 'The vault helper is not running.' }))
+    await waitFor(() => expect(useToastStore.getState().toast).toMatchObject({
+      message: "Couldn't delete the vault of Alpha: The vault helper is not running.", kind: 'error'
+    }))
+  })
+
+  it('shows Unlocking… in the menu for an unlock started elsewhere', async () => {
+    let finish: (value: unknown) => void = () => {}
+    vault.unlock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unlock' }))
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Alpha/ }))
+    expect((await screen.findByRole('menuitem', { name: 'Unlocking…' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => finish({ ok: true, data: { ...statusOf(), state: 'unlocked' } }))
   })
 })

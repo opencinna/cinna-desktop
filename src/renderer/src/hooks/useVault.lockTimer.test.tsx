@@ -17,7 +17,7 @@ const status = vi.fn()
 function base(over: Partial<VaultStatusDto> = {}): VaultStatusDto {
   return {
     agentId: 'folder:v', vaultId: 'v1', agentName: 'V', engine: 'claude', state: 'unlocked', until: null,
-    lockAfterMs: 300_000, sizeBytes: 0, usedBytes: null, egress: { hosts: [] }, createdAt: 0, imageVersion: '', error: null,
+    lockAfterMs: 300_000, sizeBytes: 0, usedBytes: null, egress: { hosts: [] }, createdAt: 0, imageVersion: '', error: null, otherBuild: null,
     ...over
   }
 }

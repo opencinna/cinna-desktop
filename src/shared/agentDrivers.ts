@@ -125,6 +125,7 @@ export interface AgentCapabilities {
  * `LocalAgentReadiness`'s; the others are what a driver learns by asking:
  * `not_installed` / `not_logged_in` for an agent on a CLI, `unreachable` for
  * one behind a URL, `vault_locked` for an agent in a locked Agent Vault,
+ * `vault_tampered` for one whose vault this build can't open,
  * `vault_other_chat` for one asked in a chat that is not in its vault.
  */
 export type AgentReadinessState =
@@ -137,6 +138,12 @@ export type AgentReadinessState =
   | 'unreachable'
   /** An Agent Vault agent whose vault is locked: the composer offers **Unlock**. */
   | 'vault_locked'
+  /**
+   * An Agent Vault agent whose vault reads as tampered: another build of
+   * Cinna made it, or it failed its integrity check. Unlock would only fail,
+   * so the composer offers none; the reason says why in the sentence.
+   */
+  | 'vault_tampered'
   /**
    * Per chat, never on the agent list: an Agent Vault agent asked in a chat
    * that started before it moved into its vault (the chat's words are on this

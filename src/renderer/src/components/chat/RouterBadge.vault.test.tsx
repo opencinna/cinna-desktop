@@ -16,7 +16,7 @@ const agent = { id: 'folder:v', name: 'Ledger', source: 'vault', driver: 'acp', 
 function status(over: Partial<VaultStatusDto>): VaultStatusDto {
   return {
     agentId: 'folder:v', vaultId: 'v1', agentName: 'Ledger', engine: 'claude', state: 'unlocked', until: null,
-    lockAfterMs: 300_000, sizeBytes: 0, usedBytes: null, egress: { hosts: [] }, createdAt: 0, imageVersion: '', error: null,
+    lockAfterMs: 300_000, sizeBytes: 0, usedBytes: null, egress: { hosts: [] }, createdAt: 0, imageVersion: '', error: null, otherBuild: null,
     ...over
   }
 }

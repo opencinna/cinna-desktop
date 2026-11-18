@@ -84,7 +84,12 @@ export const vaultLauncherDeps: VaultLauncherDeps = {
   stateOf: (vaultId) => vaultService.stateOf(vaultId),
   client: (vaultId) => vaultService.client(vaultId),
   agentCwd: (vaultId) => vaultService.agentCwd(vaultId),
-  pins: (engine) => vaultRuntimePins(engine)
+  pins: (engine) => vaultRuntimePins(engine),
+  // The helper's flavor tells another build's vault apart; asking is cached.
+  otherBuild: async (userId, vaultId) => {
+    await vaultService.availability().catch(() => null)
+    return vaultService.otherBuild(userId, vaultId)
+  }
 }
 
 /** The driver's `vault` branch: Claude, Codex, OpenCode and Antigravity (on a Gemini API key). */
@@ -100,7 +105,7 @@ export function vaultDriverDeps(): NonNullable<AcpDriverDeps['vault']> {
     readiness: async (_userId, agent) => {
       const info = vaultLaunchInfo(agent)
       if (!info) return { state: 'invalid', reason: 'This agent is not in a vault.' }
-      return vaultReadiness(vaultLauncherDeps, info)
+      return vaultReadiness(vaultLauncherDeps, info, agent.userId)
     },
     hold: async (_userId, agent) => {
       const info = vaultLaunchInfo(agent)

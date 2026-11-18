@@ -36,6 +36,12 @@ export interface LocalAgentVaultInfo {
   provider?: VaultLaunchProvider | null
   /** The agent's host folder is still there after the move (until **Delete host copy**). */
   hostCopy?: boolean
+  /**
+   * Set when the vault is `tampered` because another build of Cinna made it
+   * (its keys live with that build's helper): which one. See
+   * {@link vaultOtherBuildText}.
+   */
+  otherBuild?: HelperFlavor | null
 }
 
 /** Which backend serves vaults and what it can promise (README "capabilities"). */
@@ -83,6 +89,70 @@ export interface VaultStatusDto {
   imageVersion: string
   /** Set when `state` is `error`. */
   error: string | null
+  /**
+   * Set when `state` is `tampered` because another build of Cinna made the
+   * vault (a development build's vault met by the released app, or the other
+   * way round): which build. Null when it is tampered for any other reason,
+   * or the origin cannot be told.
+   */
+  otherBuild: HelperFlavor | null
+}
+
+/** A build of Cinna as the vault UI names it, by its helper's flavor. */
+const BUILD_NAME: Record<HelperFlavor, string> = {
+  dev: 'a development build of Cinna',
+  test: 'a test build of Cinna',
+  release: 'the released Cinna app',
+  fake: 'a test build of Cinna'
+}
+
+/** The same builds, short: the Security tab's one-line status detail and the row menu's note. */
+const BUILD_SHORT: Record<HelperFlavor, string> = {
+  dev: 'a development build',
+  test: 'a test build',
+  release: 'the released app',
+  fake: 'a test build'
+}
+
+/** The build that can still open a vault another build made, for "Open it in …". */
+const BUILD_THAT_MADE_IT: Record<HelperFlavor, string> = {
+  dev: 'the development build of Cinna',
+  test: 'the test build of Cinna',
+  release: 'the released Cinna app',
+  fake: 'the test build of Cinna'
+}
+
+/**
+ * Why a vault another build made can't be opened, in full: the message of
+ * the `tampered` error its unlock (and any gated call) answers with, so every
+ * surface that prints the error says it the same way. Each build keeps its
+ * vault keys in its own keychain group, so this one cannot check or open it.
+ */
+export function vaultOtherBuildText(origin: HelperFlavor): string {
+  return `This vault was made by ${BUILD_NAME[origin]}. This version can't open it: each build keeps its own vault keys.`
+}
+
+/** The build alone, short enough for the Security tab's one-line status detail at 800px. */
+export function vaultOtherBuildShortText(origin: HelperFlavor): string {
+  return `Made by ${BUILD_SHORT[origin]}`
+}
+
+/** Why Move out of vault is off for a vault another build made: only that build can read it. */
+export function vaultOtherBuildMoveOutText(origin: HelperFlavor): string {
+  return `Open it in ${BUILD_THAT_MADE_IT[origin]} to move it out.`
+}
+
+/** The Delete vault confirm's added sentence for a vault another build made. */
+export function vaultOtherBuildDeleteText(origin: HelperFlavor): string {
+  return `${BUILD_THAT_MADE_IT[origin].replace(/^the/, 'The')} made this vault and can still open it.`
+}
+
+/** A tampered vault's composer sentence when no other build explains it. */
+export const VAULT_TAMPERED_TEXT = "This vault failed its integrity check and can't be opened."
+
+/** Why a tampered vault can't be opened, in one sentence: another build made it, or it failed its check. */
+export function vaultTamperedText(otherBuild: HelperFlavor | null | undefined): string {
+  return otherBuild ? vaultOtherBuildText(otherBuild) : VAULT_TAMPERED_TEXT
 }
 
 /** `vault:state` push. */

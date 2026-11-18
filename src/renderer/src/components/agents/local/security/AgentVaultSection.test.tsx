@@ -53,7 +53,8 @@ beforeEach(() => {
     egress: { hosts: ['api.anthropic.com'] },
     createdAt: Date.UTC(2026, 10, 13),
     imageVersion: '1.0.0',
-    error: null
+    error: null,
+    otherBuild: null
   }
   stateListener = null
   ;(window as unknown as { api: unknown }).api = { vault }
@@ -179,6 +180,36 @@ describe('AgentVaultSection — on', () => {
     expect(await screen.findByText('Signed in with an API key')).toBeTruthy()
     expect(await screen.findByText('DB_URL')).toBeTruthy()
     expect(await screen.findByText('AGENT.md')).toBeTruthy()
+  })
+
+  it('says a vault another build made is from that build, not tampered; only Delete vault is left', async () => {
+    status = { ...status, state: 'tampered', otherBuild: 'dev' }
+    renderSection(inVault())
+    expect(await screen.findByText('Other build')).toBeTruthy()
+    expect(screen.getByText('Made by a development build')).toBeTruthy()
+    expect(screen.queryByText('Tampered')).toBeNull()
+    expect((screen.getByRole('button', { name: /^Unlock$/ }) as HTMLButtonElement).disabled).toBe(true)
+    // Off, yet focusable with its reason: the build that made it can move it out.
+    const moveOut = screen.getByRole('button', { name: /Move out of vault/ }) as HTMLButtonElement
+    expect(moveOut.disabled).toBe(false)
+    expect(moveOut.getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByRole('button', { name: /Move out of vault/, description: 'Open it in the development build of Cinna to move it out.' })).toBe(moveOut)
+    fireEvent.click(moveOut)
+    expect(screen.queryByRole('dialog', { name: 'Move out of vault' })).toBeNull()
+    // Delete vault's confirm says the build that made it can still open it.
+    fireEvent.click(screen.getByRole('button', { name: /Delete vault/ }))
+    expect(within(screen.getByRole('dialog', { name: 'Delete vault' })).getByText('The development build of Cinna made this vault and can still open it.')).toBeTruthy()
+  })
+
+  it('still says Tampered for a vault this build made', async () => {
+    status = { ...status, state: 'tampered', otherBuild: null }
+    renderSection(inVault())
+    expect(await screen.findByText('Tampered')).toBeTruthy()
+    expect(screen.getByText(/changed outside the vault helper/)).toBeTruthy()
+    const moveOut = screen.getByRole('button', { name: /Move out of vault/, description: "This vault can't be opened, so nothing can be moved out of it." })
+    expect(moveOut.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: /Delete vault/ }))
+    expect(within(screen.getByRole('dialog', { name: 'Delete vault' })).queryByText(/can still open it/)).toBeNull()
   })
 
   it('says Running while a turn holds the vault open', async () => {

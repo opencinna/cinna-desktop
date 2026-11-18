@@ -8,6 +8,7 @@
  * Cinna asks the backend for is a request: presence prompts and tokens come
  * from the helper (D3).
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -25,6 +26,7 @@ import {
   approvalDetail,
   type EgressPolicy,
   type GatedAction,
+  type HelperFlavor,
   type TranscriptOp,
   type VaultEngine,
   type VaultState,
@@ -48,7 +50,8 @@ import {
   type VaultResult,
   type VaultStateEvent,
   type VaultStatusDto,
-  type VaultUnlockProgressEvent
+  type VaultUnlockProgressEvent,
+  vaultOtherBuildText
 } from '../../shared/vault/types'
 import { GUEST_AGENT_PATH, onVaultBackendInstalled, vaultBackend, VaultBackendError, type VaultBackend, type VaultBackendEvent } from './backend'
 import { refreshVaultAgents, isVaultAgent } from './isVaultAgent'
@@ -62,6 +65,7 @@ import { vaultLoginProblem } from './engineLoginCheck'
 import { createGuestFileAccess, type VaultFileAccess } from './fileAccess'
 import { vaultAgentState } from './vaultAgentState'
 import { readVaultAgentDetails } from './vaultAgentDetails'
+import { otherBuildOf, readVaultOrigin } from './vaultOrigin'
 import type { StoredPermissionGrant } from '../../shared/localAgentRequests'
 
 const logger = createLogger('vault')
@@ -146,6 +150,15 @@ const lockGenerations = new Map<string, number>()
 /** The drain-and-close a quit is running, while it has journal writes to deliver (see `shutdown`). */
 let quitDrain: Promise<void> | null = null
 let availabilityCache: Promise<VaultAvailabilityDto> | null = null
+/** The running helper's flavor, once its hello answered (null until then, or when it could not). */
+let helperFlavor: HelperFlavor | null = null
+/**
+ * Which build made each vault seen `tampered` ({@link readVaultOrigin}), read
+ * once per vault: a healthy vault never pays for the read.
+ */
+const origins = new Map<string, HelperFlavor | null>()
+/** The vault a {@link vaultService.result} call is about, recorded by `refFor`, so a `tampered` failure can say why. */
+const callScope = new AsyncLocalStorage<{ userId?: string; vaultId?: string }>()
 let detach: (() => void) | null = null
 let initialized = false
 
@@ -235,6 +248,31 @@ function attach(backend: VaultBackend): void {
   detach?.()
   detach = backend.onEvent(onBackendEvent)
   availabilityCache = null
+  helperFlavor = null
+}
+
+/**
+ * The build that made `vaultId`, when another build making it is why it is
+ * tampered (see `vaultOrigin.ts`); null otherwise. The vault's `vault.json`
+ * is read only here, once per vault, and only for a tampered one.
+ */
+function otherBuildFor(userId: string, vaultId: string): HelperFlavor | null {
+  if (helperFlavor === null || helperFlavor === 'fake') return null
+  let origin = origins.get(vaultId)
+  if (origin === undefined) {
+    try {
+      origin = readVaultOrigin(join(defaultRootPath(userId), SECURE_AGENTS_DIR, vaultId))
+    } catch {
+      origin = null
+    }
+    origins.set(vaultId, origin)
+  }
+  return otherBuildOf(origin, helperFlavor)
+}
+
+/** The helper's flavor is needed to tell a vault of another build; asking is cached. */
+async function knowFlavor(): Promise<void> {
+  if (helperFlavor === null) await vaultService.availability().catch(() => null)
 }
 
 /** The vault ref of a vault agent of `userId`, or a `not_vault_agent` error. */
@@ -242,6 +280,11 @@ function refFor(userId: string, agentId: string): { row: AgentRow; ref: VaultRef
   const row = typeof agentId === 'string' ? agentRepo.getOwned(userId, agentId) : undefined
   const ref = row ? vaultRefOf(row) : null
   if (!row || !ref) throw new VaultError('not_vault_agent', 'That agent is not in a vault.')
+  const scope = callScope.getStore()
+  if (scope) {
+    scope.userId = userId
+    scope.vaultId = ref.vaultId
+  }
   return { row, ref }
 }
 
@@ -261,7 +304,8 @@ function toStatus(row: AgentRow, ref: VaultRef): VaultStatusDto {
     egress: summary?.egress ?? { hosts: [] },
     createdAt: summary?.createdAt ?? row.createdAt.getTime(),
     imageVersion: summary?.imageVersion ?? '',
-    error: summary?.error ?? null
+    error: summary?.error ?? null,
+    otherBuild: summary?.state === 'tampered' ? otherBuildFor(row.userId, ref.vaultId) : null
   }
 }
 
@@ -355,12 +399,25 @@ export const vaultService = {
 
   /** Run `fn` and answer as data: a thrown code would not survive IPC. */
   async result<T>(fn: () => Promise<T> | T): Promise<VaultResult<T>> {
+    const scope: { userId?: string; vaultId?: string } = {}
     try {
-      return { ok: true, data: await fn() }
+      return { ok: true, data: await callScope.run(scope, async () => fn()) }
     } catch (error) {
       const failure = asVaultError(error)
+      // The helper's reason ("signature does not match") reads as tampering;
+      // for a vault another build made, say that instead, on every surface.
+      if (failure.code === 'tampered' && scope.userId && scope.vaultId) {
+        await knowFlavor()
+        const origin = otherBuildFor(scope.userId, scope.vaultId)
+        if (origin) return { ok: false, code: failure.code, message: vaultOtherBuildText(origin) }
+      }
       return { ok: false, code: failure.code, message: failure.message }
     }
+  },
+
+  /** For a vault agent's list entry: see {@link VaultStatusDto.otherBuild}. Never asks the helper. */
+  otherBuild(userId: string, vaultId: string): HelperFlavor | null {
+    return this.stateOf(vaultId) === 'tampered' ? otherBuildFor(userId, vaultId) : null
   },
 
   /** Whether vaults can be used here, and why not. Cached until the backend changes or `refresh`. */
@@ -377,6 +434,7 @@ export const vaultService = {
           try {
             const hello = await backend.hello()
             flavor = hello.flavor
+            helperFlavor = hello.flavor
             helperRootHash = hello.guest.rootHash
           } catch (error) {
             availability = { ok: false, reason: 'helper-missing', detail: error instanceof Error ? error.message : String(error) }
@@ -438,6 +496,7 @@ export const vaultService = {
         summaries.set(summary.vaultId, { ...summaries.get(summary.vaultId), ...summary })
       }
     }
+    if ([...summaries.values()].some((summary) => summary.state === 'tampered')) await knowFlavor()
     return this.list(userId)
   },
 
@@ -450,6 +509,7 @@ export const vaultService = {
     } catch (error) {
       if (!(error instanceof VaultBackendError && error.code === 'not_found')) throw error
     }
+    if (summaries.get(ref.vaultId)?.state === 'tampered') await knowFlavor()
     return toStatus(row, ref)
   },
 
@@ -602,6 +662,7 @@ export const vaultService = {
     destroyedVaults.add(ref.vaultId)
     onLeftUnlocked(ref.vaultId)
     summaries.delete(ref.vaultId)
+    origins.delete(ref.vaultId)
     agentRepo.delete(userId, agentId)
     refreshVaultAgents()
     publishEvent(VAULT_STATE_CHANNEL, { agentId, vaultId: ref.vaultId, state: 'stopped', until: null, lockAfterMs: VAULT_DEFAULT_LOCK_AFTER_MS, error: null } satisfies VaultStateEvent, 'all')
@@ -841,6 +902,8 @@ export const vaultService = {
     eventStates.clear()
     quitDrain = null
     availabilityCache = null
+    helperFlavor = null
+    origins.clear()
     detach?.()
     detach = null
     initialized = false

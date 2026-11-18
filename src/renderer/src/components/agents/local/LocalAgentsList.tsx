@@ -30,6 +30,12 @@ import { useCatalogActions } from '../../../hooks/useCatalogActions'
 import { useListedShareStatus, useShareStatuses } from '../../../hooks/useSharing'
 import { AgentRowMenu } from './AgentRowMenu'
 import { DeleteAgentDialog, RenameAgentDialog, hasTeamVersion } from './AgentDialogs'
+import { VaultAgentRowMenu, type VaultRowAction } from './VaultAgentRowMenu'
+import { DeleteVaultDialog, MoveOutVaultDialog } from './security/LeaveVaultDialogs'
+import { VaultTerminalDialog } from './security/VaultTerminalDialog'
+import { VaultError, useVaultDestroy, useVaultLock, useVaultMoveOut, useVaultStatus, useVaultUnlock, vaultErrorText } from '../../../hooks/useVault'
+import { useToastStore } from '../../../stores/toast.store'
+import { openAgentTab } from '../../../utils/agentNavigation'
 
 /** A row's right-click: where it opened and on which agent. */
 interface RowMenuRequest {
@@ -41,8 +47,30 @@ interface RowMenuRequest {
 
 /** A dialog the row menu opened, by agent id — the DTO is re-read from the list. */
 interface RowDialog {
-  kind: 'rename' | 'delete'
+  /** `vault-*`: a vault agent's row menu (the terminal and the two ways out of the vault). */
+  kind: 'rename' | 'delete' | 'vault-terminal' | 'vault-move-out' | 'vault-destroy'
   agentId: string
+}
+
+/**
+ * A failed vault call from the row menu, as a toast naming the agent and the
+ * action ("Couldn't unlock Ledger: …"): the menu, or the dialog, is gone by
+ * then. A cancelled prompt is the user's answer, not a failure.
+ */
+function toastVaultFailure(error: Error, lead: string): void {
+  if (error instanceof VaultError && error.code === 'denied') return
+  useToastStore.getState().show(`${lead}: ${vaultErrorText(error)}`, { kind: 'error', link: null })
+}
+
+/**
+ * Delete vault for a row: the build that made it from the fresher status when
+ * it has one (the list's copy can predate the helper's flavor), else the list's.
+ */
+function DeleteVaultDialogFor({ agent, ...rest }: { agent: LocalAgentDto } & Omit<Parameters<typeof DeleteVaultDialog>[0], 'agentName' | 'otherBuild'>): React.JSX.Element {
+  const status = useVaultStatus(agent.id).data
+  const state = status?.state ?? agent.vault?.state
+  const otherBuild = state === 'tampered' ? (status?.otherBuild ?? agent.vault?.otherBuild ?? null) : null
+  return <DeleteVaultDialog agentName={agent.name} otherBuild={otherBuild} {...rest} />
 }
 
 /** Same rule as the ⋯ menu: only a kit folder has a team version. */
@@ -138,8 +166,7 @@ function AgentRow({ agent, color, menuOpen, onMenu }: {
       onClick={openPage}
       onContextMenu={(event) => {
         event.preventDefault()
-        // Every item acts on the folder on disk; a vault agent has none here (D6).
-        if (agent.vault) return
+        // A vault agent has no folder here (D6): the list opens its own menu.
         onMenu({ x: event.clientX, y: event.clientY, anchor: event.currentTarget, agent })
       }}
       className={`group flex items-start rounded-md cursor-pointer transition-colors ${
@@ -315,6 +342,66 @@ export function LocalAgentsList(): React.JSX.Element {
   }
   const renameBare = useRenameLocalAgent({ onSuccess: onRenamed })
   const renameKit = useRenameKitAgent({ onSuccess: onRenamed })
+  /**
+   * A vault row menu's actions, owned here for the same reason: the menu
+   * closes before Unlock's Touch ID (which blurs the window), and the list may
+   * unmount before any of these settles. Failures of unlock and lock land in a
+   * toast; the dialogs show their own.
+   */
+  // Read by the hook-level handlers, which outlive this render (and the list):
+  // the agent's name at the time of the pick, and the dialog showing now.
+  const vaultNames = useRef(new Map<string, string>())
+  const rowDialogRef = useRef(rowDialog)
+  rowDialogRef.current = rowDialog
+  // `mounted` (above) says whether the list, and so any dialog, is still on screen.
+  const nameOf = (agentId: string): string => vaultNames.current.get(agentId) ?? 'this agent'
+  /** A dialog's own failure line says it while the dialog shows; once it is gone, a toast does. */
+  const dialogFailure = (kind: RowDialog['kind'], lead: (name: string) => string) => (error: Error, agentId: string): void => {
+    const showing = rowDialogRef.current
+    if (mounted.current && showing?.kind === kind && showing.agentId === agentId) return
+    toastVaultFailure(error, lead(nameOf(agentId)))
+  }
+  const vaultUnlock = useVaultUnlock({ onError: (error, agentId) => toastVaultFailure(error, `Couldn't unlock ${nameOf(agentId)}`) })
+  const vaultLock = useVaultLock({ onError: (error, agentId) => toastVaultFailure(error, `Couldn't lock ${nameOf(agentId)}`) })
+  // Move out keeps the agent's id (it becomes a folder agent again), so its
+  // page stays selected; only a deleted vault takes the selection with it.
+  const vaultMoveOut = useVaultMoveOut({
+    onSuccess: () => setRowDialog(null),
+    onError: dialogFailure('vault-move-out', (name) => `Couldn't move ${name} out of its vault`)
+  })
+  const vaultDestroy = useVaultDestroy({
+    onSuccess: (_data, agentId) => {
+      if (useUIStore.getState().activeLocalAgentId === agentId) setActiveLocalAgentId(null)
+      setRowDialog(null)
+    },
+    onError: dialogFailure('vault-destroy', (name) => `Couldn't delete the vault of ${name}`)
+  })
+  const onVaultAction = (agent: LocalAgentDto, action: VaultRowAction): void => {
+    vaultNames.current.set(agent.id, agent.name)
+    switch (action) {
+      case 'unlock':
+        vaultUnlock.reset()
+        vaultUnlock.mutate(agent.id)
+        return
+      case 'lock':
+        vaultLock.reset()
+        vaultLock.mutate(agent.id)
+        return
+      case 'settings':
+        openAgentTab(agent.id, 'security')
+        return
+      case 'terminal':
+        setRowDialog({ kind: 'vault-terminal', agentId: agent.id })
+        return
+      case 'move-out':
+        vaultMoveOut.reset()
+        setRowDialog({ kind: 'vault-move-out', agentId: agent.id })
+        return
+      case 'destroy':
+        vaultDestroy.reset()
+        setRowDialog({ kind: 'vault-destroy', agentId: agent.id })
+    }
+  }
   // Folder setup is requested only by the folder creation choice. External
   // agents have no local agents-home prerequisite.
 
@@ -427,7 +514,17 @@ export function LocalAgentsList(): React.JSX.Element {
         {managedAgents.length > 0 && renderExternalGroup('Managed', managedAgents)}
       </div>
 
-      {rowMenu && (
+      {rowMenu && rowMenu.agent.vault && (
+        <VaultAgentRowMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          anchor={rowMenu.anchor}
+          agent={rowMenu.agent}
+          onAction={(action) => onVaultAction(rowMenu.agent, action)}
+          onClose={closeRowMenu}
+        />
+      )}
+      {rowMenu && !rowMenu.agent.vault && (
         <RowMenu
           request={rowMenu}
           onRename={() => setRowDialog({ kind: 'rename', agentId: rowMenu.agent.id })}
@@ -452,6 +549,27 @@ export function LocalAgentsList(): React.JSX.Element {
           remove={removeAgent}
           shared={dialogShared}
           onCancel={() => setRowDialog(null)}
+        />
+      )}
+      {rowDialog?.kind === 'vault-terminal' && dialogAgent && (
+        <VaultTerminalDialog key={dialogAgent.id} agentId={dialogAgent.id} agentName={dialogAgent.name} onClose={() => setRowDialog(null)} />
+      )}
+      {rowDialog?.kind === 'vault-move-out' && dialogAgent && (
+        <MoveOutVaultDialog
+          agentName={dialogAgent.name}
+          pending={vaultMoveOut.isPending}
+          error={vaultMoveOut.error}
+          onCancel={() => setRowDialog(null)}
+          onConfirm={() => vaultMoveOut.mutate(dialogAgent.id)}
+        />
+      )}
+      {rowDialog?.kind === 'vault-destroy' && dialogAgent && (
+        <DeleteVaultDialogFor
+          agent={dialogAgent}
+          pending={vaultDestroy.isPending}
+          error={vaultDestroy.error}
+          onCancel={() => setRowDialog(null)}
+          onConfirm={() => vaultDestroy.mutate(dialogAgent.id)}
         />
       )}
       {addAgentDialog !== null && <NewLocalAgentModal initialStep={addAgentDialog} onClose={() => closeAddAgentDialog({ restoreTab: true })} onCatalog={isCinna ? () => { closeAddAgentDialog(); openCatalog() } : undefined} onA2A={() => { closeAddAgentDialog(); setAddingA2A(true) }} onManaged={() => { closeAddAgentDialog(); setManaged(true) }} onCustom={() => { closeAddAgentDialog(); setCustom(true) }} onRemoteAcp={() => { closeAddAgentDialog(); setRemoteAcp(true) }} onCreateFolder={() => {

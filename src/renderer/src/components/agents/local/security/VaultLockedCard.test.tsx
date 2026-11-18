@@ -30,7 +30,7 @@ beforeEach(() => {
   status = {
     agentId: 'folder:alpha', vaultId: 'v1', agentName: 'Alpha', engine: 'claude', state: 'locked', until: null,
     lockAfterMs: 300_000, sizeBytes: 10 * 1024 ** 3, usedBytes: null, egress: { hosts: [] },
-    createdAt: 0, imageVersion: '1.0.0', error: null
+    createdAt: 0, imageVersion: '1.0.0', error: null, otherBuild: null
   }
   details = {
     manifest: { name: 'Alpha', description: 'Balances the books.', example_prompts: ['What is owed?'] },

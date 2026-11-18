@@ -60,15 +60,22 @@ export function guestImagePath(secureAgentsDir: string, pin: VaultGuestPin = gue
 export function guestRootfs(): { ok: true; path: string | null; version: string } | { ok: false; detail: string } {
   const pin = guestPin()
   if (runtimeHost.isPackaged) {
-    if (!pin.published) return { ok: false, detail: 'No vault guest image has been published for this version of Cinna.' }
+    if (!pin.published) return { ok: false, detail: GUEST_IMAGE_UNPUBLISHED }
     return { ok: true, path: null, version: pin.version }
   }
   const path = join(devGuestDir(), 'rootfs.img')
   if (existsSync(path)) return { ok: true, path, version: 'dev' }
-  // Said as the folder a developer knows (`make vault-clean` empties it).
+  // The UI says what is missing, never how to rebuild it: the developer's
+  // hint (which folder, which make target) goes to the log only.
   const where = process.env['CINNA_VAULT_GUEST_DIR'] || 'build/vault-guest'
-  return { ok: false, detail: `No guest image in ${where}: run make vault-image (or make vault-dev-restart).` }
+  logger.warn(`no dev guest image in ${where}: run make vault-image (or make vault-dev-restart)`)
+  return { ok: false, detail: GUEST_IMAGE_MISSING }
 }
+
+/** This version of Cinna pins no published image: no vault can start. */
+export const GUEST_IMAGE_UNPUBLISHED = "The vault system image for this version of Cinna is not available yet, so vaults can't start."
+/** The image this build boots is not on this Mac. */
+export const GUEST_IMAGE_MISSING = "The vault system image is missing, so the vault can't start."
 
 /**
  * The root hash the image to boot was built with: the pin's when packaged,

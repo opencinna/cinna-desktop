@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.hoisted(() => { window.api = { app: { setTheme: async () => {} } } as unknown as typeof window.api })
 import { ExternalAgentPage } from './ExternalAgentPage'
 import { useUIStore } from '../../stores/ui.store'
-import { openAgentTab } from '../dashboards/componentParts'
+import { openAgentTab } from '../../utils/agentNavigation'
 
 /** A cloud agent's page gains Dashboards for agents the profile owns (D6.8, D6.9). */
 

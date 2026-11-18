@@ -21,7 +21,7 @@ import { skillsLackingCredentials, useSkillCredentialPromptStore } from '../../s
 import { useAgentActiveSessions } from '../../hooks/useAgentSessions'
 import { activeSessionSentence, openSessionTitle, runningSessionsOf, useOpenSession } from '../agents/AgentActiveSessionNotice'
 import { useCinnaReauth } from '../../hooks/useAuth'
-import { useVaultUnlock, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
+import { useVaultUnlock, useVaultUnlockFailed, useVaultUnlocking, useVaultUnlockPercent, vaultErrorText } from '../../hooks/useVault'
 import { useEngineLogin } from '../../hooks/useLocalTools'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { RUN_REFERENCE_PATTERN } from '../../../../shared/kit/manifest'
@@ -53,6 +53,8 @@ const SEVERITY: Record<Exclude<AgentReadinessState, 'ok'>, ReadinessSeverity> = 
   contract_too_new: 'danger',
   // The user's own vault, closed on purpose: Unlock opens it.
   vault_locked: 'warning',
+  // Another build's vault, or one that failed its check: nothing here opens it.
+  vault_tampered: 'danger',
   // Per chat (`chat:get`'s `vaultReadiness`), drawn by `vaultOtherChatNotice`.
   vault_other_chat: 'warning'
 }
@@ -182,6 +184,10 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   const unlock = useVaultUnlock()
   // The first unlock after an update downloads the pinned guest image first.
   const unlockPercent = useVaultUnlockPercent(agentId)
+  // From any surface: an unlock the sidebar's menu started shows here too.
+  const unlocking = useVaultUnlocking(agentId)
+  // An Enter that joined another surface's unlock must learn that it failed (ChatInput drops its send-after-unlock).
+  const unlockFailedAnywhere = useVaultUnlockFailed(agentId)
 
   // An earlier failure belongs to the agent and the answer it was shown
   // against; a new target, or a new answer, starts clean.
@@ -206,7 +212,7 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   const vaultLocked = notice.state === 'vault_locked'
   const failure = vaultLocked
     ? unlock.error
-      ? vaultErrorText(unlock.error, 'cancelled at the prompt.')
+      ? lowerSentenceLead(vaultErrorText(unlock.error, 'cancelled at the prompt.'))
       : null
     : loginEngine
     ? loginFailureLead(login.failure)
@@ -230,12 +236,12 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
         // "Unlocking… 100%" from the start, so it never widens (ux_rules rule 1).
         pendingLabel: unlockPercent === null ? 'Unlocking…' : `Unlocking… ${unlockPercent}%`,
         reserveLabel: 'Unlocking… 100%',
-        pending: unlock.isPending,
+        pending: unlocking,
         icon: LockOpen,
         run: () => unlock.mutate(target.id),
         // Opened, not merely answered: an unlock that a lock overtook resolves with `locked`.
         runAsync: () => unlock.mutateAsync(target.id).then((status) => status?.state === 'unlocked', () => false),
-        failed: unlock.isError
+        failed: unlock.isError || unlockFailedAnywhere
       }
     : loginEngine
     ? {
@@ -270,6 +276,14 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
     title: `${readinessTitle(notice)}${suffix}`,
     action
   }
+}
+
+/**
+ * A sentence appended after "Couldn't unlock — " reads on lowercase: only a
+ * lead of "The " or "This " is lowered, so a name ("Cinna", an agent's) never is.
+ */
+export function lowerSentenceLead(text: string): string {
+  return /^(The|This) /.test(text) ? text[0].toLowerCase() + text.slice(1) : text
 }
 
 /** Match settings actions while retaining focus until a warning clears. */
@@ -333,6 +347,7 @@ const ICON: Record<Exclude<AgentReadinessState, 'ok'>, LucideIcon> = {
   invalid: AlertTriangle,
   contract_too_new: AlertTriangle,
   vault_locked: Lock,
+  vault_tampered: AlertTriangle,
   vault_other_chat: SafeIcon
 }
 

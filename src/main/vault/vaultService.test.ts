@@ -446,10 +446,10 @@ describe('vaultService', () => {
       expect(calls.map((c) => c.rootfsPath)).toEqual([join(home, 'build', 'vault-guest', 'rootfs.img'), join(home, 'build', 'vault-guest', 'rootfs.img')])
     })
 
-    it('dev without a guest image: the unlock says which folder and what to run', async () => {
+    it('dev without a guest image: the unlock says the image is missing, without build commands', async () => {
       const { calls } = realLike()
       expect(await vaultService.result(() => vaultService.unlock(USER, AGENT))).toEqual({
-        ok: false, code: 'unavailable', message: 'No guest image in build/vault-guest: run make vault-image (or make vault-dev-restart).'
+        ok: false, code: 'unavailable', message: "The vault system image is missing, so the vault can't start."
       })
       expect(calls).toEqual([])
     })

@@ -146,6 +146,26 @@ describe('readiness of a vault agent, per engine', () => {
     expect(await vaultReadiness(depsFor('codex', { state: 'unlocked', runtimes: codexRuntimes, auth: { codex: { loggedIn: true, method: 'api_key' } }, kv: {} }), info('codex'))).toEqual({ state: 'ok', reason: null })
   })
 
+  it('a tampered vault is not locked: no Unlock, and the reason names the build that made it', async () => {
+    const tampered: Vault = { state: 'tampered', runtimes: codexRuntimes, auth: {}, kv: {} }
+    const otherBuild = vi.fn(async () => 'dev' as const)
+    const deps = { ...depsFor('codex', tampered), otherBuild }
+    expect(await vaultReadiness(deps, info('codex'), 'u')).toEqual({
+      state: 'vault_tampered', reason: "This vault was made by a development build of Cinna. This version can't open it: each build keeps its own vault keys."
+    })
+    expect(otherBuild).toHaveBeenCalledWith('u', 'v1')
+    expect(deps.calls).toEqual([])
+    // Tampered for any other reason, or the origin unknown: the plain sentence.
+    expect(await vaultReadiness({ ...depsFor('codex', tampered), otherBuild: async () => null }, info('codex'), 'u'))
+      .toEqual({ state: 'vault_tampered', reason: "This vault failed its integrity check and can't be opened." })
+    expect(await vaultReadiness({ ...depsFor('codex', tampered), otherBuild: async () => { throw new Error('boom') } }, info('codex'), 'u'))
+      .toEqual({ state: 'vault_tampered', reason: "This vault failed its integrity check and can't be opened." })
+    // A turn planned on it fails with the same sentence, not "locked".
+    expect(await createVaultCodexLauncher(deps).plan(ctx)).toEqual({
+      error: "This vault was made by a development build of Cinna. This version can't open it: each build keeps its own vault keys."
+    })
+  })
+
   it('refuses a runtime that is not the one this app pins: another version, other bytes, or not the one vaultd runs', async () => {
     const auth = { codex: { loggedIn: true, method: 'api_key' as const } }
     const notPinned = { state: 'not_installed', reason: 'The Codex in this vault isn’t the one this app pins. Use Update dependencies on the agent’s Security tab.' }

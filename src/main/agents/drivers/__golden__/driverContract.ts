@@ -161,6 +161,7 @@ const READINESS_STATES: Record<AgentReadinessState, true> = {
   not_logged_in: true,
   unreachable: true,
   vault_locked: true,
+  vault_tampered: true,
   vault_other_chat: true
 }
 

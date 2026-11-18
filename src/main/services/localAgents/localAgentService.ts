@@ -2477,7 +2477,7 @@ function vaultAgentDto(row: AgentRow, ref: { vaultId: string; engine: LocalAgent
     desktop: desktopStateService.summarize(emptyDesktopState()),
     stamps: {},
     scannedAt: Date.now(),
-    vault: { vaultId: ref.vaultId, engine: ref.engine, state: vaultService.stateOf(ref.vaultId), ...vaultDisplayLaunch(row), hostCopy: hasHostCopy(row) }
+    vault: { vaultId: ref.vaultId, engine: ref.engine, state: vaultService.stateOf(ref.vaultId), ...vaultDisplayLaunch(row), hostCopy: hasHostCopy(row), otherBuild: vaultService.otherBuild(row.userId, ref.vaultId) }
   }
 }
 

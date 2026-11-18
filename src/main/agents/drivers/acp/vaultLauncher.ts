@@ -30,7 +30,8 @@
 import { createHash } from 'node:crypto'
 import type { AgentReadiness } from '../../../../shared/agentDrivers'
 import type { ClaudeApproval } from '../../../../shared/engine'
-import { VAULT_ENGINE_LOGIN, type RuntimeKind, type VaultEngine, type VaultState } from '../../../../shared/vault/protocol'
+import { VAULT_ENGINE_LOGIN, type HelperFlavor, type RuntimeKind, type VaultEngine, type VaultState } from '../../../../shared/vault/protocol'
+import { vaultTamperedText } from '../../../../shared/vault/types'
 import type { VaultdClient } from '../../../vault/vaultdClient'
 import { parseLaunchSettings, VAULT_KV_INSTRUCTIONS, VAULT_KV_LAUNCH, VAULT_LAUNCH_FALLBACK, type VaultLaunchSettings } from '../../../vault/vaultAgentState'
 import { airClientMeta } from './acpActivity'
@@ -65,9 +66,31 @@ export interface VaultLauncherDeps {
    * the vault that is not this, by version and sha256, is never started.
    */
   pins(engine: VaultEngine): RuntimePin[]
+  /**
+   * For a `tampered` vault: the build of Cinna that made it, when that is why
+   * this one can't open it (`vaultService.otherBuild`). Absent: never said.
+   */
+  otherBuild?(userId: string, vaultId: string): Promise<HelperFlavor | null> | HelperFlavor | null
 }
 
 export const VAULT_LOCKED_REASON = 'This agent is in a vault that is locked. Unlock it to send a message.'
+
+/**
+ * Why a `tampered` vault can't take a turn, said in the sentence itself: the
+ * build that made it ({@link vaultTamperedText}), or that it failed its check.
+ * Never throws: a failed origin read says the plain sentence.
+ */
+async function tamperedReason(deps: VaultLauncherDeps, userId: string | undefined, vaultId: string): Promise<string> {
+  let otherBuild: HelperFlavor | null = null
+  if (userId !== undefined && deps.otherBuild) {
+    try {
+      otherBuild = await deps.otherBuild(userId, vaultId)
+    } catch {
+      otherBuild = null
+    }
+  }
+  return vaultTamperedText(otherBuild)
+}
 /** Antigravity in a vault signs in with a Gemini API key; its Google sign-in cannot be completed there (no browser, no host login handed in). */
 export const VAULT_ANTIGRAVITY_SIGNED_OUT = 'Set a Gemini API key; Google sign-in isn’t supported inside a vault yet.'
 export const VAULT_OPENCODE_NO_PROVIDER = 'This agent’s model is not an OpenAI or Anthropic one, the only providers OpenCode can reach inside a vault.'
@@ -140,7 +163,9 @@ export async function readVaultLaunchFacts(deps: VaultLauncherDeps, ctx: { userI
   const info = deps.vaultOf(ctx.userId, ctx.agentId)
   if (!info) return { error: 'This agent is not in a vault.' }
   if (info.engine !== engine) return { error: `This agent runs on ${VAULT_ENGINE_NAME[info.engine]}, not ${VAULT_ENGINE_NAME[engine]}.` }
-  if (deps.stateOf(info.vaultId) !== 'unlocked') return { error: VAULT_LOCKED_REASON }
+  const state = deps.stateOf(info.vaultId)
+  if (state === 'tampered') return { error: await tamperedReason(deps, ctx.userId, info.vaultId) }
+  if (state !== 'unlocked') return { error: VAULT_LOCKED_REASON }
   let runtimes: RuntimeRow[]
   let auth: { loggedIn: boolean; method?: string; keyName?: string }
   let instructions: string | null = null
@@ -166,9 +191,15 @@ export async function readVaultLaunchFacts(deps: VaultLauncherDeps, ctx: { userI
   return { info, runtime, auth, launch, instructions }
 }
 
-/** Readiness of a vault agent: locked, runtime missing, signed out, else ok. Never throws. */
-export async function vaultReadiness(deps: VaultLauncherDeps, info: VaultAgentLaunchInfo): Promise<AgentReadiness> {
-  if (deps.stateOf(info.vaultId) !== 'unlocked') return { state: 'vault_locked', reason: VAULT_LOCKED_REASON }
+/**
+ * Readiness of a vault agent: tampered (no Unlock: it would only fail),
+ * locked, runtime missing, signed out, else ok. `userId` lets a tampered
+ * vault say which build made it. Never throws.
+ */
+export async function vaultReadiness(deps: VaultLauncherDeps, info: VaultAgentLaunchInfo, userId?: string): Promise<AgentReadiness> {
+  const state = deps.stateOf(info.vaultId)
+  if (state === 'tampered') return { state: 'vault_tampered', reason: await tamperedReason(deps, userId, info.vaultId) }
+  if (state !== 'unlocked') return { state: 'vault_locked', reason: VAULT_LOCKED_REASON }
   try {
     const client = await deps.client(info.vaultId)
     const { runtimes } = await client.request('runtime.status', {})
