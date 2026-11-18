@@ -124,6 +124,16 @@ the API:
    Anywhere else: `POST <base_url>/_cinna/improvement-requests` with the same
    bearer (a cloud entry also carries the URL as `improvement_requests_url`).
    Limits: 10 a day per API, 30 a day overall; a 429 carries `Retry-After`.
+   From the account workspace you can instead use the CLI, which files with the linked
+   connection so the token stays on the platform: `cinna agent-api connections <agent>`
+   shows each connection's `improvement_requests_url` and `sdk_lookup`, and
+   `cinna agent-api request file|list` files or lists requests (planned verb names,
+   CLI >= next release).
+   A 403 "requires the '<scope>' scope" through a shared connection means the
+   producer's owner must add that scope to the connection (they can choose scopes on
+   it), or grant you; the `scopes` the connections listing reports are the effective
+   set and `connection_scopes` is what the connection itself adds. A call through a
+   scoped connection carries those scopes even when the caller is anonymous.
 4. Later, `api.capability_requests()` (or `GET` the same URL) lists your requests
    with `status` and the owner's `resolution_note`. When one is `completed`,
    re-read the spec before writing code against the new capability.

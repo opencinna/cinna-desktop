@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `adcf3a9600be76c7`.
+Your current kit is version `9f3cbbda73941f61`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,26 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.25.0 — agent API connections carry scopes
+
+Additive. Every 1.x folder stays valid.
+
+- **`guides/04-credentials.md`** — a connection can carry owner-chosen scopes that
+  every caller through it holds, on top of their own grant, also when the caller
+  is anonymous. A 403 "requires the '<scope>' scope" through a connection means
+  asking the producer's owner to add the scope to the connection, or to grant
+  you. `cinna agent-api connections` reports the effective `scopes` and, separately,
+  `connection_scopes`.
+
+## 1.24.2 — the CLI reaches agent API connections
+
+Wording only. Every 1.x folder stays valid.
+
+- **`guides/04-credentials.md`** — a note that capability requests and agent
+  API connections can also be reached through `cinna agent-api connections` and
+  `cinna agent-api request file|list`, which use the account CLI routes under
+  `/cli/account/agents/{agent_id}/agent-api-connections`.
 
 ## 1.24.1 — the capability request body, stated exactly
 

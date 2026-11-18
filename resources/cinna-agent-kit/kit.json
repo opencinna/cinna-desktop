@@ -1,6 +1,6 @@
 {
-  "kit_version": "adcf3a9600be76c7",
-  "contract_version": "1.24.1",
+  "kit_version": "9f3cbbda73941f61",
+  "contract_version": "1.25.0",
   "platform_url": "https://opencinna.io",
   "kit_base_url": "https://opencinna.io/api/agent-start",
   "start_url": "https://opencinna.io/agent-start",
