@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `9f3cbbda73941f61`.
+Your current kit is version `73fbf33a3bce0c38`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,14 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.25.1 — the agent API CLI verbs are released
+
+Wording only. Every 1.x folder stays valid.
+
+- **`guides/04-credentials.md`** — `cinna agent-api request file|list` is no
+  longer described as planned verb names for a future CLI; these verbs need
+  cinna-cli 0.7.0 or newer.
 
 ## 1.25.0 — agent API connections carry scopes
 
