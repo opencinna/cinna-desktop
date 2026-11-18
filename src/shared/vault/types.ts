@@ -4,6 +4,10 @@
  */
 import type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultLaunchProvider, VaultState } from './protocol'
 
+import type { CinnaAgentManifest } from '../kit/manifest'
+import type { ClaudeApproval } from '../engine'
+import type { LocalAgentCredentialState, LocalAgentPromptKind, LocalAgentStatusSummary } from '../localAgents'
+
 export type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultLaunchProvider, VaultState }
 
 /**
@@ -315,6 +319,26 @@ export interface VaultHostCopyDto {
 
 export interface VaultSecretListDto {
   names: string[]
+}
+
+/**
+ * What a vault agent's settings page shows from inside its vault, read in one
+ * go while it is unlocked (`vault:agent-details`). Read-only: nothing here is
+ * saved back. Key names only, never values.
+ */
+export interface VaultAgentDetailsDto {
+  /** `cinna-agent.json` as the folder agent's `manifest`; `{}` when missing or unreadable. */
+  manifest: CinnaAgentManifest
+  /** The manifest's `description`, '' when none. */
+  description: string
+  /** `STATUS.md`, parsed as the Status card reads it; null when the agent has written none. */
+  status: LocalAgentStatusSummary | null
+  /** The kit prompt documents; null for one the folder does not have. */
+  docs: Record<LocalAgentPromptKind, { relPath: string; text: string } | null>
+  /** Each declared credential slot, judged against the vault folder's `credentials/.env` names. */
+  credentials: LocalAgentCredentialState[]
+  /** How the vault launches the agent (`cinna.launch`): its approval mode, model and sealed or native launch. */
+  launch: { kind: 'kit' | 'bare'; model: string | null; approval: ClaudeApproval }
 }
 
 export interface VaultEngineAuthDto {

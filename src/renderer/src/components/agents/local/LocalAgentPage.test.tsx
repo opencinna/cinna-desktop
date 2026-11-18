@@ -48,6 +48,11 @@ vi.mock('../../../stores/ui.store', () => ({
 let AGENT: LocalAgentDto
 
 vi.mock('../../../hooks/useLocalAgents', () => ({
+  // `useAgentGrants` (useVault) builds on these for any agent, vault or not.
+  LOCAL_AGENTS_KEY: ['local-agents'],
+  localAgentKey: (id: string) => ['local-agents', id],
+  localAgentGrantsKey: (id: string) => ['local-agent-grants', id],
+  useForgetAgentGrants: () => ({ mutate: vi.fn(), isPending: false }),
   useLocalAgent: () => ({ data: AGENT, isLoading: false, error: null }),
   // The page's empty placeholder branches on whether there is an agents folder
   // at all; with one, it reads as it always did.
@@ -133,6 +138,7 @@ vi.mock('./ManifestCards', () => ({
   ExamplePromptsCard: marker('prompts-card')
 }))
 vi.mock('./PromptDocCard', () => ({
+  KIT_PROMPT_CARDS: [{ prompt: 'workflow' }, { prompt: 'entrypoint' }, { prompt: 'refiner' }],
   PromptDocCard: ({ prompt }: { prompt: string }) =>
     createElement('div', { 'data-marker': `doc-${prompt}` }, `doc-${prompt}`)
 }))
@@ -145,7 +151,12 @@ vi.mock('./ReadOnlyCards', () => ({
   StatusCard: marker('status-card')
 }))
 vi.mock('./FolderTab', () => ({ FolderTab: marker('folder-tab') }))
-vi.mock('./ServiceCredentialsTab', () => ({ ServiceCredentialsTab: marker('credentials-tab') }))
+vi.mock('./ServiceCredentialsTab', () => ({
+  ServiceCredentialsTab: marker('credentials-tab'),
+  VaultCredentialsTab: marker('vault-credentials-tab')
+}))
+// Its locked / reading / read branches are pinned in `security/VaultLockedCard.test.tsx`.
+vi.mock('./VaultOverview', () => ({ VaultOverview: marker('vault-overview') }))
 vi.mock('./PermissionsCard', () => ({ PermissionsCard: marker('permissions-card') }))
 vi.mock('./security/AgentVaultSection', () => ({ AgentVaultSection: marker('agent-vault-section') }))
 const addonsBadge: { count: number; problems: number; skills?: number } = { count: 0, problems: 0 }
@@ -220,6 +231,29 @@ describe('LocalAgentPage — an agent in a vault', () => {
     const names = screen.getAllByRole('tab').map((tab) => (tab.textContent ?? '').replace(/\d+$/, ''))
     expect(names).toContain('Security')
     for (const gone of ['Commands', 'Schedules', 'Dashboards', 'Folder']) expect(names).not.toContain(gone)
+  })
+
+  it('drops Addons and Tasks too: no connectors and no task queue run for an agent in a vault', () => {
+    renderPage(vaulted())
+    const names = screen.getAllByRole('tab').map((tab) => (tab.textContent ?? '').replace(/\d+$/, ''))
+    expect(names).toEqual(expect.arrayContaining(['Overview', 'Credentials', 'Security']))
+    expect(names).not.toContain('Addons')
+    expect(names).not.toContain('Tasks')
+    cleanupPage()
+    renderPage(agent())
+    const host = screen.getAllByRole('tab').map((tab) => (tab.textContent ?? '').replace(/\d+$/, ''))
+    expect(host).toEqual(expect.arrayContaining(['Addons', 'Tasks']))
+  })
+
+  it('reads Overview and Credentials from the vault, never the folder cards', () => {
+    renderPage(agent({ path: '', description: '', vault: { vaultId: 'v1', state: 'locked', engine: 'claude' } } as Partial<LocalAgentDto>))
+    expect(screen.getByText('vault-overview')).toBeTruthy()
+    for (const card of ['status-card', 'description-card', 'prompts-card', 'doc-workflow']) expect(screen.queryByText(card)).toBeNull()
+    // Its Overview is read-only, so the header does not invite adding a description there.
+    expect(screen.queryByText(/No description yet/)).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: 'Credentials' }))
+    expect(screen.getByText('vault-credentials-tab')).toBeTruthy()
+    expect(screen.queryByText('credentials-tab')).toBeNull()
   })
 
   it('draws a host agent without the lock and with its folder actions', () => {

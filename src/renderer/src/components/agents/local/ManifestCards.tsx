@@ -31,8 +31,17 @@ function SavingHint({ saving }: { saving: boolean }): React.JSX.Element | null {
   return <span className="text-[10px] text-[var(--color-text-muted)]">Saving…</span>
 }
 
+/**
+ * `readOnly`: a vault agent's manifest, read from inside its vault (`agent`
+ * then carries that manifest): shown, not edited, nothing to reveal.
+ */
+interface ManifestCardProps {
+  agent: LocalAgentDto
+  readOnly?: boolean
+}
+
 /** What the agent is for, in one sentence. Also the AI draft's only input. */
-export function DescriptionCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+export function DescriptionCard({ agent, readOnly = false }: ManifestCardProps): React.JSX.Element {
   const openPath = useOpenAgentPath()
   const snapshot = useManifestSnapshot(agent, agent.description)
   const toUpdate = useCallback(
@@ -53,7 +62,7 @@ export function DescriptionCard({ agent }: { agent: LocalAgentDto }): React.JSX.
     <AgentCard
       title="Description"
       file={MANIFEST_FILE}
-      onReveal={() => openPath.mutate({ agentId: agent.id, relPath: MANIFEST_FILE })}
+      onReveal={readOnly ? undefined : () => openPath.mutate({ agentId: agent.id, relPath: MANIFEST_FILE })}
       actions={<SavingHint saving={editor.isSaving} />}
     >
       <InlineFileEditor
@@ -61,6 +70,8 @@ export function DescriptionCard({ agent }: { agent: LocalAgentDto }): React.JSX.
         markdown={false}
         minRows={2}
         placeholder="One sentence: what this agent does, and for whom."
+        readOnly={readOnly}
+        missingNote={readOnly ? 'No description.' : undefined}
       />
     </AgentCard>
   )
@@ -70,7 +81,7 @@ export function DescriptionCard({ agent }: { agent: LocalAgentDto }): React.JSX.
  * How this agent is found: the prompts offered in the composer, and the
  * sentence another agent reads when deciding whether to route work here.
  */
-export function ExamplePromptsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+export function ExamplePromptsCard({ agent, readOnly = false }: ManifestCardProps): React.JSX.Element {
   const openPath = useOpenAgentPath()
   const prompts = useMemo(
     () => formatExamplePrompts(agent.manifest.example_prompts),
@@ -130,18 +141,23 @@ export function ExamplePromptsCard({ agent }: { agent: LocalAgentDto }): React.J
     <AgentCard
       title="Example prompts"
       file={MANIFEST_FILE}
-      onReveal={() => openPath.mutate({ agentId: agent.id, relPath: MANIFEST_FILE })}
+      onReveal={readOnly ? undefined : () => openPath.mutate({ agentId: agent.id, relPath: MANIFEST_FILE })}
       actions={<SavingHint saving={promptsEditor.isSaving || triggerEditor.isSaving} />}
     >
-      <div className="mb-2 text-[10px] text-[var(--color-text-muted)]">
-        One per line. These are the <code>#</code> prompts offered when this agent is picked in a
-        chat.
-      </div>
+      {/* How to edit the list: nothing to say where it can't be edited. */}
+      {!readOnly && (
+        <div className="mb-2 text-[10px] text-[var(--color-text-muted)]">
+          One per line. These are the <code>#</code> prompts offered when this agent is picked in a
+          chat.
+        </div>
+      )}
       <InlineFileEditor
         editor={promptsEditor}
         markdown={false}
         minRows={3}
         placeholder="Add an example prompt a user would actually type."
+        readOnly={readOnly}
+        missingNote={readOnly ? 'No example prompts.' : undefined}
       />
 
       <div className="mt-4 border-t border-[var(--color-border)] pt-3">
@@ -155,6 +171,8 @@ export function ExamplePromptsCard({ agent }: { agent: LocalAgentDto }): React.J
           markdown={false}
           minRows={2}
           placeholder="Route here when…"
+          readOnly={readOnly}
+          missingNote={readOnly ? 'No router trigger.' : undefined}
         />
       </div>
     </AgentCard>

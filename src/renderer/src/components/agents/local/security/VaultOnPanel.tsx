@@ -42,7 +42,7 @@ import {
 import { AnimatedCollapse } from '../../../ui/AnimatedCollapse'
 import { TypeNameConfirmDialog, VaultConfirmDialog } from './VaultDialog'
 import { VaultTerminalDialog } from './VaultTerminalDialog'
-import { GB, STATE_LABEL, formatBytes, isHostPattern, isSecretName, lockAfterLabel, sizeLimitProblem, unlockedLabel, VAULT_ENGINE_NAME } from './vaultText'
+import { GB, LOCKED_VALUE, STATE_LABEL, formatBytes, isHostPattern, isSecretName, lockAfterLabel, sizeLimitProblem, unlockedLabel, VAULT_ENGINE_NAME } from './vaultText'
 
 const APPROVAL = 'Waiting for approval…'
 const ENGINE_NAME = VAULT_ENGINE_NAME
@@ -597,8 +597,6 @@ function NetworkRow({
     </VaultRow>
   )
 }
-
-const LOCKED_VALUE = 'Unlock the vault to see this.'
 
 function EngineLoginRow({
   agentId,

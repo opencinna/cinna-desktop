@@ -13,11 +13,20 @@ import {
   type VaultSwitchEngineOptions,
   type VaultResult,
   type VaultStateEvent,
-  type VaultStatusDto
+  type VaultStatusDto,
+  type LocalAgentVaultInfo,
+  type VaultAgentDetailsDto
 } from '../../../shared/vault/types'
 import { composerDraftSurface, useComposerDraftStore } from '../stores/composerDraft.store'
 import { useFilePreviewStore } from '../stores/filePreview.store'
-import { LOCAL_AGENTS_KEY, localAgentKey, type LocalAgentsSnapshot } from './useLocalAgents'
+import {
+  LOCAL_AGENTS_KEY,
+  localAgentKey,
+  useForgetAgentGrants,
+  useLocalAgentGrants,
+  type LocalAgentsSnapshot
+} from './useLocalAgents'
+import type { StoredPermissionGrant } from '../../../shared/localAgentRequests'
 import { agentFileRefsKey } from './useAgentFileRefs'
 
 /**
@@ -314,6 +323,75 @@ export function useVaultDeleteSecret() {
       void qc.invalidateQueries({ queryKey: vaultDetailKey(vars.agentId, 'engine-auth') })
     }
   )
+}
+
+/**
+ * A vault agent's *Always allow* grants, read from the vault. Kept under its
+ * own vault key, never a folder agent's, and, like the secrets, only asked
+ * while the vault is open: a lock disables the query (the page shows the
+ * locked phrase rather than the rows it last read). A vault refusal is an
+ * answer, never retried; anything else once.
+ */
+export function useVaultGrants(agentId: string | null, enabled = true) {
+  return useQuery<StoredPermissionGrant[]>({
+    queryKey: vaultDetailKey(agentId ?? '', 'grants'),
+    queryFn: async () => unwrapVault(await vaultApi()!.grants(agentId!)),
+    enabled: enabled && !!agentId && !!vaultApi(),
+    retry: (failures, error) => !(error instanceof VaultError) && failures < 1
+  })
+}
+/** Revoke one grant (`key`) or all; the list left is written straight into the cache. */
+export function useVaultForgetGrants() {
+  return useVaultMutation(
+    (api, vars: { agentId: string; key?: string }) => api.forgetGrant(vars.agentId, vars.key ?? null),
+    (qc, vars, grants) => {
+      qc.setQueryData(vaultDetailKey(vars.agentId, 'grants'), grants)
+    }
+  )
+}
+
+/**
+ * A vault agent's manifest, status, prompts, credential names and launch
+ * settings, read from inside its vault (the folder agent's DTO carries these
+ * from the folder; a vault agent's has none). Asked only while the vault is
+ * `open`: a lock disables the query and keeps what it last read, so an
+ * unlock shows it at once while it reads again. A vault refusal (`locked`,
+ * `not_vault_agent`, …) is an answer, never retried; anything else once.
+ */
+export function useVaultAgentDetails(agentId: string | null, open: boolean) {
+  return useQuery<VaultAgentDetailsDto>({
+    queryKey: vaultDetailKey(agentId ?? '', 'agent-details'),
+    queryFn: async () => unwrapVault(await vaultApi()!.agentDetails(agentId!)),
+    enabled: open && !!agentId && !!vaultApi(),
+    retry: (failures, error) => !(error instanceof VaultError) && failures < 1
+  })
+}
+
+/** Whether a vault agent's vault is open now: the live status, else the DTO's copy. False for any other agent. */
+export function useVaultOpen(agent: { id: string; vault?: LocalAgentVaultInfo | null } | null | undefined): boolean {
+  const vault = agent?.vault ?? null
+  const status = useVaultStatus(vault ? agent!.id : null)
+  return vault !== null && (status.data?.state ?? vault.state) === 'unlocked'
+}
+
+/**
+ * An agent's *Always allow* grants and how to revoke them, from wherever they
+ * are kept: the folder's state file, or the vault. `locked` is a vault agent
+ * whose vault is shut, so nothing can be read: the page shows no rows then, even
+ * though the last ones read stay in `data`.
+ */
+export function useAgentGrants(agent: { id: string; vault?: LocalAgentVaultInfo | null } | null | undefined) {
+  const inVault = !!agent?.vault
+  const open = useVaultOpen(agent)
+  const local = useLocalAgentGrants(agent && !inVault ? agent.id : null)
+  const vault = useVaultGrants(agent && inVault ? agent.id : null, open)
+  const forgetLocal = useForgetAgentGrants()
+  const forgetVault = useVaultForgetGrants()
+  return {
+    query: inVault ? vault : local,
+    forget: inVault ? forgetVault : forgetLocal,
+    locked: inVault && !open
+  }
 }
 
 export function useVaultEngineAuth(agentId: string | null, enabled = true) {

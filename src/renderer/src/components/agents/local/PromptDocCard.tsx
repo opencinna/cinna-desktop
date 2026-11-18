@@ -9,10 +9,33 @@ import {
   LOCAL_AGENT_DOC_PATHS,
   type BareInstructionsFile,
   type LocalAgentDocKind,
+  type LocalAgentPromptKind,
   type LocalAgentFieldUpdate
 } from '../../../../../shared/localAgents'
 import { AgentCard } from './AgentCard'
 import { InlineFileEditor } from './InlineFileEditor'
+
+/** A kit agent's three prompt cards on Overview, in order: one list for the folder and the vault Overview. */
+export const KIT_PROMPT_CARDS: { prompt: LocalAgentPromptKind; title: string; hint: string; placeholder: string }[] = [
+  {
+    prompt: 'workflow',
+    title: 'Workflow prompt',
+    hint: 'This document is the agent: it is loaded as the system prompt for every conversation.',
+    placeholder: 'Describe what this agent does, step by step, addressed to the agent.'
+  },
+  {
+    prompt: 'entrypoint',
+    title: 'Entrypoint prompt',
+    hint: 'The first message of an unattended run, with nobody there to answer a question.',
+    placeholder: 'One or two self-contained sentences telling the agent what to do.'
+  },
+  {
+    prompt: 'refiner',
+    title: 'Refiner prompt',
+    hint: 'Defaults and required inputs — what to assume when a request does not say.',
+    placeholder: 'List the mandatory inputs and the defaults to fill in.'
+  }
+]
 
 interface PromptDocCardProps {
   agentId: string
@@ -36,6 +59,12 @@ interface PromptDocCardProps {
    * rule 9). Ignored for every other kind, whose path is fixed.
    */
   instructionsFile?: BareInstructionsFile | null
+  /**
+   * The document as read from inside a vault agent's vault (null: the folder
+   * there has none). Given, the card shows it read-only: no folder read, no
+   * editing, no reveal. Absent for every other agent.
+   */
+  readOnlyDoc?: { relPath: string; text: string } | null
 }
 
 /**
@@ -53,9 +82,16 @@ export function PromptDocCard({
   hint,
   placeholder,
   missingNote,
-  instructionsFile = null
+  instructionsFile = null,
+  readOnlyDoc
 }: PromptDocCardProps): React.JSX.Element {
-  const { data: doc, isLoading } = useLocalAgentDoc(agentId, prompt)
+  const readOnly = readOnlyDoc !== undefined
+  // A vault agent's folder is not on this Mac: its text comes from the vault, never from a folder read.
+  const { data: folderDoc, isLoading } = useLocalAgentDoc(readOnly ? null : agentId, prompt)
+  // Memoised on the text: a new snapshot each render would re-seed the editor each render.
+  const vaultText = readOnlyDoc?.text
+  const vaultDoc = useMemo(() => (vaultText === undefined ? undefined : { text: vaultText, stamp: null }), [vaultText])
+  const doc = readOnly ? vaultDoc : folderDoc
   // Collapsed by default: these sit on Overview under the cards that say what
   // the agent is, and a workflow prompt runs to hundreds of lines. Per card and
   // per visit — opening one prompt says nothing about wanting the next one.
@@ -106,7 +142,7 @@ export function PromptDocCard({
     <AgentCard
       title={title}
       file={namesFile ? relPath : undefined}
-      onReveal={namesFile ? () => openPath.mutate({ agentId, relPath }) : undefined}
+      onReveal={namesFile && !readOnly ? () => openPath.mutate({ agentId, relPath }) : undefined}
       actions={
         <>
           {editor.isSaving && (
@@ -144,7 +180,8 @@ export function PromptDocCard({
           onEditStart={() => setExpanded(true)}
           cardTitle={title}
           placeholder={placeholder}
-          missingNote={missingNote}
+          missingNote={readOnly ? 'The agent’s folder in the vault has no such file.' : missingNote}
+          readOnly={readOnly}
         />
       )}
     </AgentCard>

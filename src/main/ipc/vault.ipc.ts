@@ -6,6 +6,7 @@ import { vaultService } from '../vault/vaultService'
 import { moveService } from '../vault/moveService'
 import { openVaultTerminal } from '../vault/vaultTerminal'
 import type {
+  VaultAgentDetailsDto,
   VaultAvailabilityDto,
   VaultEngineAuthDto,
   VaultEngineChoiceDto,
@@ -19,6 +20,7 @@ import type {
   VaultTerminalCommand,
   VaultTerminalEvent
 } from '../../shared/vault/types'
+import type { StoredPermissionGrant } from '../../shared/localAgentRequests'
 
 /**
  * Agent Vault: transport only. Every answer is a `VaultResult` (codes as
@@ -118,6 +120,23 @@ export function registerVaultHandlers(): void {
   ipcHandle('vault:delete-secret', (_event, agentId: string, name: unknown): Promise<VaultResult<void>> => {
     userActivation.requireActivated()
     return vaultService.result(() => vaultService.deleteSecret(getSettingsScopeUserId(), agentId, name))
+  })
+
+  // The agent page's Overview, Credentials and approvals: read from inside the vault, never a host folder.
+  ipcHandle('vault:agent-details', (_event, agentId: string): Promise<VaultResult<VaultAgentDetailsDto>> => {
+    userActivation.requireActivated()
+    return vaultService.result(() => vaultService.agentDetails(getSettingsScopeUserId(), agentId))
+  })
+
+  // The Permissions card's *Always allowed* list: a vault agent's grants are in the vault, not a host file.
+  ipcHandle('vault:grants', (_event, agentId: string): Promise<VaultResult<StoredPermissionGrant[]>> => {
+    userActivation.requireActivated()
+    return vaultService.result(() => vaultService.permissionGrants(getSettingsScopeUserId(), agentId))
+  })
+
+  ipcHandle('vault:forget-grant', (_event, agentId: string, key: unknown): Promise<VaultResult<StoredPermissionGrant[]>> => {
+    userActivation.requireActivated()
+    return vaultService.result(() => vaultService.forgetPermissionGrant(getSettingsScopeUserId(), agentId, key ?? null))
   })
 
   ipcHandle('vault:engine-auth', (_event, agentId: string): Promise<VaultResult<VaultEngineAuthDto>> => {

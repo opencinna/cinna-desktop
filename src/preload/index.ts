@@ -113,6 +113,7 @@ import {
   type VaultAvailabilityDto,
   type VaultChatFilesSweptEvent,
   type VaultEngineAuthDto,
+  type VaultAgentDetailsDto,
   type VaultEngineChoiceDto,
   type VaultFileEntryDto,
   type VaultHostCopyDto,
@@ -621,6 +622,12 @@ const api = {
     /** The value goes into the vault; Cinna keeps nothing. */
     setSecret: (agentId: string, name: string, value: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:set-secret', agentId, name, value),
     deleteSecret: (agentId: string, name: string): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:delete-secret', agentId, name),
+    /** Manifest, status, prompts, credential names and launch settings, read from inside the vault (needs it unlocked). */
+    agentDetails: (agentId: string): Promise<VaultResult<VaultAgentDetailsDto>> => ipcRenderer.invoke('vault:agent-details', agentId),
+    /** The agent's *Always allow* grants, kept in the vault (needs it unlocked). */
+    grants: (agentId: string): Promise<VaultResult<StoredPermissionGrant[]>> => ipcRenderer.invoke('vault:grants', agentId),
+    /** Revokes one grant, or all of them for a null key; answers with what is left. */
+    forgetGrant: (agentId: string, key: string | null): Promise<VaultResult<StoredPermissionGrant[]>> => ipcRenderer.invoke('vault:forget-grant', agentId, key),
     engineAuth: (agentId: string): Promise<VaultResult<VaultEngineAuthDto>> => ipcRenderer.invoke('vault:engine-auth', agentId),
     runtimes: (agentId: string): Promise<VaultResult<VaultRuntimeDto[]>> => ipcRenderer.invoke('vault:runtimes', agentId),
     /** Every vault engine, set up in this vault or not (needs it unlocked). */

@@ -8,6 +8,7 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 import { CredentialAttachModal } from './CredentialAttachModal'
 import { credentialTypeName, credentialTypeTitle } from '../../settings/LocalCredentialForm'
 import { CredentialsCard, useOpenCredentialsFile } from './ReadOnlyCards'
+import { VaultDetailsGate } from './security/VaultLockedCard'
 import { AccountReferenceLabel, CredentialRow, ManageCredentialButton } from '../../settings/CredentialRow'
 import { SettingsButton, SettingsIconButton, SettingsInfoTip, SettingsSection } from '../../settings/SettingsLayout'
 import { accountReference, credentialHealth, credentialManageUrl, credentialOwnership, oauthFlowHealth, type AccountReference } from '../../settings/credentialPresentation'
@@ -135,5 +136,22 @@ export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
       try { credentialResult(await window.api.serviceCredentials.updateHelper(agent.id, helper.data.stamp)); await helper.refetch() } catch (e) { setError(unwrapIpcError(e)) } finally { setPending(false) }
     }}>Update credential helper</SettingsButton><p className="text-[var(--color-text-muted)]">Replaces the older kit reader with support for attached credentials and Agent API keys.</p></div>}
     <CredentialAttachModal open={picking} agentId={agent.id} onClose={() => setPicking(false)} onAttach={attach} />
+  </div>
+}
+
+/**
+ * The Credentials tab of an agent in a vault: its declared slots, judged
+ * against the `.env` names inside the vault and shown read-only (locked: the
+ * one card that says so, with Unlock). Attachments are not offered: those the
+ * agent had were captured into the vault when it moved, and attaching or
+ * detaching here changes nothing it has, which the card's footnote says
+ * (vault.md, service credentials).
+ */
+export function VaultCredentialsTab({ agent }: { agent: LocalAgentDto }) {
+  return <div className="space-y-4 text-[13px]">
+    <VaultDetailsGate agent={agent}>{(details) =>
+      // What became of its attachments is the card's footnote (vault branch), not a section of its own.
+      <CredentialsCard agent={{ ...agent, credentials: details.credentials }} env={null} />
+    }</VaultDetailsGate>
   </div>
 }

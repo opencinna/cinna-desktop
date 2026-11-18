@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { FileText, Loader2, ShieldCheck, X } from 'lucide-react'
+import { useAgentGrants, useVaultAgentDetails, useVaultOpen, vaultErrorText } from '../../../hooks/useVault'
 import {
-  useForgetAgentGrants,
   useHandoversCheck,
-  useLocalAgentGrants,
   useSetClaudeApproval,
   useSetCodexApproval,
   useSetAntigravityApproval,
@@ -33,6 +32,7 @@ import {
   type HandoverSetting
 } from '../../../../../shared/handovers'
 import { handoverAutoOverriddenText, handoverIgnoreText } from '../../../utils/handoverText'
+import { LOCKED_VALUE } from './security/vaultText'
 import { useDefaultRuntime } from '../../../hooks/useEngine'
 import {
   SettingsButton,
@@ -156,12 +156,14 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
     (typeof agent.runtime?.engine === 'string' ? agent.runtime.engine.trim() : '') === '' &&
     (agent.runtime?.credential ?? '') === '' &&
     (agent.runtime?.model ?? '') === ''
-  const { data: grants } = useLocalAgentGrants(agent.id)
+  // A vault agent's grants are in its vault (read only while it is open); any
+  // other agent's in its state file.
   // Owned by the card rather than by a row: a row unmounts the moment the
   // grant it renders is forgotten, and a mutation owned there would drop its
   // own error handler with it (`ux_rules.md` §5, and the same lesson as the
   // delete dialog).
-  const forget = useForgetAgentGrants()
+  const { query: grantsQuery, forget, locked } = useAgentGrants(agent)
+  const grants = grantsQuery.data
   const [error, setError] = useState<string | null>(null)
   // Which row's × was pressed, so the spinner replaces *that* icon rather than
   // every button dimming together — a revoke that says nothing about which row
@@ -173,8 +175,13 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
   // positive claim that this agent has no standing permissions — for the round
   // trip it takes to find out, for an agent that has four (ux_rules §1: reserve
   // the space or don't show it).
-  const loading = grants === undefined
-  const rows = grants ?? []
+  // A failed read is not a read in progress: it says why, instead of "Reading…" for good.
+  const readError = !locked && grants === undefined && grantsQuery.error ? unwrapIpcError(grantsQuery.error) : null
+  const loading = grants === undefined && !locked && readError === null
+  // Locked means nothing read before the lock is shown: the rows a vault
+  // agent's query keeps in its cache may be stale, and an × that cannot act
+  // would sit beside them with no reason given.
+  const rows = locked ? [] : grants ?? []
   // Named, not merely announced: "some of these rules may be wrong" tells the
   // user the paragraph above is unreliable and nothing else. The manifest is
   // already on the page, so the keys cost nothing to read (ux_rules §7 — a hint
@@ -269,7 +276,11 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
             </SettingsButton>
           )}
         </div>
-        {loading ? (
+        {locked ? (
+          <div className={`mt-1 italic ${NOTE}`}>{LOCKED_VALUE}</div>
+        ) : readError !== null ? (
+          <div role="alert" className="mt-1 text-[13px] text-[var(--color-danger)]">Couldn’t read the grants — {lowerFirst(readError)}</div>
+        ) : loading ? (
           <div className={`mt-1 italic ${NOTE}`}>Reading…</div>
         ) : rows.length === 0 ? (
           <div className={`mt-1 italic ${NOTE}`}>
@@ -297,7 +308,7 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
             {onClaude ? 'on the default setting' : 'which is asked again'}.
           </div>
         )}
-        {loading || rows.length === 0 ? null : (
+        {rows.length === 0 ? null : (
           <ul className="mt-2 space-y-2">
             {rows.map((grant) => (
               <li key={grant.key} className="flex items-start gap-2">
@@ -513,6 +524,7 @@ function ClaudeApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element
         regardless and the transcript says so.
       </p>
 
+      {agent.vault ? <VaultApproval agent={agent} labels={{ auto: 'Automatic', ask: 'Ask every time' }} /> : (
       <div className="mt-3">
         <div className={settingsDropdownRowClass}>
         <SettingsLabel htmlFor="claude-approval">Approvals</SettingsLabel>
@@ -537,7 +549,39 @@ function ClaudeApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element
           {error}
         </div>
       </div>
+      )}
     </>
+  )
+}
+
+/**
+ * A vault agent's approval mode, as its vault holds it (`cinna.launch`):
+ * shown, not chosen. The host's select saves into a folder this agent does
+ * not have here. Read while the vault is open; while it is locked, the page's
+ * locked phrase, never the mode read before the lock (the Agent Vault section
+ * above has the Unlock).
+ */
+function VaultApproval({ agent, labels }: { agent: LocalAgentDto; labels: Record<ClaudeApproval, string> }): React.JSX.Element {
+  const open = useVaultOpen(agent)
+  const details = useVaultAgentDetails(agent.id, open)
+  const approval = open ? details.data?.launch.approval : undefined
+  const text = !open
+    ? LOCKED_VALUE
+    : approval
+      ? labels[approval]
+      : details.error
+        ? vaultErrorText(details.error)
+        : 'Reading…'
+  return (
+    <div className={`mt-3 ${settingsDropdownRowClass}`} data-vault-approval>
+      <SettingsLabel>Approvals</SettingsLabel>
+      <span
+        className={`truncate text-[13px] ${approval ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}
+        title={approval ? 'Set inside the vault' : text}
+      >
+        {text}
+      </span>
+    </div>
   )
 }
 
@@ -551,6 +595,7 @@ function CodexApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element 
       require approval. Ask for approval sends those requests to this chat; Automatic lets
       Codex’s reviewer decide. Both modes keep the workspace sandbox enabled.
     </p>
+    {agent.vault ? <VaultApproval agent={agent} labels={{ ask: 'Ask for approval', auto: 'Automatic' }} /> : (
     <div className="mt-3">
       <div className={settingsDropdownRowClass}>
       <SettingsLabel htmlFor="codex-approval">Approvals</SettingsLabel>
@@ -567,6 +612,7 @@ function CodexApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element 
       </div>
       <div role="alert" className={ERROR_SLOT} title={error ?? undefined}>{error}</div>
     </div>
+    )}
   </>
 }
 
@@ -588,6 +634,7 @@ function AntigravityApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.El
       without asking (hidden and credential files still ask), and sends anything else to this chat
       first. Automatic runs everything without asking.
     </p>
+    {agent.vault ? <VaultApproval agent={agent} labels={{ ask: 'Ask for approval', auto: 'Automatic' }} /> : (
     <div className="mt-3">
       <div className={settingsDropdownRowClass}>
       <SettingsLabel htmlFor="antigravity-approval">Approvals</SettingsLabel>
@@ -604,6 +651,7 @@ function AntigravityApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.El
       </div>
       <div role="alert" className={ERROR_SLOT} title={error ?? undefined}>{error}</div>
     </div>
+    )}
   </>
 }
 

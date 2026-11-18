@@ -119,8 +119,11 @@ export function CredentialsCard({
   env
 }: {
   agent: LocalAgentDto
-  /** The tab's one `credentials/.env` opener — see {@link useOpenCredentialsFile}. */
-  env: OpenCredentialsFile
+  /**
+   * The tab's one `credentials/.env` opener — see {@link useOpenCredentialsFile}.
+   * Null for a vault agent: its `.env` is inside the vault, read-only here.
+   */
+  env: OpenCredentialsFile | null
 }): React.JSX.Element {
   return (
     <AgentCard
@@ -132,8 +135,8 @@ export function CredentialsCard({
       // and the one outcome a click cannot show for itself — a fallback to the
       // file manager, or a refusal — is said in the line below the card's text.
       revealTitle="Open credentials/.env in your text editor, creating it if it isn't there yet"
-      onReveal={() => env.open('credentials')}
-      revealDisabled={env.pending}
+      onReveal={env ? () => env.open('credentials') : undefined}
+      revealDisabled={env?.pending}
     >
       {agent.credentials.length === 0 ? (
         <div className={EMPTY}>This agent declares no credentials.</div>
@@ -173,10 +176,20 @@ export function CredentialsCard({
         </ul>
       )}
       <div className="mt-3 text-[10px] text-[var(--color-text-muted)]">
-        Values live in <code>credentials/.env</code>, which stays on this machine. Cinna reads only
-        which variable names are set.
+        {env ? (
+          <>
+            Values live in <code>credentials/.env</code>, which stays on this machine. Cinna reads only
+            which variable names are set.
+          </>
+        ) : (
+          <>
+            Values live in <code>credentials/.env</code> inside the vault. Cinna reads only which
+            variable names are set. Attached credentials were captured into the vault when the agent
+            moved in; attaching or detaching now doesn’t change what it has.
+          </>
+        )}
       </div>
-      {env.outcome('credentials')}
+      {env?.outcome('credentials')}
     </AgentCard>
   )
 }
@@ -270,15 +283,18 @@ export function CommandsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   )
 }
 
-/** `app-data/storage/STATUS.md` — what the agent last said about itself. */
-export function StatusCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+/**
+ * `app-data/storage/STATUS.md` — what the agent last said about itself.
+ * `readOnly`: a vault agent's, read from inside its vault; nothing to reveal.
+ */
+export function StatusCard({ agent, readOnly = false }: { agent: LocalAgentDto; readOnly?: boolean }): React.JSX.Element {
   const openPath = useOpenAgentPath()
   const status = agent.status
   return (
     <AgentCard
       title="Status"
       file="app-data/storage/STATUS.md"
-      onReveal={() =>
+      onReveal={readOnly ? undefined : () =>
         openPath.mutate({ agentId: agent.id, relPath: 'app-data/storage/STATUS.md' })
       }
     >

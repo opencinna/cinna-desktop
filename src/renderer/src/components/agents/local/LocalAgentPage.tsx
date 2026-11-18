@@ -1,4 +1,4 @@
-import { ServiceCredentialsTab } from './ServiceCredentialsTab'
+import { ServiceCredentialsTab, VaultCredentialsTab } from './ServiceCredentialsTab'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageSquare, Settings } from 'lucide-react'
 import { SafeIcon } from '../../ui/SafeIcon'
@@ -6,7 +6,6 @@ import { useUIStore } from '../../../stores/ui.store'
 import {
   useDraftLocalAgent,
   useLocalAgent,
-  useLocalAgentGrants,
   useOpenAgentPath,
   useRescanLocalAgents,
   useStampAgentIdentity
@@ -17,6 +16,7 @@ import { describedAs } from '../../../utils/localAgents'
 import { ChatWorkspace } from '../../layout/ChatWorkspace'
 import { RuntimePanel } from './RuntimePanel'
 import { VaultEnginePanel } from './security/VaultEnginePanel'
+import { useAgentGrants } from '../../../hooks/useVault'
 import { AgentsEmptyPane } from './AgentsEmptyPane'
 import { ReadinessStrip } from './ReadinessStrip'
 import { OpenInMenu } from './OpenInMenu'
@@ -24,7 +24,8 @@ import { AgentTypeIcon } from '../AgentTypeIcon'
 import { AgentActionsMenu } from './AgentActionsMenu'
 import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
 import { BareNameCard, BareReadmeCard } from './BareAgentCards'
-import { PromptDocCard } from './PromptDocCard'
+import { KIT_PROMPT_CARDS, PromptDocCard } from './PromptDocCard'
+import { VaultOverview } from './VaultOverview'
 import { CommandsCard, StatusCard } from './ReadOnlyCards'
 import { SecurityTab } from './security/SecurityTab'
 import { FolderTab } from './FolderTab'
@@ -122,7 +123,8 @@ export function LocalAgentPage(): React.JSX.Element {
   const mode = useUIStore((s) => s.agentPageMode)
   const setMode = useUIStore((s) => s.setAgentPageMode)
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
-  const { data: grants } = useLocalAgentGrants(activeLocalAgentId)
+  // From the vault for a vault agent: its grants are not in a host file.
+  const { query: { data: grants }, locked: grantsLocked } = useAgentGrants(agent ?? null)
   const addons = useAddonsBadge(activeLocalAgentId, agent?.skills)
   const tasksBadge = useTasksTabBadge(activeLocalAgentId)
   // From the statuses list the sidebar already holds, so whether the Sharing
@@ -285,7 +287,8 @@ export function LocalAgentPage(): React.JSX.Element {
   const findings = agent.validation.errors.length + agent.validation.warnings.length
   // Only for the badge. The card runs the same query when the tab is open —
   // react-query serves both from one cache entry, so this costs no extra IPC.
-  const grantCount = grants?.length ?? 0
+  // None while a vault is locked: the tab itself shows no rows read before the lock.
+  const grantCount = grantsLocked ? 0 : grants?.length ?? 0
   // A bare folder has no `docs/CLI_COMMANDS.yaml` and never will, so the tab
   // would be permanently empty and would say "no commands" about a file the
   // folder was never asked to have. Every other tab still has something true to
@@ -297,7 +300,8 @@ export function LocalAgentPage(): React.JSX.Element {
   const tabs = TABS.filter(
     (entry) =>
       !(agent.kind === 'bare' && ['commands', 'schedules', 'dashboards'].includes(entry.id)) &&
-      !(inVault && ['commands', 'schedules', 'dashboards', 'folder'].includes(entry.id)) &&
+      // Nor addons (no conductor, no MCP inside, vault_tech.md "Exclusions") or a task queue (taskService refuses it).
+      !(inVault && ['commands', 'schedules', 'dashboards', 'folder', 'addons', 'tasks'].includes(entry.id)) &&
       (entry.id !== 'sharing' || listedShare != null)
   )
   // The selected tab persists across agents, so someone on Commands who clicks
@@ -331,7 +335,8 @@ export function LocalAgentPage(): React.JSX.Element {
               // bare folder states no description anywhere the desktop can
               // write one, so "add one under Overview" would send the user to a
               // tab with no such field (ux_rules rule 7).
-              agent.kind !== 'bare' && (
+              // Nor for a vault agent: its Overview is read-only.
+              agent.kind !== 'bare' && !inVault && (
                 <button
                   type="button"
                   onClick={() => { setMode('settings'); setTab('overview') }}
@@ -553,7 +558,10 @@ export function LocalAgentPage(): React.JSX.Element {
         </nav>
 
         <div role="tabpanel" className="space-y-3">
-          {activeTab === 'credentials' && <ServiceCredentialsTab key={agent.id} agent={agent} />}
+          {/* A vault agent's slots are judged from inside its vault, and it takes no new attachments. */}
+          {activeTab === 'credentials' && (inVault
+            ? <VaultCredentialsTab key={agent.id} agent={agent} />
+            : <ServiceCredentialsTab key={agent.id} agent={agent} />)}
           {activeTab === 'schedules' && <SchedulesTab agentId={agent.id} />}
           {activeTab === 'tasks' && <AgentTasksTab key={agent.id} agent={agent} />}
           {activeTab === 'dashboards' && <AgentDashboardsTab key={agent.id} agent={agent} />}
@@ -570,7 +578,10 @@ export function LocalAgentPage(): React.JSX.Element {
                collapsed to ten lines: a workflow prompt runs to hundreds, and
                six full cards would push everything but the first off screen.
                `key` resets the collapse when the page switches agents. */
-            (agent.kind === 'bare' ? (
+            (inVault ? (
+              // Its folder is inside the vault: read from there, read-only.
+              <VaultOverview key={agent.id} agent={agent} />
+            ) : agent.kind === 'bare' ? (
               <>
                 <BareNameCard agent={agent} />
                 {/* Rendered, not raw: a README is written to be read as
@@ -597,30 +608,9 @@ export function LocalAgentPage(): React.JSX.Element {
                 <StatusCard agent={agent} />
                 <DescriptionCard agent={agent} />
                 <ExamplePromptsCard agent={agent} />
-                <PromptDocCard
-                  key={`${agent.id}:workflow`}
-                  agentId={agent.id}
-                  prompt="workflow"
-                  title="Workflow prompt"
-                  hint="This document is the agent: it is loaded as the system prompt for every conversation."
-                  placeholder="Describe what this agent does, step by step, addressed to the agent."
-                />
-                <PromptDocCard
-                  key={`${agent.id}:entrypoint`}
-                  agentId={agent.id}
-                  prompt="entrypoint"
-                  title="Entrypoint prompt"
-                  hint="The first message of an unattended run, with nobody there to answer a question."
-                  placeholder="One or two self-contained sentences telling the agent what to do."
-                />
-                <PromptDocCard
-                  key={`${agent.id}:refiner`}
-                  agentId={agent.id}
-                  prompt="refiner"
-                  title="Refiner prompt"
-                  hint="Defaults and required inputs — what to assume when a request does not say."
-                  placeholder="List the mandatory inputs and the defaults to fill in."
-                />
+                {KIT_PROMPT_CARDS.map((card) => (
+                  <PromptDocCard key={`${agent.id}:${card.prompt}`} agentId={agent.id} {...card} />
+                ))}
               </>
             ))}
           {activeTab === 'commands' && <CommandsCard agent={agent} />}

@@ -47,6 +47,12 @@ interface InlineFileEditorProps {
    * The textarea still shows the file's own bytes.
    */
   cardTitle?: string
+  /**
+   * Show the text and nothing to edit it with: no click-to-type, no
+   * missing-file note (the caller's `missingNote`, or "Empty.", stands for an
+   * empty text). A vault agent's files, read from inside its vault.
+   */
+  readOnly?: boolean
 }
 
 /**
@@ -110,7 +116,8 @@ export function InlineFileEditor({
   clipped = false,
   onOverflowChange,
   onEditStart,
-  cardTitle
+  cardTitle,
+  readOnly = false
 }: InlineFileEditorProps): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -154,7 +161,7 @@ export function InlineFileEditor({
   const startEditing = (e?: React.MouseEvent): void => {
     // A link opens externally; it is not also a request to edit the file.
     if (e && (e.target as HTMLElement).closest('a')) return
-    if (!editor.canSave) return
+    if (readOnly || !editor.canSave) return
     const rendered = renderedRef.current
     setFloor(rendered ? rendered.getBoundingClientRect().height : undefined)
     // The caret goes where the user clicked. It used to go to the end, which
@@ -243,7 +250,11 @@ export function InlineFileEditor({
         }
       : undefined
 
-  if (!editor.canSave) {
+  if (readOnly && editor.text.trim() === '') {
+    return <div className="text-[10px] italic text-[var(--color-text-muted)]">{missingNote ?? 'Empty.'}</div>
+  }
+
+  if (!readOnly && !editor.canSave) {
     return (
       <div className="text-[10px] text-[var(--color-text-muted)] italic">
         {missingNote ??
@@ -284,7 +295,7 @@ export function InlineFileEditor({
           ref={renderedRef}
           onClick={startEditing}
           style={clipStyle}
-          className="markdown-body cursor-text text-xs leading-relaxed text-[var(--color-text)]"
+          className={`markdown-body ${readOnly ? '' : 'cursor-text '}text-xs leading-relaxed text-[var(--color-text)]`}
         >
           <div ref={contentRef}>
           {/*
@@ -308,7 +319,7 @@ export function InlineFileEditor({
           ref={renderedRef}
           onClick={startEditing}
           style={clipStyle}
-          className="cursor-text whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-text)]"
+          className={`${readOnly ? '' : 'cursor-text '}whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-text)]`}
         >
           <div ref={contentRef}>{editor.text}</div>
         </div>

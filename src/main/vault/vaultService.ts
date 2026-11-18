@@ -36,6 +36,7 @@ import {
   VAULT_CHAT_FILES_SWEPT_CHANNEL,
   VAULT_STATE_CHANNEL,
   VAULT_UNLOCK_PROGRESS_CHANNEL,
+  type VaultAgentDetailsDto,
   type VaultAvailabilityDto,
   type VaultChatFilesSweptEvent,
   type VaultEngineAuthDto,
@@ -59,6 +60,9 @@ import { ensureGuestImage, guestHashMismatch, guestRootfs, pruneGuestImages } fr
 import { sweepVaultChatFiles } from './vaultChatFiles'
 import { vaultLoginProblem } from './engineLoginCheck'
 import { createGuestFileAccess, type VaultFileAccess } from './fileAccess'
+import { vaultAgentState } from './vaultAgentState'
+import { readVaultAgentDetails } from './vaultAgentDetails'
+import type { StoredPermissionGrant } from '../../shared/localAgentRequests'
 
 const logger = createLogger('vault')
 
@@ -663,6 +667,34 @@ export const vaultService = {
   /** The vault ref of a vault agent of `userId`, or `not_vault_agent`. */
   refFor(userId: string, agentId: string): { row: AgentRow; ref: VaultRef } {
     return refFor(userId, agentId)
+  },
+
+  /**
+   * What the agent's settings page shows from inside the vault: manifest,
+   * status, prompts, credential slots (names only) and launch settings.
+   * Refused (`locked`) while the vault is locked; read-only.
+   */
+  async agentDetails(userId: string, agentId: string): Promise<VaultAgentDetailsDto> {
+    const { ref } = refFor(userId, agentId)
+    return readVaultAgentDetails({
+      files: this.files(),
+      vaultId: ref.vaultId,
+      launch: async () => vaultAgentState.launch(await this.client(ref.vaultId))
+    })
+  },
+
+  /** The agent's *Always allow* grants, kept in the vault (refused while it is locked). */
+  async permissionGrants(userId: string, agentId: string): Promise<StoredPermissionGrant[]> {
+    const { ref } = refFor(userId, agentId)
+    return vaultAgentState.listGrants(ref.vaultId, await this.client(ref.vaultId))
+  },
+
+  /** Revoke one grant (`key`) or every one (`null`); answers with what is left. */
+  async forgetPermissionGrant(userId: string, agentId: string, key: unknown): Promise<StoredPermissionGrant[]> {
+    const { ref } = refFor(userId, agentId)
+    if (key !== null && typeof key !== 'string') throw new VaultError('invalid', 'That is not a permission grant.')
+    await this.client(ref.vaultId)
+    return vaultAgentState.forgetGrants(ref.vaultId, () => this.client(ref.vaultId), key)
   },
 
   /** Secret names in the vault; values never leave it. */

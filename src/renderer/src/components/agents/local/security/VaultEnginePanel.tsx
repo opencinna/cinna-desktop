@@ -6,7 +6,8 @@ import {
   type VaultEngine,
   type VaultEngineChoiceDto,
   type VaultMoveProgressEvent,
-  type VaultSwitchStep
+  type VaultSwitchStep,
+  vaultImageDownloadText
 } from '../../../../../../shared/vault/types'
 import {
   VAULT_ENGINE_HOSTS,
@@ -24,10 +25,12 @@ import {
   useVaultSwitchEngine,
   useVaultSwitchingTo,
   useVaultUnlock,
-  useVaultUnlockProgress,
+  useVaultUnlockPercent,
   vaultErrorText
 } from '../../../../hooks/useVault'
 import { FIELD, LABEL, LINE_BUTTON } from '../fieldClasses'
+import { SettingsButton } from '../../../settings/SettingsLayout'
+import { VaultUnlockLabel } from '../../../chat/VaultUnlockLabel'
 import { CANCEL, DIALOG_LABEL, DIALOG_NOTE, DialogFooter, FIELD_BASE, PRIMARY } from '../sharing/ShareDialogs'
 import { VaultDialog } from './VaultDialog'
 import { StepIcon, apiKeyPlaceholder, type StepStatus } from './MoveToVaultDialog'
@@ -69,7 +72,8 @@ export function VaultEnginePanel({ agent }: { agent: LocalAgentDto }): React.JSX
   const switchEngine = useVaultSwitchEngine(agent.id)
   const switchingTo = useVaultSwitchingTo(agent.id)
   const unlock = useVaultUnlock()
-  const unlockDownload = useVaultUnlockProgress(agent.id)
+  const unlockPercent = useVaultUnlockPercent(agent.id)
+  const unlockDownload = unlockPercent === null ? null : vaultImageDownloadText(unlockPercent)
   const [dialog, setDialog] = useState<VaultEngine | null>(null)
   /** OpenCode's provider and model to open the dialog with (Change model…), else its defaults. */
   const [prefill, setPrefill] = useState<{ provider: VaultLaunchProvider; model: string } | null>(null)
@@ -129,15 +133,15 @@ export function VaultEnginePanel({ agent }: { agent: LocalAgentDto }): React.JSX
     : model
       ? `model ${model}`
       : 'the CLI’s default model'
+  // Unlock is the card's own action, a button on its right (Booting is an unlock already under way).
+  const unlocking = unlock.isPending || state === 'booting'
   const line: Line = !open
-    ? unlock.isPending
-      ? { text: unlockDownload ?? 'Unlocking…', tone: NOTE, action: { label: 'Unlock', pending: true, onClick: () => {} } }
+    ? unlocking
+      ? { text: unlockDownload ?? 'Unlocking…', tone: NOTE, spinner: true }
       : {
           text: unlock.error ? vaultErrorText(unlock.error, 'Unlock was cancelled at the prompt.') : 'Unlock the vault to change the engine.',
           tone: unlock.error ? DANGER_NOTE : NOTE,
-          alert: !!unlock.error,
-          // Booting is an unlock already under way.
-          ...(state !== 'booting' ? { action: { label: 'Unlock', onClick: () => { unlock.reset(); unlock.mutate(agent.id) } } } : {})
+          alert: !!unlock.error
         }
     : switching
       ? { text: `Switching to ${VAULT_ENGINE_NAME[target ?? current]}…`, tone: NOTE, spinner: true }
@@ -156,7 +160,8 @@ export function VaultEnginePanel({ agent }: { agent: LocalAgentDto }): React.JSX
       aria-label="Runs with"
       className="@container relative rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-3"
     >
-      <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3">
+      <div className="flex items-end gap-3">
+      <div className="grid flex-1 grid-cols-2 gap-3 @2xl:grid-cols-3">
         <div>
           <label htmlFor="vault-engine" className={LABEL}>
             Runs on
@@ -177,6 +182,21 @@ export function VaultEnginePanel({ agent }: { agent: LocalAgentDto }): React.JSX
             ))}
           </select>
         </div>
+      </div>
+      {/*
+        The slot is kept while the vault is open, only hidden, so the select is
+        as wide unlocked as locked; the label is fixed-width, so pressing it
+        never widens it either (rule 1).
+      */}
+      <div className={`shrink-0 ${open ? 'invisible' : ''}`} aria-hidden={open || undefined} data-vault-engine-unlock>
+        <SettingsButton
+          aria-disabled={unlocking || undefined}
+          aria-busy={unlocking || undefined}
+          onClick={() => { if (open) return; unlock.reset(); unlock.mutate(agent.id) }}
+        >
+          <VaultUnlockLabel pending={unlocking} percent={unlockPercent} />
+        </SettingsButton>
+      </div>
       </div>
       {/* A reserved line: what it says changes, its height never does (rule 1); its button is h-4 too. */}
       <div className="mt-2 h-4">

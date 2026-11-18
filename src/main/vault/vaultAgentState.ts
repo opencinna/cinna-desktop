@@ -17,7 +17,8 @@ import {
   permissionGrantKey,
   permissionGrantPatterns,
   type LocalPermissionGrant,
-  type LocalPermissionRequest
+  type LocalPermissionRequest,
+  type StoredPermissionGrant
 } from '../../shared/localAgentRequests'
 import { isClaudeApproval, type ClaudeApproval } from '../../shared/engine'
 import { createLogger } from '../logger/logger'
@@ -78,6 +79,13 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+/** Grants as the Permissions card lists them: keyed, newest first (as `permissionGrantService.list`). */
+function storedGrants(value: unknown): StoredPermissionGrant[] {
+  return Object.entries(record(value) as Record<string, LocalPermissionGrant>)
+    .map(([key, grant]) => ({ ...grant, key }))
+    .sort((a, b) => b.decidedAt - a.decidedAt)
+}
+
 function chain(vaultId: string, write: () => Promise<unknown>): void {
   const next = (writes.get(vaultId) ?? Promise.resolve()).then(write).then(() => {}, (error: unknown) => {
     logger.warn('a vault agent state write failed', { vaultId, error: error instanceof Error ? error.message : String(error) })
@@ -88,7 +96,12 @@ function chain(vaultId: string, write: () => Promise<unknown>): void {
 export const vaultAgentState = {
   /** Read the grants into memory (before a turn). */
   async load(vaultId: string, client: Client): Promise<void> {
-    const { value } = await client.request('kv.get', { key: VAULT_KV_GRANTS })
+    // In the write queue: a read that overtook a revoke still in flight would
+    // put the revoked grant back into the copy a turn reads (and the turn's
+    // next `rememberGrant` would write it back into the vault).
+    const run = (writes.get(vaultId) ?? Promise.resolve()).then(() => client.request('kv.get', { key: VAULT_KV_GRANTS }))
+    writes.set(vaultId, run.then(() => {}, () => {}))
+    const { value } = await run
     grants.set(vaultId, record(value) as Record<string, LocalPermissionGrant>)
   },
 
@@ -106,6 +119,53 @@ export const vaultAgentState = {
     const snapshot = { ...current }
     chain(vaultId, async () => (await client()).request('kv.put', { key: VAULT_KV_GRANTS, value: snapshot }))
     return true
+  },
+
+  /**
+   * The grants the vault holds, for the Permissions card. Waits for writes in
+   * flight first, so a grant just made in a chat is listed.
+   */
+  async listGrants(vaultId: string, client: Client): Promise<StoredPermissionGrant[]> {
+    await this.settled(vaultId)
+    const { value } = await client.request('kv.get', { key: VAULT_KV_GRANTS })
+    return storedGrants(value)
+  },
+
+  /**
+   * Revoke one grant (`key`) or all of them (`null`), and answer with what is
+   * left. The in-memory copy changes at once, so a turn's next ask is asked;
+   * the vault write is queued behind earlier ones (a later `rememberGrant`
+   * snapshots the copy without the revoked key) and its failure is the
+   * caller's, unlike a grant made on the ask path. A failed write leaves the
+   * copy without the key all the same: this session asks again, the safe side.
+   */
+  async forgetGrants(vaultId: string, client: () => Promise<Client>, key: string | null): Promise<StoredPermissionGrant[]> {
+    const cached = grants.get(vaultId)
+    if (cached) {
+      const next = key === null ? {} : { ...cached }
+      if (key !== null) delete next[key]
+      grants.set(vaultId, next)
+    }
+    const run = (writes.get(vaultId) ?? Promise.resolve()).then(async () => {
+      const c = await client()
+      const { value } = await c.request('kv.get', { key: VAULT_KV_GRANTS })
+      const stored = record(value)
+      const gone = key === null ? Object.keys(stored) : [key]
+      const next: Record<string, unknown> = { ...stored }
+      for (const k of gone) delete next[k]
+      await c.request('kv.put', { key: VAULT_KV_GRANTS, value: next })
+      // Again in the copy a turn reads: a `load` queued before this revoke has
+      // since refilled it from the vault as it was.
+      const current = grants.get(vaultId)
+      if (current) {
+        const kept = { ...current }
+        for (const k of gone) delete kept[k]
+        grants.set(vaultId, kept)
+      }
+      return next
+    })
+    writes.set(vaultId, run.then(() => {}, () => {}))
+    return storedGrants(await run)
   },
 
   /** Remember a chat's engine session inside the vault (the DB keeps only the id, as for every agent). */

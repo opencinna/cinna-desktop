@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import type { StoredPermissionGrant } from '../../../../../shared/localAgentRequests'
 import { localAgentKey } from '../../../hooks/useLocalAgents'
+import { vaultDetailKey } from '../../../hooks/useVault'
+import { LOCKED_VALUE } from './security/vaultText'
 import { PermissionsCard } from './PermissionsCard'
 
 /**
@@ -648,5 +650,67 @@ describe('delegation standing permissions', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('Nothing was changed')
     expect((cloud as HTMLSelectElement).value).toBe('ask')
     expect((cloud as HTMLSelectElement).disabled).toBe(false)
+  })
+})
+
+describe('PermissionsCard — an agent in a vault', () => {
+  const api = (window as unknown as { api: Record<string, unknown> }).api
+  const vaultApi = {
+    status: vi.fn(async (): Promise<unknown> => ({ ok: true, data: { state: 'unlocked' } })),
+    grants: vi.fn(async (): Promise<unknown> => ({ ok: true, data: [] })),
+    agentDetails: vi.fn(async (): Promise<unknown> => ({
+      ok: true,
+      data: { manifest: {}, description: '', status: null, docs: { workflow: null, entrypoint: null, refiner: null }, credentials: [], launch: { kind: 'kit', model: null, approval: 'auto' } }
+    }))
+  }
+  const vaulted = (engine: string, state: 'locked' | 'unlocked'): LocalAgentDto =>
+    ({ ...agent, vault: { vaultId: 'v1', state, engine, model: null } }) as unknown as LocalAgentDto
+
+  afterEach(() => { delete api['vault'] })
+
+  it('shows the approval mode the vault holds, with no select to save into a host folder it does not have', async () => {
+    api['vault'] = vaultApi
+    renderCard(vaulted('codex', 'unlocked'))
+    expect(await screen.findByText('Automatic')).toBeTruthy()
+    expect(document.querySelector('#codex-approval')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(vaultApi.agentDetails).toHaveBeenCalledWith('folder:alpha')
+  })
+
+  it('reads nothing while the vault is locked and says so, not a dash or a failing control', async () => {
+    api['vault'] = { ...vaultApi, status: vi.fn(async () => ({ ok: true, data: { state: 'locked' } })) }
+    renderCard(vaulted('antigravity', 'locked'))
+    const approval = await waitFor(() => {
+      const row = document.querySelector('[data-vault-approval]')
+      expect(row).not.toBeNull()
+      return row as HTMLElement
+    })
+    expect(approval.textContent).toContain(LOCKED_VALUE)
+    expect(screen.queryByText('—')).toBeNull()
+    expect(document.querySelector('#antigravity-approval')).toBeNull()
+    expect(vaultApi.agentDetails).not.toHaveBeenCalled()
+  })
+
+  it('shows nothing read before the lock: no cached grants, no Forget all, no cached approval mode', async () => {
+    api['vault'] = { ...vaultApi, status: vi.fn(async () => ({ ok: true, data: { state: 'locked' } })) }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    // What an open vault left in the cache before it locked.
+    client.setQueryData(vaultDetailKey('folder:alpha', 'grants'), [
+      { key: 'bash:ls', action: 'bash', pattern: 'ls', decidedAt: 1 }
+    ])
+    client.setQueryData(vaultDetailKey('folder:alpha', 'agent-details'), {
+      manifest: {}, description: '', status: null, docs: { workflow: null, entrypoint: null, refiner: null },
+      credentials: [], launch: { kind: 'kit', model: null, approval: 'auto' }
+    })
+    render(createElement(QueryClientProvider, { client }, createElement(PermissionsCard, { agent: vaulted('codex', 'locked') })))
+    const approval = document.querySelector('[data-vault-approval]') as HTMLElement
+    expect(approval.textContent).toContain(LOCKED_VALUE)
+    expect(approval.textContent).not.toContain('Automatic')
+    // The Always-allowed card says the same phrase, and nothing of the rows.
+    expect(screen.getAllByText(LOCKED_VALUE)).toHaveLength(2)
+    expect(screen.queryByText('ls')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Forget permission/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Forget all' })).toBeNull()
+    expect(vaultApi.grants).not.toHaveBeenCalled()
   })
 })

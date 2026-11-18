@@ -135,6 +135,24 @@ describe('VaultEnginePanel', () => {
     expect(screen.queryByRole('button', { name: 'Unlock' })).toBeNull()
   })
 
+  it('keeps Unlock’s slot when unlocked, hidden, so the select is as wide either way; the label is fixed-width', async () => {
+    status = { ...status, state: 'locked' }
+    renderPanel(agent('locked'))
+    const button = await screen.findByRole('button', { name: 'Unlock' })
+    // `VaultUnlockLabel`: the fixed-width cell, with the longest label reserved unseen.
+    expect(button.querySelector('.min-w-\\[6\\.5rem\\]')).not.toBeNull()
+    expect(button.textContent).toContain('Unlocking… 100%')
+    const slot = document.querySelector('[data-vault-engine-unlock]') as HTMLElement
+    expect(slot.className).not.toContain('invisible')
+    cleanup()
+    status = { ...status, state: 'unlocked' }
+    renderPanel(agent('unlocked'))
+    const kept = document.querySelector('[data-vault-engine-unlock]') as HTMLElement
+    expect(kept).not.toBeNull()
+    expect(kept.className).toContain('invisible')
+    expect(screen.queryByRole('button', { name: 'Unlock' })).toBeNull()
+  })
+
   it('says a refused unlock on the same line, Unlock still there', async () => {
     status = { ...status, state: 'locked' }
     vault.unlock.mockResolvedValueOnce({ ok: false, code: 'denied', message: 'no' })

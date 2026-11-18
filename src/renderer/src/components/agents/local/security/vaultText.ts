@@ -17,6 +17,13 @@ export function unavailableText(availability: VaultAvailability): string | null 
   return availability.ok ? null : UNAVAILABLE_TEXT[availability.reason] ?? 'Agent Vault is not available on this Mac.'
 }
 
+/**
+ * What a vault agent's page shows in place of a value it can only read from
+ * inside the vault while the vault is locked: one phrase across the page, and
+ * never the value read before the lock.
+ */
+export const LOCKED_VALUE = 'Unlock the vault to see this.'
+
 /** The state as a word; `unlocked` gets its countdown from {@link unlockedLabel}. */
 export const STATE_LABEL: Record<VaultState, string> = {
   locked: 'Locked',

@@ -334,6 +334,12 @@ describe('vaultService', () => {
     expect((await vaultService.secrets(USER, AGENT)).names).toEqual(['DB_URL'])
   })
 
+  it('refuses an agent’s settings details as data while its vault is locked, and for an agent not in one', async () => {
+    expect(vaultService.stateOf(VAULT)).toBe('locked')
+    expect(await vaultService.result(() => vaultService.agentDetails(USER, AGENT))).toMatchObject({ ok: false, code: 'locked' })
+    expect(await vaultService.result(() => vaultService.agentDetails(USER, 'folder:not-a-vault'))).toMatchObject({ ok: false, code: 'not_vault_agent' })
+  })
+
   it('answers failures as data with a code, for the renderer', async () => {
     expect(await vaultService.result(() => vaultService.unlock(USER, 'folder:not-a-vault'))).toEqual({
       ok: false, code: 'not_vault_agent', message: 'That agent is not in a vault.'
