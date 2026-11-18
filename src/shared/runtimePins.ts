@@ -219,13 +219,28 @@ export interface VaultGuestPin {
 }
 
 const VAULT_GUEST: VaultGuestPin = {
-  published: false,
-  version: 'unpublished',
-  rootHash: '',
-  hashOffset: 0,
-  kernel: { file: '', url: '', sha256: '', size: 0 },
-  initrd: { file: '', url: '', sha256: '', size: 0 },
-  rootfs: { file: '', url: '', sha256: '', size: 0 }
+  published: true,
+  version: '0.12.0-1',
+  rootHash: '1631ca1142efa2932f9b6335161f5bdf11c401a16a6485293c6abaafcac80d63',
+  hashOffset: 234086400,
+  kernel: {
+    file: 'vault-guest-0.12.0-1-Image',
+    url: 'https://github.com/opencinna/cinna-desktop/releases/download/v0.12.0/vault-guest-0.12.0-1-Image',
+    sha256: 'c3bcf3f076d09a8ac0946f252ed5dfb616f38f11c5a258436df71143583ca5c5',
+    size: 36372480
+  },
+  initrd: {
+    file: 'vault-guest-0.12.0-1-initrd.img',
+    url: 'https://github.com/opencinna/cinna-desktop/releases/download/v0.12.0/vault-guest-0.12.0-1-initrd.img',
+    sha256: 'a17385b00ebe3cbab030b12e2742a801d36e1a7076f11ab4b2f042f5b9608bbd',
+    size: 5010178
+  },
+  rootfs: {
+    file: 'vault-guest-0.12.0-1-rootfs.img',
+    url: 'https://github.com/opencinna/cinna-desktop/releases/download/v0.12.0/vault-guest-0.12.0-1-rootfs.img',
+    sha256: 'a7b54a52180dcaecf87a88e0f070668d866da46de7ab81756d55e2b8c084f98a',
+    size: 235941888
+  }
 }
 
 export const RUNTIME_PINS = {
