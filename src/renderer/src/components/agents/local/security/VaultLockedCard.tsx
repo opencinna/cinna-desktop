@@ -18,12 +18,17 @@ const NOTE = 'text-[12px] text-[var(--color-text-muted)]'
 /**
  * What a tab of a vault agent's page shows while its vault is locked: its
  * details are inside, so one card says so and offers Unlock, instead of each
- * card failing on its own. Unlock works as the Runs-with panel's
- * (`VaultEnginePanel`): a button on the right with the vault's own fixed-width
- * label, so it never widens while the unlock (or a boot already under way)
- * runs. The line under the sentence is always there and only its words change,
- * idle or unlocking (rule 1); a refusal is said in full under the row, wrapped,
- * as the vault panel says it.
+ * card failing on its own. A button on the right with the vault's own
+ * fixed-width label (`VaultUnlockLabel`), so it never widens while the unlock
+ * (or a boot already under way) runs. The line under the sentence is always
+ * there and only its words change, idle or unlocking (rule 1); a refusal is
+ * said in full under the row, wrapped.
+ *
+ * The Runs-with panel above the tabs (`VaultEnginePanel`) keeps its own,
+ * smaller Unlock on its reserved line, so on Overview and Credentials a locked
+ * page shows two: the panel's is the only one on the Interface tab (and
+ * Sharing), which read nothing from the vault and so have no card of this
+ * kind. Both start the same shared unlock and show it pending together.
  */
 export function VaultLockedCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   const state = useVaultStatus(agent.id).data?.state ?? agent.vault?.state

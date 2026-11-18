@@ -529,3 +529,74 @@ describe('Update dependencies', () => {
     expect(calls).toEqual({ claude: 1, codex: 1 })
   }, 60_000)
 })
+
+describe('Runs with: model, effort and work complexity (vault:set-runs-with)', () => {
+  function rowVault(): Record<string, unknown> {
+    return agentRepo.getOwned(USER, AGENT)!.driverConfig!['vault'] as Record<string, unknown>
+  }
+
+  it('writes model and effort into cinna.launch, keeping kind and approval, then the row; the next Claude plan runs on them', async () => {
+    await moveInClaude()
+    await moveService.setRunsWith(USER, AGENT, { model: 'opus', effort: 'high', complexity: null })
+    expect(await kv('cinna.launch')).toEqual({ kind: 'kit', model: 'opus', approval: 'ask', effort: 'high' })
+    expect(rowVault()).toMatchObject({ model: 'opus', effort: 'high' })
+    expect(rowVault()['complexity']).toBeUndefined()
+    const plan = await vaultDriverDeps().launcher('claude')!.plan({ userId: USER, agentId: AGENT } as never)
+    if (!('spec' in plan)) throw new Error(JSON.stringify(plan))
+    expect(plan.setup).toEqual({ modeId: 'default', model: 'opus', configOptions: [{ configId: 'effort', value: 'high', optional: true }] })
+  }, 60_000)
+
+  it('a complexity replaces the model and its effort, in the vault and on the row', async () => {
+    await moveInClaude()
+    await moveService.setRunsWith(USER, AGENT, { model: 'opus', effort: 'high', complexity: null })
+    await moveService.setRunsWith(USER, AGENT, { model: null, effort: null, complexity: 'simple' })
+    expect(await kv('cinna.launch')).toEqual({ kind: 'kit', approval: 'ask', model: null, complexity: 'simple' })
+    expect(rowVault()).toMatchObject({ complexity: 'simple' })
+    expect(rowVault()['model']).toBeUndefined()
+    expect(rowVault()['effort']).toBeUndefined()
+  }, 60_000)
+
+  it('refuses what main cannot run, before writing anything', async () => {
+    await moveInClaude()
+    const before = await kv('cinna.launch')
+    for (const bad of [
+      { model: 'opus', effort: 'turbo', complexity: null },
+      // Codex's efforts, not Claude's: Claude Code has no `minimal` or `none`.
+      { model: 'opus', effort: 'minimal', complexity: null },
+      { model: 'opus', effort: 'none', complexity: null },
+      { model: null, effort: 'high', complexity: null },
+      { model: 'opus', effort: null, complexity: 'medium' },
+      { model: 'opus; rm -rf /', effort: null, complexity: null },
+      { model: null, effort: null, complexity: 'hard' }
+    ]) {
+      await expect(moveService.setRunsWith(USER, AGENT, bad)).rejects.toMatchObject({ code: 'invalid' })
+    }
+    // And Claude's are not Codex's: Codex has no `max`.
+    agentRepo.patchVaultConfig(USER, AGENT, { engine: 'codex' })
+    await expect(moveService.setRunsWith(USER, AGENT, { model: 'gpt-5.6', effort: 'max', complexity: null })).rejects.toMatchObject({ code: 'invalid', message: 'Codex takes no “max” effort.' })
+    agentRepo.patchVaultConfig(USER, AGENT, { engine: 'antigravity' })
+    await expect(moveService.setRunsWith(USER, AGENT, { model: 'gemini-3.8-pro', effort: 'high', complexity: null })).rejects.toMatchObject({ code: 'invalid', message: 'Antigravity takes no reasoning effort.' })
+    agentRepo.patchVaultConfig(USER, AGENT, { engine: 'opencode' })
+    await expect(moveService.setRunsWith(USER, AGENT, { model: 'gpt-5.6', effort: null, complexity: null })).rejects.toMatchObject({ code: 'invalid' })
+    expect(await kv('cinna.launch')).toEqual(before)
+  }, 60_000)
+
+  it('needs the vault unlocked', async () => {
+    await moveInClaude()
+    await vaultService.lock(USER, AGENT)
+    await expect(moveService.setRunsWith(USER, AGENT, { model: null, effort: null, complexity: 'complex' })).rejects.toMatchObject({ code: 'locked' })
+  }, 60_000)
+
+  it('a switch of engine drops the model’s effort and keeps a complexity', async () => {
+    await moveInClaude()
+    await moveService.setRunsWith(USER, AGENT, { model: null, effort: null, complexity: 'complex' })
+    expect((await switchTo({ engine: 'codex' })).final).toMatchObject({ status: 'done' })
+    expect(await kv('cinna.launch')).toEqual({ kind: 'kit', approval: 'ask', model: null, complexity: 'complex' })
+    expect(rowVault()).toMatchObject({ engine: 'codex', complexity: 'complex' })
+    await moveService.setRunsWith(USER, AGENT, { model: 'gpt-5.6', effort: 'xhigh', complexity: null })
+    expect((await switchTo({ engine: 'claude' })).final).toMatchObject({ status: 'done' })
+    expect(await kv('cinna.launch')).toEqual({ kind: 'kit', approval: 'ask', model: null })
+    expect(rowVault()['effort']).toBeUndefined()
+    expect(rowVault()['complexity']).toBeUndefined()
+  }, 60_000)
+})

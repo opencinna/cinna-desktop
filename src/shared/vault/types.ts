@@ -6,6 +6,7 @@ import type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultL
 
 import type { CinnaAgentManifest } from '../kit/manifest'
 import type { ClaudeApproval } from '../engine'
+import type { WorkComplexity } from '../modelFamilies'
 import type { LocalAgentCredentialState, LocalAgentPromptKind, LocalAgentStatusSummary } from '../localAgents'
 
 export type { EgressPolicy, HelperFlavor, VaultAvailability, VaultEngine, VaultLaunchProvider, VaultState }
@@ -34,6 +35,10 @@ export interface LocalAgentVaultInfo {
   model?: string | null
   /** Display copy of OpenCode's provider, when a switch recorded one. */
   provider?: VaultLaunchProvider | null
+  /** Display copy of the reasoning effort beside {@link model} (Claude, Codex); null: the model's own. */
+  effort?: string | null
+  /** Display copy of the work complexity, when no model is named; null: none. */
+  complexity?: WorkComplexity | null
   /** The agent's host folder is still there after the move (until **Delete host copy**). */
   hostCopy?: boolean
   /**
@@ -435,6 +440,39 @@ export interface VaultSwitchEngineOptions {
   provider?: VaultLaunchProvider
   model?: string
   apiKey?: string
+}
+
+/**
+ * The reasoning efforts a vault's launch settings may name (Claude's `effort`,
+ * Codex's `reasoning_effort`): main refuses any other value before it reaches
+ * the vault, and the session is asked for it as an optional config option.
+ */
+export const VAULT_LAUNCH_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/**
+ * The efforts each vault engine takes beside its model, the union above split
+ * by engine: Claude Code's `effort` levels (as `claudeAgents.ts` reads them),
+ * Codex's `reasoning_effort` values; none on Antigravity or OpenCode, where
+ * the host's Runs with panel offers no effort either. `vault:set-runs-with`
+ * refuses an effort its engine does not take, and the panel lists only these.
+ */
+export const VAULT_LAUNCH_EFFORTS_BY_ENGINE: Record<VaultEngine, readonly (typeof VAULT_LAUNCH_EFFORTS)[number][]> = {
+  claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+  codex: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+  antigravity: [],
+  opencode: []
+}
+
+/**
+ * Model, effort and work complexity for a vault agent on Claude, Codex or
+ * Antigravity (`vault:set-runs-with`), as the Runs with panel picks them:
+ * a model (and an effort beside it) or a complexity, never both. OpenCode's
+ * provider and model go through a switch of engine instead.
+ */
+export interface VaultRunsWithOptions {
+  model: string | null
+  effort: string | null
+  complexity: WorkComplexity | null
 }
 
 export interface VaultRuntimeDto {

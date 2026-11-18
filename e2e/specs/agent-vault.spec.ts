@@ -465,7 +465,10 @@ test('V8 a vault agent switches to Codex through setup, answers on it, switches 
   await expect(dialog).toHaveCount(0, { timeout: 60_000 })
   await expect(runsOn).toHaveValue('codex')
   await expect(runsOn.locator('option')).toHaveText(['Claude Agent', 'Codex', 'OpenCode — needs setup', 'Antigravity — needs setup'])
-  await expect(panel.getByText(/^Runs inside the vault on /)).toHaveText(`Runs inside the vault on Codex ${RUNTIME_PINS.codex.cli}-host · the CLI’s default model.`)
+  // The Engine cell names the runtime inside; the line, what it runs on (no model or complexity set: Codex's own at medium).
+  await expect(panel.getByText(`Codex ${RUNTIME_PINS.codex.cli}-host`, { exact: true })).toBeVisible()
+  await expect(panel.getByText(/^Runs inside the vault on /)).toHaveText('Runs inside the vault on Codex’s default model, medium effort.')
+  await expect(panel.getByRole('combobox', { name: 'Work complexity' })).toHaveValue('')
 
   // A turn on Codex, inside the vault: the scripted Codex's words, not the scripted Claude's.
   await page.getByRole('button', { name: 'Start chat', exact: true }).click()
@@ -489,7 +492,8 @@ test('V8 a vault agent switches to Codex through setup, answers on it, switches 
   await expect(runsOn).toHaveValue('claude', { timeout: 30_000 })
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(runsOn.locator('option')).toHaveText(['Claude Agent', 'Codex', 'OpenCode — needs setup', 'Antigravity — needs setup'])
-  await expect(panel.getByText(/^Runs inside the vault on /)).toHaveText(`Runs inside the vault on Claude Agent ${RUNTIME_PINS.claude.cli}-host · the CLI’s default model.`)
+  await expect(panel.getByText(`Claude Code ${RUNTIME_PINS.claude.cli}-host`, { exact: true })).toBeVisible()
+  await expect(panel.getByText(/^Runs inside the vault on /)).toHaveText('Runs inside the vault on Claude Code’s default model.')
 
   // Network access: both set-up engines' hosts.
   await page.getByRole('tab', { name: /^Security/ }).click()
@@ -500,7 +504,8 @@ test('V8 a vault agent switches to Codex through setup, answers on it, switches 
   await page.getByRole('button', { name: 'Lock now' }).click()
   await expect(page.locator('[data-vault-state="locked"]')).toHaveText('Locked')
   await expect(runsOn).toBeDisabled()
-  await expect(panel.getByText('Unlock the vault to change the engine.', { exact: true })).toBeVisible()
+  await expect(panel.getByText('Unlock the vault to change how it runs.', { exact: true })).toBeVisible()
   await expect(panel.getByRole('button', { name: 'Unlock', exact: true })).toBeEnabled()
+  await expect(panel.getByRole('combobox', { name: 'Work complexity' })).toBeDisabled()
   await expect(runsOn).toHaveValue('claude')
 })

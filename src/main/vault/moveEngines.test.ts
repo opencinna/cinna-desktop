@@ -242,7 +242,7 @@ describe('Move to vault… on Codex', () => {
     expect(await deps.readiness(USER, row)).toEqual({ state: 'ok', reason: null })
     const plan = await deps.launcher('codex')!.plan({ userId: USER, agentId: AGENT } as never)
     if (!('spec' in plan)) throw new Error(JSON.stringify(plan))
-    expect(plan.setup).toEqual({ modeId: 'workspace-write' })
+    expect(plan.setup).toEqual({ modeId: 'workspace-write', configOptions: [{ configId: 'reasoning_effort', value: 'medium', optional: true }] })
     const connection = await startVaultAcpConnection(plan.spec.vault!, plan.init)
     try {
       expect((await connection.newSession({ cwd: vaultService.agentCwd(vaultId), mcpServers: [] })).sessionId).toBeTruthy()

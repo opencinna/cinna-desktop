@@ -159,6 +159,12 @@ export function registerVaultHandlers(): void {
     return vaultService.result(() => moveService.switchEngine(getSettingsScopeUserId(), agentId, options))
   })
 
+  // The Runs with panel's model, effort and complexity (Claude, Codex, Antigravity); validated again in main.
+  ipcHandle('vault:set-runs-with', (_event, agentId: string, options: unknown): Promise<VaultResult<void>> => {
+    userActivation.requireActivated()
+    return vaultService.result(() => moveService.setRunsWith(getSettingsScopeUserId(), agentId, options))
+  })
+
   ipcHandle('vault:update-dependencies', (_event, agentId: string): Promise<VaultResult<{ moveId: string }>> => {
     userActivation.requireActivated()
     return vaultService.result(() => moveService.updateDependencies(getSettingsScopeUserId(), agentId))

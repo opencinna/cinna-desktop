@@ -21,6 +21,8 @@ import {
   type StoredPermissionGrant
 } from '../../shared/localAgentRequests'
 import { isClaudeApproval, type ClaudeApproval } from '../../shared/engine'
+import { isWorkComplexity, type WorkComplexity } from '../../shared/modelFamilies'
+import { VAULT_LAUNCH_EFFORTS } from '../../shared/vault/types'
 import { createLogger } from '../logger/logger'
 import { vaultTranscripts } from './transcriptStore'
 import { VAULT_KV_INSTRUCTIONS, VAULT_KV_LAUNCH, VAULT_LAUNCH_MODEL, VAULT_LAUNCH_PROVIDERS, type VaultLaunchProvider } from '../../shared/vault/protocol'
@@ -46,23 +48,40 @@ export interface VaultLaunchSettings {
   approval: ClaudeApproval
   /** OpenCode only: whose API the model is (which key it signs in with); null for the other engines. */
   provider: VaultLaunchProvider | null
+  /**
+   * The reasoning effort beside {@link model} (Claude, Codex), or null for
+   * the model's own. Only beside a model, as a folder agent's `runtime.effort`.
+   */
+  effort: string | null
+  /**
+   * The work complexity when no model is named, or null: resolved by the
+   * vault launchers with the host's tier mapping. Never beside a model.
+   */
+  complexity: WorkComplexity | null
 }
+
+/** What a writer passes: the fields a move-in or a switch knows nothing of are absent (none). */
+export type VaultLaunchInput = Omit<VaultLaunchSettings, 'effort' | 'complexity'> & Partial<Pick<VaultLaunchSettings, 'effort' | 'complexity'>>
 
 /**
  * When the vault holds none (or a malformed one): the most closed launch,
  * sealed and asking, whatever the host row says.
  */
-export const VAULT_LAUNCH_FALLBACK: VaultLaunchSettings = { kind: 'kit', model: null, approval: 'ask', provider: null }
+export const VAULT_LAUNCH_FALLBACK: VaultLaunchSettings = { kind: 'kit', model: null, approval: 'ask', provider: null, effort: null, complexity: null }
 
 /** A stored value as launch settings; anything malformed falls back field by field. */
 export function parseLaunchSettings(value: unknown): VaultLaunchSettings {
   const raw = record(value)
-  const model = raw['model']
+  const model = typeof raw['model'] === 'string' && VAULT_LAUNCH_MODEL.test(raw['model']) ? raw['model'] : null
+  const effort = raw['effort']
   return {
     kind: raw['kind'] === 'bare' ? 'bare' : 'kit',
-    model: typeof model === 'string' && VAULT_LAUNCH_MODEL.test(model) ? model : null,
+    model,
     approval: isClaudeApproval(raw['approval']) ? raw['approval'] : VAULT_LAUNCH_FALLBACK.approval,
-    provider: (VAULT_LAUNCH_PROVIDERS as readonly unknown[]).includes(raw['provider']) ? raw['provider'] as VaultLaunchProvider : null
+    provider: (VAULT_LAUNCH_PROVIDERS as readonly unknown[]).includes(raw['provider']) ? raw['provider'] as VaultLaunchProvider : null,
+    // An effort is the effort *of* a model; a complexity stands only where no model does.
+    effort: model !== null && (VAULT_LAUNCH_EFFORTS as readonly unknown[]).includes(effort) ? effort as string : null,
+    complexity: model === null && isWorkComplexity(raw['complexity']) ? raw['complexity'] : null
   }
 }
 
@@ -183,11 +202,14 @@ export const vaultAgentState = {
     return value === undefined || value === null ? { ...VAULT_LAUNCH_FALLBACK } : parseLaunchSettings(value)
   },
 
-  /** Record launch settings in the vault: move-in, and any later change of mode or model. */
-  async writeLaunch(client: Client, settings: VaultLaunchSettings): Promise<void> {
-    const { provider, ...rest } = parseLaunchSettings(settings)
-    // `provider` only where it means something (OpenCode).
-    await client.request('kv.put', { key: VAULT_KV_LAUNCH, value: provider ? { ...rest, provider } : rest })
+  /** Record launch settings in the vault: move-in, and any later change of mode, model, effort or complexity. */
+  async writeLaunch(client: Client, settings: VaultLaunchInput): Promise<void> {
+    const { provider, effort, complexity, ...rest } = parseLaunchSettings(settings)
+    // Each optional field only where it means something (`provider`: OpenCode).
+    await client.request('kv.put', {
+      key: VAULT_KV_LAUNCH,
+      value: { ...rest, ...(provider ? { provider } : {}), ...(effort ? { effort } : {}), ...(complexity ? { complexity } : {}) }
+    })
   },
 
   async instructions(client: Client): Promise<string | null> {

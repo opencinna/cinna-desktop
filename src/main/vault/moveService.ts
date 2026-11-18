@@ -59,7 +59,9 @@ import {
   type VaultEngine,
   type VaultLaunchProvider
 } from '../../shared/vault/protocol'
+import { isWorkComplexity } from '../../shared/modelFamilies'
 import {
+  VAULT_LAUNCH_EFFORTS_BY_ENGINE,
   VAULT_MOVE_PROGRESS_CHANNEL,
   type VaultEngineChoiceDto,
   type VaultHostCopyDto,
@@ -68,7 +70,8 @@ import {
   type VaultMoveStep,
   type VaultPrecheckDto,
   type VaultPrecheckItem,
-  type VaultRotationItem
+  type VaultRotationItem,
+  type VaultRunsWithOptions
 } from '../../shared/vault/types'
 import { vaultBackend, VaultBackendError } from './backend'
 import { refreshVaultAgents } from './isVaultAgent'
@@ -1345,7 +1348,9 @@ async function runSwitch(
     const before = await readLaunch(client)
     try {
       await switchLaunch(client, engine, opts)
-      if (!agentRepo.patchVaultConfig(userId, agentId, { engine, model: opts.model, provider: opts.provider })) {
+      // The effort goes with the old model; a complexity stays where no model is named (switchLaunch).
+      const complexity = opts.model === null ? before.launch.complexity : null
+      if (!agentRepo.patchVaultConfig(userId, agentId, { engine, model: opts.model, provider: opts.provider, effort: null, complexity })) {
         throw new VaultError('internal', 'The agent changed while its engine was switching.')
       }
     } catch (error) {
@@ -1417,8 +1422,70 @@ async function switchLaunch(client: Client, engine: VaultEngine, opts: SwitchOpt
   const launch = await vaultAgentState.launch(client)
   const captured = (await client.request('kv.get', { key: vaultKvInstructionsFor(engine) })).value
   if (typeof captured === 'string' && captured.trim() !== '') await client.request('kv.put', { key: VAULT_KV_INSTRUCTIONS, value: captured })
-  // Mode and sealed/native stay; the model resets to the CLI's default (OpenCode names its own).
-  await vaultAgentState.writeLaunch(client, { kind: launch.kind, approval: launch.approval, model: opts.model, provider: opts.provider })
+  // Mode and sealed/native stay; the model resets to the CLI's default (OpenCode names its own)
+  // and its effort with it. A work complexity means the same on every engine, so it stays
+  // where no model is named, as a folder agent's tier survives a change of runtime.
+  await vaultAgentState.writeLaunch(client, {
+    kind: launch.kind, approval: launch.approval, model: opts.model, provider: opts.provider,
+    complexity: opts.model === null ? launch.complexity : null
+  })
+}
+
+
+function parseRunsWith(engine: VaultEngine, raw: unknown): VaultRunsWithOptions {
+  const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const model = value['model'] ?? null
+  const effort = value['effort'] ?? null
+  const complexity = value['complexity'] ?? null
+  if (VAULT_ENGINE_NAMES_MODEL[engine]) throw new VaultError('invalid', 'OpenCode’s model is changed with Change model….')
+  if (model !== null && (typeof model !== 'string' || !VAULT_LAUNCH_MODEL.test(model.trim()))) throw new VaultError('invalid', 'That is not a model name.')
+  if (complexity !== null && !isWorkComplexity(complexity)) throw new VaultError('invalid', 'Choose Simple, Medium or Complex.')
+  if (model !== null && complexity !== null) throw new VaultError('invalid', 'Choose a model or a work complexity, not both.')
+  if (effort !== null && model === null) throw new VaultError('invalid', 'An effort needs a model beside it.')
+  // Per engine, as the host's panel offers them: Claude's levels are not Codex's, and Antigravity takes none.
+  const efforts: readonly string[] = VAULT_LAUNCH_EFFORTS_BY_ENGINE[engine]
+  if (effort !== null && efforts.length === 0) throw new VaultError('invalid', `${VAULT_ENGINE_CHOICE_NAME[engine]} takes no reasoning effort.`)
+  if (effort !== null && (typeof effort !== 'string' || !efforts.includes(effort))) {
+    throw new VaultError('invalid', `${VAULT_ENGINE_CHOICE_NAME[engine]} takes no “${String(effort)}” effort.`)
+  }
+  return {
+    model: typeof model === 'string' ? model.trim() : null,
+    effort: typeof effort === 'string' ? effort : null,
+    complexity: isWorkComplexity(complexity) ? complexity : null
+  }
+}
+
+/**
+ * The Runs with panel's model, effort and work complexity for a vault agent on
+ * Claude, Codex or Antigravity: written into the vault's `cinna.launch` (kind,
+ * approval and provider kept), which the next turn's plan reads (D34), then
+ * into the row's display copies. Needs the vault unlocked; refused while the
+ * agent moves, updates or switches its engine. A turn already running keeps
+ * what it started with; the next one opens on the new settings (the model is
+ * in the plan's spec key; the effort is set in every session's setup).
+ */
+export async function setRunsWith(userId: string, agentId: string, options: unknown): Promise<void> {
+  const { row, ref } = vaultService.refFor(userId, agentId)
+  const opts = parseRunsWith(ref.engine, options)
+  if (vaultService.stateOf(ref.vaultId) !== 'unlocked') throw new VaultError('locked', 'Unlock the vault to change how it runs.')
+  if (movingAgents.has(agentId)) throw new VaultError('busy', 'This agent is busy moving, updating or switching its engine. Change it when that ends.')
+  // Held like a switch for its few requests, so neither reads the other's half-written launch.
+  movingAgents.add(agentId)
+  try {
+    const client = await vaultService.client(ref.vaultId)
+    const before = await vaultAgentState.launch(client)
+    await vaultAgentState.writeLaunch(client, { ...before, ...opts })
+    if (!agentRepo.patchVaultConfig(userId, agentId, { model: opts.model, effort: opts.effort, complexity: opts.complexity })) {
+      // Else the row would disagree with the vault: put the vault back.
+      await vaultAgentState.writeLaunch(client, before).catch(() => {})
+      throw new VaultError('internal', 'The agent changed while its settings were saved.')
+    }
+  } finally {
+    movingAgents.delete(agentId)
+  }
+  const roots = agentsHomeService.rootRows(userId)
+  agentChanged((roots.find((root) => root.id === row.localRootId) ?? roots.find((root) => root.isDefault))?.id ?? row.localRootId ?? '', agentId)
+  logger.info('a vault agent’s model settings changed', { agentId, engine: ref.engine })
 }
 
 /** Test seam: wait for a move (or dependency update) to finish. */
@@ -1436,5 +1503,6 @@ export const moveService = {
   exportFile,
   updateDependencies,
   switchEngine,
+  setRunsWith,
   waitForMove
 }

@@ -175,8 +175,16 @@ export interface AcpSessionSetup {
    * top-level `model` (verified: `session/new` reports it as
    * `configOptions.model.currentValue`). Refusing the turn there would refuse
    * it over a race about something already true.
+   *
+   * `reset` marks a value that hands the choice back to the session (Claude's
+   * effort `default`, which clears the level an earlier set pinned): set only
+   * when the session's config offers it and it is not already current, so a
+   * session that was never pinned (or whose model takes no effort) is not
+   * asked at all. Optional by nature. It exists because a warm adapter keeps
+   * a pinned effort on a session it loads, and an agent whose effort was
+   * cleared would otherwise go on running at the old one.
    */
-  configOptions?: { configId: string; value: string; optional?: boolean }[]
+  configOptions?: { configId: string; value: string; optional?: boolean; reset?: boolean }[]
 }
 
 export interface AcpLaunchPlan {
@@ -1116,12 +1124,27 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
           ...(model && safely(() => deps.modelDeclared?.(ctx.userId, ctx.agentId) ?? false, false) ? { modelDeclared: true } : {}),
           // The effort the agent declares beside its model, after the model so
           // it is asked of the model the turn runs on. Optional: an effort the
-          // session does not offer is logged, never a refused turn.
-          ...(effort ? { configOptions: [{ configId: 'effort', value: effort, optional: true }] } : {})
+          // session does not offer is logged, never a refused turn. None
+          // declared: the session's `default`, so a warm session pinned to
+          // an effort since cleared does not keep it (`claudeEffortOption`).
+          ...(model ? { configOptions: [claudeEffortOption(effort)] } : {})
         }
       }
     }
   }
+}
+
+/**
+ * Claude's effort for a session that names a model: the declared one, or —
+ * none declared — the session's own `default`, as a reset. The adapter keeps a
+ * pinned effort on a session it loads warm (and the spec key does not name the
+ * effort, so clearing it starts no new process); `default` clears that pin and
+ * hands the effort back to the CLI (claude-agent-acp 0.101.0 `session-effort.js`
+ * `toSdkEffortLevel`), and is only sent where it is offered and not already
+ * current ({@link AcpSessionSetup.configOptions}).
+ */
+export function claudeEffortOption(effort: string | null): { configId: string; value: string; optional: true; reset?: true } {
+  return effort ? { configId: 'effort', value: effort, optional: true } : { configId: 'effort', value: 'default', optional: true, reset: true }
 }
 
 /* -------------------------------------------------------------------- shared */

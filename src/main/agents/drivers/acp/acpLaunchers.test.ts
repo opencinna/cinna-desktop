@@ -637,8 +637,12 @@ describe('the Claude launcher', () => {
     const p = plan(await createClaudeLauncher({ ...deps, model: () => 'opus', effort: () => 'high' }).plan(CTX))
     expect(p.setup.model).toBe('opus')
     expect(p.setup.configOptions).toEqual([{ configId: 'effort', value: 'high', optional: true }])
+    // None declared beside a model: the session's `default`, as a reset, so a warm session
+    // pinned to an effort since cleared does not keep it (the key does not name the effort).
+    // Mutation: drop the reset and `none` carries no effort option at all.
     const none = plan(await createClaudeLauncher({ ...deps, model: () => 'opus', effort: () => null }).plan(CTX))
-    expect(none.setup.configOptions).toBeUndefined()
+    expect(none.setup.configOptions).toEqual([{ configId: 'effort', value: 'default', optional: true, reset: true }])
+    expect(none.spec.key).toBe(p.spec.key)
     const noModel = plan(await createClaudeLauncher({ ...deps, model: () => null, effort: () => 'high' }).plan(CTX))
     expect(noModel.setup.configOptions).toBeUndefined()
   })

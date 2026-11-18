@@ -126,6 +126,7 @@ import {
   type VaultStateEvent,
   type VaultStatusDto,
   type VaultSwitchEngineOptions,
+  type VaultRunsWithOptions,
   type VaultUnlockProgressEvent,
   type VaultTerminalCommand,
   type VaultTerminalEvent,
@@ -637,6 +638,8 @@ const api = {
      * credentials, engine). Prompts to set up an engine and to allow its hosts.
      */
     switchEngine: (agentId: string, options: VaultSwitchEngineOptions): Promise<VaultResult<{ moveId: string }>> => ipcRenderer.invoke('vault:switch-engine', agentId, options),
+    /** Model, effort and work complexity inside the vault (not OpenCode, whose model a switch sets); needs it unlocked. */
+    setRunsWith: (agentId: string, options: VaultRunsWithOptions): Promise<VaultResult<void>> => ipcRenderer.invoke('vault:set-runs-with', agentId, options),
     /** Gated: prompts. Installs the pinned runtimes and runs uv sync with the install hosts open. Output on onMoveProgress-like stream: `vault:move-progress` with step 'rebuild'. */
     updateDependencies: (agentId: string): Promise<VaultResult<{ moveId: string }>> => ipcRenderer.invoke('vault:update-dependencies', agentId),
     listFiles: (agentId: string, path: string): Promise<VaultResult<VaultFileEntryDto[]>> => ipcRenderer.invoke('vault:list-files', agentId, path),

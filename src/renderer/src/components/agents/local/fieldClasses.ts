@@ -15,6 +15,14 @@ export const FIELD =
   'text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none ' +
   'disabled:cursor-not-allowed disabled:opacity-50'
 
+/**
+ * {@link FIELD} without its `w-full`, for the two selects that share the Model
+ * column's row: `w-full` is emitted after `w-[4.75rem]` in the built CSS and
+ * wins, so the effort select took the row and the model select shrank to its
+ * chevron. Each of the two sets its own width instead.
+ */
+export const FIELD_IN_ROW = FIELD.replace(/(^|\s)w-full(\s|$)/, ' ').trim()
+
 /** The label above such a field. */
 export const LABEL =
   'mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]'

@@ -15,6 +15,7 @@
  * answers `initialize`, and `session/new` asks for a login) and signs in with
  * the vault's Gemini API key; its Google sign-in cannot be completed there yet.
  */
+import { antigravityModelForComplexity, codexEffortForRuntime } from '../../../../shared/engine'
 import { airClientMeta } from './acpActivity'
 import { ANTIGRAVITY_ISOLATED_DISABLED_TOOLS, antigravityPreamble } from './antigravityLauncher'
 import type { AcpLauncher, AcpPlanResult } from './acpLaunchers'
@@ -59,7 +60,10 @@ export function createVaultCodexLauncher(deps: VaultLauncherDeps): AcpLauncher {
         },
         session: { mcpServers: [] },
         sessionToolsFixed: true,
-        setup: { modeId }
+        // The model is vaultd's (`CODEX_CONFIG` from `cinna.launch`); the effort is set per
+        // session as the host's tier mapping resolves it (`codexEffortForRuntime`: the effort
+        // beside a model, else the complexity's, else medium). Optional, as Claude's.
+        setup: { modeId, configOptions: [{ configId: 'reasoning_effort', value: codexEffortForRuntime(launch), optional: true }] }
       }
     }
   }
@@ -128,6 +132,8 @@ export function createVaultAntigravityLauncher(deps: VaultLauncherDeps): AcpLaun
       // Only the key method is offered inside; anything else is Google's sign-in.
       if (auth.method !== 'api_key') return { error: VAULT_ANTIGRAVITY_SIGNED_OUT }
       const cwd = deps.agentCwd?.(info.vaultId) ?? VAULT_AGENT_CWD
+      // The vault's model, else its complexity's Flash level (the host's mapping); none: the server's default.
+      const model = launch.model ?? antigravityModelForComplexity(launch.complexity)
       return {
         spec: {
           vault: { agentId: ctx.agentId, vaultId: info.vaultId, engine: 'antigravity', extraEnv: {}, authMethod: VAULT_ANTIGRAVITY_AUTH_METHOD },
@@ -145,7 +151,7 @@ export function createVaultAntigravityLauncher(deps: VaultLauncherDeps): AcpLaun
         ...(instructions ? { firstPromptPreamble: antigravityPreamble(instructions) } : {}),
         setup: {
           modeId: launch.approval === 'auto' ? 'yolo' : 'default',
-          ...(launch.model ? { configOptions: [{ configId: 'model', value: launch.model, optional: true }] } : {})
+          ...(model ? { configOptions: [{ configId: 'model', value: model, optional: true }] } : {})
         }
       }
     }

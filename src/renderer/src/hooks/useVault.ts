@@ -11,6 +11,7 @@ import {
   type VaultMoveOptions,
   type VaultMoveProgressEvent,
   type VaultSwitchEngineOptions,
+  type VaultRunsWithOptions,
   type VaultResult,
   type VaultStateEvent,
   type VaultStatusDto,
@@ -549,6 +550,29 @@ export function useVaultSwitchingTo(agentId: string): VaultSwitchEngineOptions['
     select: (mutation) => (mutation.state.variables as VaultSwitchVars | undefined)?.options.engine ?? null
   })
   return pending.at(-1) ?? null
+}
+
+/**
+ * Write a vault agent's model, effort and work complexity into its vault
+ * (`vault:set-runs-with`). Pending until the agent has been read again, so a
+ * select that shows the values being written never snaps back to the old ones
+ * in between. The re-read lives on the mutation, so it happens even when the
+ * caller has gone.
+ */
+export function useVaultSetRunsWith(agentId: string) {
+  const queryClient = useQueryClient()
+  return useMutation<void, Error, VaultRunsWithOptions>({
+    mutationFn: async (options) => {
+      const api = vaultApi()
+      if (!api) throw new Error('Agent Vault is not part of this build.')
+      unwrapVault(await api.setRunsWith(agentId, options))
+    },
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: localAgentKey(agentId) }),
+      queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY }),
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+    ])
+  })
 }
 
 export function useVaultUpdateDependencies() {

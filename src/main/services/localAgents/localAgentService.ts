@@ -56,6 +56,7 @@ import { isIgnoredPath, validateAgentFolder } from '../../kit/validator'
 import { KitError, LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { MANIFEST_FILE, SLUG_PATTERN } from '../../../shared/kit/manifest'
+import { isWorkComplexity } from '../../../shared/modelFamilies'
 import { AGENT_INIT_ENTRY_FILES, buildAgentInitPrompt } from '../../../shared/agentInitPrompt'
 import {
   describedAs,
@@ -2482,11 +2483,13 @@ function vaultAgentDto(row: AgentRow, ref: { vaultId: string; engine: LocalAgent
 }
 
 /** The row's display copies of what a vault agent runs on inside (`cinna.launch` decides, D34). */
-function vaultDisplayLaunch(row: AgentRow): { model: string | null; provider: 'openai' | 'anthropic' | null } {
+function vaultDisplayLaunch(row: AgentRow): Pick<NonNullable<LocalAgentDto['vault']>, 'model' | 'provider' | 'effort' | 'complexity'> {
   const raw = (row.driverConfig?.['vault'] ?? {}) as Record<string, unknown>
   const model = typeof raw['model'] === 'string' && raw['model'] ? raw['model'] : null
   const provider = raw['provider'] === 'openai' || raw['provider'] === 'anthropic' ? raw['provider'] : null
-  return { model, provider }
+  const effort = model && typeof raw['effort'] === 'string' && raw['effort'] ? raw['effort'] : null
+  const complexity = !model && isWorkComplexity(raw['complexity']) ? raw['complexity'] : null
+  return { model, provider, effort, complexity }
 }
 
 type LocalAgentVaultEngine = NonNullable<LocalAgentDto['vault']>['engine']

@@ -29,13 +29,13 @@
  */
 import { createHash } from 'node:crypto'
 import type { AgentReadiness } from '../../../../shared/agentDrivers'
-import type { ClaudeApproval } from '../../../../shared/engine'
+import { claudeModelForComplexity, type ClaudeApproval } from '../../../../shared/engine'
 import { VAULT_ENGINE_LOGIN, type HelperFlavor, type RuntimeKind, type VaultEngine, type VaultState } from '../../../../shared/vault/protocol'
 import { vaultTamperedText } from '../../../../shared/vault/types'
 import type { VaultdClient } from '../../../vault/vaultdClient'
 import { parseLaunchSettings, VAULT_KV_INSTRUCTIONS, VAULT_KV_LAUNCH, VAULT_LAUNCH_FALLBACK, type VaultLaunchSettings } from '../../../vault/vaultAgentState'
 import { airClientMeta } from './acpActivity'
-import type { AcpLauncher, AcpPlanResult } from './acpLaunchers'
+import { claudeEffortOption, type AcpLauncher, type AcpPlanResult } from './acpLaunchers'
 import { RAW_SDK_MESSAGE_FILTER } from './acpSdkTelemetry'
 import { ACP_PROTOCOL_VERSION, VAULT_AGENT_CWD } from './types'
 import { currentRuntimeRow, matchesPin, type RuntimePin } from '../../../vault/runtimeInstall'
@@ -234,7 +234,11 @@ export function createVaultClaudeLauncher(deps: VaultLauncherDeps): AcpLauncher 
 
       const sealed = launch.kind === 'kit'
       const cwd = deps.agentCwd?.(info.vaultId) ?? VAULT_AGENT_CWD
-      const model = launch.model
+      // As the host launcher resolves them: the vault's model, else its complexity's alias
+      // (no floor: a vault naming neither keeps the CLI's default, as it always has); an
+      // effort only beside a model, set per session after it.
+      const model = launch.model ?? (launch.complexity ? claudeModelForComplexity(launch.complexity) : null)
+      const effort = launch.model ? launch.effort : null
       const mode = launch.approval === 'auto' ? 'auto' : 'default'
       return {
         spec: {
@@ -280,7 +284,11 @@ export function createVaultClaudeLauncher(deps: VaultLauncherDeps): AcpLauncher 
         },
         setup: {
           modeId: mode,
-          ...(model ? { model } : {})
+          ...(model ? { model } : {}),
+          // As on the host: optional (an effort the session does not offer is logged, never a
+          // refused turn), and none chosen beside a model resets the session's to its `default`,
+          // since the spec key does not name the effort and a warm session keeps a pinned one.
+          ...(model ? { configOptions: [claudeEffortOption(effort)] } : {})
         }
       }
     }

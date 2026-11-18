@@ -75,7 +75,7 @@ describe('Codex in a vault', () => {
     expect(plan.spec.vault).toEqual({ agentId: 'folder:a', vaultId: 'v1', engine: 'codex', extraEnv: {} })
     expect(plan.spec.command).toBe('')
     expect(plan.sessionCwd).toBe('/vault/agent')
-    expect(plan.setup).toEqual({ modeId: 'agent' })
+    expect(plan.setup).toEqual({ modeId: 'agent', configOptions: [{ configId: 'reasoning_effort', value: 'medium', optional: true }] })
     expect(plan.session).toEqual({ mcpServers: [] })
     expect(plan.spec.authFingerprint).toBe('vault:v1:api_key')
 
@@ -132,6 +132,78 @@ describe('Antigravity in a vault', () => {
     expect(plan.setup).toEqual({ modeId: 'yolo', configOptions: [{ configId: 'model', value: 'gemini-3-flash', optional: true }] })
     expect(plan.firstPromptPreamble).toContain('You are Payroll.')
     expect(plan.session.meta).toEqual({ agy: { disabledTools: ['invoke_subagent', 'schedule', 'start_subagent'] } })
+  })
+})
+
+describe('model, effort and work complexity from the vault (the host launchers’ mapping)', () => {
+  const claudeRuntimes: Vault['runtimes'] = [
+    { engine: 'claude', version: '2.1.318', kind: 'executable', sha256: 'c1a0' },
+    { engine: 'claude', version: '0.101.0', kind: 'adapter', sha256: 'ada0' }
+  ]
+  const claudeVault = (launch: Record<string, unknown>): Vault => ({
+    state: 'unlocked', runtimes: claudeRuntimes,
+    auth: { claude: { loggedIn: true, method: 'api_key', keyName: 'ANTHROPIC_API_KEY' } },
+    kv: { 'cinna.launch': { kind: 'kit', approval: 'ask', ...launch } }
+  })
+  const plan = async (launcher: ReturnType<typeof createVaultClaudeLauncher>) => {
+    const result = await launcher.plan(ctx)
+    if (!('spec' in result)) throw new Error(JSON.stringify(result))
+    return result
+  }
+
+  it('Claude: the model, then the effort beside it as an optional config option', async () => {
+    const result = await plan(createVaultClaudeLauncher(depsFor('claude', claudeVault({ model: 'opus', effort: 'high' }), { model: 'row-model' })))
+    expect(result.setup).toEqual({ modeId: 'default', model: 'opus', configOptions: [{ configId: 'effort', value: 'high', optional: true }] })
+  })
+
+  it('Claude: a complexity runs on its alias with no effort; neither keeps the CLI’s default; an effort alone is ignored', async () => {
+    const reset = [{ configId: 'effort', value: 'default', optional: true, reset: true }]
+    expect((await plan(createVaultClaudeLauncher(depsFor('claude', claudeVault({ complexity: 'simple' }))))).setup).toEqual({ modeId: 'default', model: 'haiku', configOptions: reset })
+    expect((await plan(createVaultClaudeLauncher(depsFor('claude', claudeVault({}))))).setup).toEqual({ modeId: 'default' })
+    expect((await plan(createVaultClaudeLauncher(depsFor('claude', claudeVault({ effort: 'high' }))))).setup).toEqual({ modeId: 'default' })
+    // An unknown effort never reaches the session; the session's own is reset instead.
+    expect((await plan(createVaultClaudeLauncher(depsFor('claude', claudeVault({ model: 'opus', effort: 'turbo' }))))).setup).toEqual({ modeId: 'default', model: 'opus', configOptions: reset })
+  })
+
+  it('Claude: a changed model is a new process; a changed effort is set on the session, not a new process', async () => {
+    const base = await plan(createVaultClaudeLauncher(depsFor('claude', claudeVault({ model: 'opus' }))))
+    const otherModel = await plan(createVaultClaudeLauncher(depsFor('claude', claudeVault({ model: 'sonnet' }))))
+    const withEffort = await plan(createVaultClaudeLauncher(depsFor('claude', claudeVault({ model: 'opus', effort: 'low' }))))
+    expect(otherModel.spec.key).not.toBe(base.spec.key)
+    expect(withEffort.spec.key).toBe(base.spec.key)
+    expect(withEffort.setup.configOptions).toEqual([{ configId: 'effort', value: 'low', optional: true }])
+    // Cleared again, the same warm process: the session's effort goes back to its `default`.
+    expect(base.setup.configOptions).toEqual([{ configId: 'effort', value: 'default', optional: true, reset: true }])
+  })
+
+  it('Codex: the effort beside a model, else the complexity’s, else medium — on every session', async () => {
+    const codexVault = (launch: Record<string, unknown>): Vault => ({
+      state: 'unlocked', runtimes: codexRuntimes,
+      auth: { codex: { loggedIn: true, method: 'api_key', keyName: 'OPENAI_API_KEY' } },
+      kv: { 'cinna.launch': { kind: 'kit', approval: 'ask', ...launch } }
+    })
+    const effortOf = async (launch: Record<string, unknown>) =>
+      (await plan(createVaultCodexLauncher(depsFor('codex', codexVault(launch))))).setup.configOptions
+    expect(await effortOf({ model: 'gpt-5.6', effort: 'xhigh' })).toEqual([{ configId: 'reasoning_effort', value: 'xhigh', optional: true }])
+    expect(await effortOf({ complexity: 'simple' })).toEqual([{ configId: 'reasoning_effort', value: 'low', optional: true }])
+    expect(await effortOf({ complexity: 'complex' })).toEqual([{ configId: 'reasoning_effort', value: 'high', optional: true }])
+    expect(await effortOf({})).toEqual([{ configId: 'reasoning_effort', value: 'medium', optional: true }])
+  })
+
+  it('Antigravity: a complexity runs on its Flash level; a named model wins', async () => {
+    const agVault = (launch: Record<string, unknown>): Vault => ({
+      state: 'unlocked', runtimes: [{ engine: 'antigravity', version: '1.4.5', kind: 'archive', sha256: 'a9a9' }],
+      auth: { antigravity: { loggedIn: true, method: 'api_key', keyName: 'GEMINI_API_KEY' } },
+      kv: { 'cinna.launch': { kind: 'kit', approval: 'ask', ...launch } }
+    })
+    const setupOf = async (launch: Record<string, unknown>) => {
+      const result = await createVaultAntigravityLauncher(depsFor('antigravity', agVault(launch))).plan(ctx)
+      if (!('spec' in result)) throw new Error(JSON.stringify(result))
+      return result.setup
+    }
+    expect(await setupOf({ complexity: 'simple' })).toEqual({ modeId: 'default', configOptions: [{ configId: 'model', value: 'gemini-3.8-flash-low', optional: true }] })
+    expect(await setupOf({ model: 'gemini-3.8-pro', complexity: 'simple' })).toEqual({ modeId: 'default', configOptions: [{ configId: 'model', value: 'gemini-3.8-pro', optional: true }] })
+    expect(await setupOf({})).toEqual({ modeId: 'default' })
   })
 })
 

@@ -936,6 +936,45 @@ describe('a turn', () => {
       ])
     })
 
+    it('resets a pinned effort to the session’s default only where it is offered and not already current', async () => {
+      // Mutation: drop the `reset` guard in `applySetup` and the unpinned and effortless sessions are asked too.
+      const effortAt = (current: string | null): Record<string, unknown> => ({
+        configOptions: [
+          ...(offered('haiku').configOptions as unknown[]),
+          ...(current === null ? [] : [{ id: 'effort', category: 'thought_level', type: 'select', currentValue: current, options: ['default', 'low', 'high'].map((value) => ({ value, name: value })) }])
+        ]
+      })
+      const sent = async (current: string | null): Promise<unknown[]> => {
+        const w = world({
+          launcher: 'claude',
+          script: { ...SAYS_HELLO, newSession: { response: effortAt(current) } },
+          setup: { modeId: 'default', model: 'haiku', configOptions: [{ configId: 'effort', value: 'default', optional: true, reset: true }] }
+        })
+        expect((await w.run()).error).toBeUndefined()
+        return w.fake.received('session/set_config_option').map((entry) => entry.params)
+      }
+      // A warm session still pinned to an effort since cleared: set back to `default`.
+      expect(await sent('high')).toEqual([expect.objectContaining({ configId: 'effort', value: 'default' })])
+      // Never pinned, or a model with no effort option: nothing asked.
+      expect(await sent('default')).toEqual([])
+      expect(await sent(null)).toEqual([])
+    })
+
+    it('skips an optional option the session is already on, and sets one it is not', async () => {
+      // Mutation: drop the already-current skip in `applySetup` and every vault Codex turn re-sends its effort.
+      const sent = async (current: string): Promise<unknown[]> => {
+        const w = world({
+          launcher: 'claude',
+          script: { ...SAYS_HELLO, newSession: { response: { configOptions: [{ id: 'reasoning_effort', type: 'select', currentValue: current, options: ['low', 'medium', 'high'].map((value) => ({ value, name: value })) }] } } },
+          setup: { modeId: 'default', configOptions: [{ configId: 'reasoning_effort', value: 'medium', optional: true }] }
+        })
+        expect((await w.run()).error).toBeUndefined()
+        return w.fake.received('session/set_config_option').map((entry) => entry.params)
+      }
+      expect(await sent('medium')).toEqual([])
+      expect(await sent('high')).toEqual([expect.objectContaining({ configId: 'reasoning_effort', value: 'medium' })])
+    })
+
     it('says so when the session declines the model', async () => {
       const w = world({
         launcher: 'claude',

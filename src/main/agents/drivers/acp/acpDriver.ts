@@ -2951,6 +2951,12 @@ async function applySetup(
     await connection.setSessionMode({ sessionId, modeId: plan.setup.modeId })
   }
   for (const option of plan.setup.configOptions ?? []) {
+    // A reset (Claude's effort `default`) only where the session offers it and is not on it already.
+    if (option.reset && (!Array.isArray(latestConfig) || !configValueOffered(latestConfig, option.configId, option.value) ||
+      configCurrentValue(latestConfig, option.configId) === option.value)) continue
+    // An optional option the session is already on needs no call (a vault Codex
+    // sends its effort every turn; a warm session usually has it already).
+    if (option.optional && Array.isArray(latestConfig) && configCurrentValue(latestConfig, option.configId) === option.value) continue
     // Antigravity names its model as an optional config option rather than
     // through `setup.model`. On a runtime with a real catalogue, a model the
     // session does not offer is the same stale model `assertModel` reports.
@@ -3098,6 +3104,13 @@ function configValueOffered(config: unknown, configId: string, value: string): b
     return o.value === value || (Array.isArray(o.options) && has(o.options))
   })
   return has(option.options)
+}
+
+/** The current value of a session's config option `configId`, or undefined when it reports none. */
+function configCurrentValue(config: unknown, configId: string): unknown {
+  if (!Array.isArray(config)) return undefined
+  const option = config.find((o) => o && typeof o === 'object' && (o as { id?: unknown }).id === configId) as { currentValue?: unknown } | undefined
+  return option?.currentValue
 }
 
 /** What the session's current model is called, for the notice: its offered name, else its value, else null. */
