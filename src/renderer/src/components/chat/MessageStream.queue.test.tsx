@@ -149,6 +149,38 @@ describe('a queued message in the transcript', () => {
     expect(screen.getByText('Queued one').closest('[data-queued-message]')).toBeNull()
   })
 
+  it('is not doubled when its saved row lands in the same render as the queue that lost it', async () => {
+    // A drain's queue push and the drained turn's row come in on different
+    // channels and can be applied in one render; the row is this message's own.
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }], held: false })
+    renderStream()
+    await screen.findByText('Queued one')
+
+    const notify = run.onQueueChanged.mock.calls.at(-1)![0]
+    await act(async () => {
+      data.messages = [{ id: 'u-1', role: 'user', content: 'Queued one' }]
+      notify({ chatId: 'chat', view: { items: [], held: false } })
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(screen.getAllByText('Queued one')).toHaveLength(1)
+    expect(screen.getByText('Queued one').closest('[data-queued-message]')).toBeNull()
+  })
+
+  it('is not doubled when the drained turn’s live message lands in the same render as the queue that lost it', async () => {
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }], held: false })
+    renderStream()
+    await screen.findByText('Queued one')
+
+    const notify = run.onQueueChanged.mock.calls.at(-1)![0]
+    await act(async () => {
+      useChatStore.setState({ isStreaming: true, streamingBlocks: [{ type: 'user', content: 'Queued one' }] })
+      notify({ chatId: 'chat', view: { items: [], held: false } })
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(screen.getAllByText('Queued one')).toHaveLength(1)
+    expect(screen.getByText('Queued one').closest('[data-queued-message]')).toBeNull()
+  })
+
   it('stands in for several messages sent as one until the merged row appears, then swaps once', async () => {
     run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'first', createdAt: 1 }, { id: 'q-2', content: 'second', createdAt: 2 }], held: false })
     const view = renderStream()

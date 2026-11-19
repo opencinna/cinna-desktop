@@ -121,8 +121,12 @@ export function useQueuedMessages(
   const queryClient = useQueryClient()
   const setSendError = useChatStore((state) => state.setSendError)
   const [tracked, setTracked] = useState<Tracked[]>([])
+  // The texts as the last committed render had them, read by the queue diff
+  // below: a drain's queue push and the drained turn's own row (saved, or
+  // live) come in on different channels and can be applied in one render, and
+  // counting that row as one from before the send would leave the bubble
+  // waiting for a second copy that never comes. Updated after the diff runs.
   const textsRef = useRef({ saved: savedUserTexts, live: liveUserTexts })
-  textsRef.current = { saved: savedUserTexts, live: liveUserTexts }
   const loadedRef = useRef(false)
   const heldRef = useRef(false)
   const cancelledRef = useRef(new Set<string>())
@@ -293,6 +297,12 @@ export function useQueuedMessages(
     })
     for (const id of cancelAgain) removeQueued(id, true)
   }, [data, removeQueued])
+
+  // After the queue diff above, in declaration order: the next diff counts
+  // only rows this render already showed.
+  useEffect(() => {
+    textsRef.current = { saved: savedUserTexts, live: liveUserTexts }
+  })
 
   // A sent bubble retires in the same render its saved row appears in — or its
   // live message, when main handed it to the running turn — so there is never
