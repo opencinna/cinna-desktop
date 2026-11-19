@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { signInAntigravityHome, writeFakeAntigravity, writeFakeSecurity, writeScriptedAntigravity } from '../fixtures/fakeAntigravity'
+import { FAKE_MODEL_DENIAL, signInAntigravityHome, writeFakeAntigravity, writeFakeSecurity, writeScriptedAntigravity } from '../fixtures/fakeAntigravity'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 
 /**
@@ -15,13 +15,23 @@ import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
  * on macOS, the login keychain (`security find-generic-password -s gemini -a
  * antigravity-acp`, exit code only). Under the sandbox `HOME` the settings file
  * does not exist, and `security` finds no keychain there either (exit 44) — so
- * every test here is **logged out**, on any machine, whatever the developer's
- * own login. The logged-in state cannot be arranged without writing a keychain
- * item, so it is not asserted here (`live-antigravity.spec.ts` covers it on the
- * developer's real login). For the same reason a session is never started: the
- * launcher refuses a logged-out home before spawning the server, so the fake's
- * `session/new` → `-32000 Authentication required` answer is never reached —
- * the tests assert that no session request arrives at all.
+ * the first two tests are **logged out**, on any machine, whatever the
+ * developer's own login. The launcher refuses a logged-out home before
+ * spawning the server, so the fake's `session/new` → `-32000 Authentication
+ * required` answer is never reached — those tests assert that no session
+ * request arrives at all.
+ *
+ * The **signed-in** describe makes the sandbox home read as logged in without
+ * any keychain: `signInAntigravityHome` writes `settings.json` (`oauth-personal`)
+ * and the Linux token file, and `writeFakeSecurity` puts a `security` that
+ * finds every item (exit 0) first on main's `PATH`. Its tests run whole turns:
+ * on the scripted ACP agent (the permission policy), and on the fake server's
+ * `silent-provider-error` mode — `session/prompt` never answered, a 503 written
+ * into the server's own transcript under the folder's isolated `GEMINI_HOME`
+ * (`<agent>/.cinna/antigravity`) — which the driver polls every 5 s and turns
+ * into a notice. The generic "No reply from Antigravity after 90 s" notice is
+ * only asserted absent at the end: no test waits 90 s, so its suppression by
+ * a shown provider error is covered by the driver's unit tests, not here.
  *
  * Nothing downloads: the fixture sets `CINNA_ANTIGRAVITY_DOWNLOAD=off`, and a
  * test that needs a server names the scripted one (`fakeAntigravity.ts`) as the
@@ -55,6 +65,9 @@ const TERMS = 'Antigravity is Google’s software, with its own terms and teleme
 /** A runtime card's chip ignores presses this long after the card is selected (the double-click guard). */
 const CHIP_SETTLE_MS = 450
 const LOGIN_PENDING = /^(Getting Antigravity ready…|Waiting for sign-in in your browser…)$/
+const PROMPT = 'Summarise the notes folder in one line'
+const PROVIDER_NOTE = 'Gemini answered an error (503): The model is currently unreachable. Antigravity keeps retrying; Stop ends the turn.'
+const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 test('Antigravity as the Default runtime: selecting installs nothing, Install with downloads off says so, and Log in on a configured server moves nothing', async ({ cinna }) => {
   await cinna.skipOnboarding()
@@ -279,5 +292,60 @@ test.describe('signed in, on Ask for approval', () => {
     expect(fake.received('session/set_mode').map((entry) => entry.params?.modeId)).toEqual(['default'])
     // Nothing remembered: the policy writes no grant.
     expect(await page.evaluate((id) => window.api.localAgents.grantsList(id), agent.id)).toEqual([])
+  })
+  test('a silent turn whose server transcript logs a 503 shows the provider error, not the model’s denial, and Stop ends it', async ({ cinna }) => {
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+    const root = await addAgentRoot(cinna)
+    const agent = await createFolderAgent(cinna, root, 'Gemini Silent', 'Gemini Silent')
+    const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
+      agentId: input.agentId,
+      update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: null, complexity: 'medium' } },
+      expectedStamp: input.stamp
+    }), { agentId: agent.id, stamp: agent.stamps[MANIFEST_FILE]! })
+    expect(saved.ok).toBe(true)
+    const fake = writeFakeAntigravity(cinna, { mode: 'silent-provider-error' })
+    await cinna.page.evaluate((path) => window.api.settings.set('localAgentsAntigravityPath', path), fake.path)
+    signInAntigravityHome(cinna.sandbox.home)
+    await cinna.relaunch()
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    const page = cinna.page
+    await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    await answerAgentsFolder(cinna)
+    await page.getByRole('button', { name: agent.name, exact: true }).click()
+    const composer = page.getByRole('combobox', { name: 'Type a message...', exact: true })
+    await composer.fill(PROMPT)
+    await composer.press('Enter')
+
+    // The server never answers; the note comes from its own transcript (polled every 5 s).
+    const note = page.getByText(PROVIDER_NOTE, { exact: true })
+    await expect(note).toBeVisible({ timeout: 15_000 })
+    await expect(note).not.toContainText(PROMPT)
+    // Written where the app reads it: the isolated folder's own Antigravity home.
+    expect(fake.transcripts()).toEqual([expect.stringMatching(new RegExp(`^${escape(join(agent.path, '.cinna', 'antigravity', 'antigravity-acp', 'brain'))}/ses-silent-`))])
+    expect(fake.received('session/update')).toEqual([])
+    await expect(page.getByText(FAKE_MODEL_DENIAL)).toHaveCount(0)
+
+    const stop = page.getByRole('button', { name: 'Stop', exact: true })
+    await expect(stop).toBeVisible()
+    await stop.click()
+    await expect(stop).toHaveCount(0)
+    expect(fake.received('session/cancel')).toHaveLength(1)
+    // Stopped cleanly: the turn leaves the prompt and the note, persisted as a notice row —
+    // no error row, no assistant text, and the MODEL denial nowhere.
+    const [chat] = await page.evaluate(() => window.api.chat.list())
+    expect((await page.evaluate((id) => window.api.chat.get(id), chat.id))?.messages.map(({ role, content }) => ({ role, content })))
+      .toEqual([{ role: 'user', content: PROMPT }, { role: 'agent_transition', content: PROVIDER_NOTE }])
+    // Once persisted, a notice collapses to its dot (compact mode); opening it reads the same sentence.
+    const dot = page.getByRole('button', { name: 'Show agent notice', exact: true })
+    await expect(dot).toHaveCount(1)
+    await expect(dot).toHaveAttribute('title', PROVIDER_NOTE)
+    await dot.click()
+    await expect(page.getByRole('button', { name: 'Hide agent notice', exact: true })).toHaveText(PROVIDER_NOTE)
+    await expect(page.getByText(FAKE_MODEL_DENIAL)).toHaveCount(0)
+    // The generic notice is due only after 90 s of silence, which this test never waits for:
+    // it is absent here because the turn ended first, not proven suppressed by the provider error.
+    await expect(page.getByText(/^No reply from Antigravity/)).toHaveCount(0)
   })
 })

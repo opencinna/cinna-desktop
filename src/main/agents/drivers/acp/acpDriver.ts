@@ -113,7 +113,9 @@ import { isSlashCommand, turnContextBlock, turnPromptText } from '../../../servi
 import { expandPluginCommand, type PluginCommandTemplate } from '../../../services/pluginCommandExpansion'
 import { createAcpActivityStopper } from './acpActivityStop'
 import { createToolStallWatch, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage, type ToolStallWatch } from './acpToolStall'
-import { ACP_SILENT_TURN_NOTICE_MS, createSilentTurnWatch, silentTurnEngineName, silentTurnNotice } from './acpSilentTurn'
+import { ACP_SILENT_TURN_NOTICE_MS, createSilentTurnWatch, type SilentTurnWatch, silentTurnEngineName, silentTurnNotice } from './acpSilentTurn'
+import { ANTIGRAVITY_SERVER_LOG_POLL_MS, classifyProviderError, createProviderErrorWatch, providerErrorNotice, readAntigravityProviderErrors, type AntigravityServerLogReader } from './antigravityServerLog'
+import { antigravityHome } from './antigravityEnv'
 import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
 import {
   createSessionObservation,
@@ -303,6 +305,10 @@ export interface AcpDriverDeps {
   toolStallMs?: number
   /** Override the silence before a prompted turn's "no reply yet" notice ({@link ACP_SILENT_TURN_NOTICE_MS}). Tests only. */
   silentTurnNoticeMs?: number
+  /** Override how often a silent host Antigravity turn's own transcript is read ({@link ANTIGRAVITY_SERVER_LOG_POLL_MS}). Tests only. */
+  antigravityServerLogPollMs?: number
+  /** Override the reader of Antigravity's transcript for provider errors (`antigravityServerLog.ts`). Tests only. */
+  antigravityServerLog?: AntigravityServerLogReader
   /** Override the wait for a `session/cancel` acknowledgement. Tests only. */
   cancelGraceMs?: number
   /** Override the wait for a context measurement ({@link ACP_CONTEXT_USAGE_TIMEOUT_MS}). Tests only. */
@@ -1401,15 +1407,46 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   // The "no reply yet" notice: only the first prompt's first response, never
   // stopping anything (see `acpSilentTurn.ts`).
   const silentMs = deps.silentTurnNoticeMs ?? ACP_SILENT_TURN_NOTICE_MS
-  const silentWatch = createSilentTurnWatch({
+  // Set once a provider error from Antigravity's own transcript was shown: the
+  // generic notice would only repeat it, vaguer.
+  let providerErrorShown = false
+  const noReplyWatch = createSilentTurnWatch({
     ms: silentMs,
     onSilent: () => {
-      if (!turn.open || input.signal.aborted) return
+      if (!turn.open || input.signal.aborted || providerErrorShown) return
       const engine = silentTurnEngineName(ctx.launcherId, plan.spec.vault?.engine, runtime.type === 'external' ? runtime.name : agent.name)
       logger.warn('an ACP agent has sent nothing since its prompt', { agentId: agent.id, chatId, sessionId, launcher: ctx.launcherId, afterMs: silentMs })
       emit(stream.note(silentTurnNotice(engine, silentMs)).message)
     }
   })
+  // Over the same silence, a host Antigravity turn reads the server's own
+  // transcript: a provider error (a Gemini 503) never reaches the ACP wire, it
+  // only lands there (see `antigravityServerLog.ts`). Not for a vault agent:
+  // its transcript is inside the guest (`/vault/home/.gemini/…`) and vaultd's
+  // `files.read` only reaches agent-relative paths, so it keeps the generic
+  // notice until the guest can hand the log over.
+  const providerErrorWatch = ctx.launcherId === 'antigravity' && !plan.spec.vault && !plan.spec.remote && !vaultSession(runtime)
+    ? createProviderErrorWatch({
+        pollMs: deps.antigravityServerLogPollMs ?? ANTIGRAVITY_SERVER_LOG_POLL_MS,
+        read: deps.antigravityServerLog ?? readAntigravityProviderErrors,
+        home: antigravityHome(plan.spec.env),
+        sessionId: () => sessionId,
+        onError: (error) => {
+          if (!turn.open || input.signal.aborted) return
+          providerErrorShown = true
+          logger.info('surfaced a provider error from Antigravity’s transcript', { agentId: agent.id, chatId, sessionId, kind: classifyProviderError(error).kind, code: error.code ?? null })
+          // The raw string (a transport chain names the endpoint, never a key) only at debug.
+          logger.debug('the provider error as Antigravity logged it', { sessionId, error: error.message })
+          emit(stream.note(providerErrorNotice(error)).message)
+        },
+        onRepeat: (error) => logger.debug('Antigravity logged the same provider error again', { sessionId, step: error.stepIndex, code: error.code ?? null })
+      })
+    : null
+  const silentWatch: SilentTurnWatch = {
+    start() { noReplyWatch.start(); providerErrorWatch?.start() },
+    heard() { noReplyWatch.heard(); providerErrorWatch?.heard() },
+    stop() { noReplyWatch.stop(); providerErrorWatch?.stop() }
+  }
   /**
    * Both ways a turn is told to stop, in one signal.
    *

@@ -36,6 +36,7 @@ import { createAcpProcessPool } from './acpProcessPool'
 import { SHELL_LEAD_IN } from '../../../services/pluginCommandExpansion'
 import { ACP_TOOL_STALL_MS, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage } from './acpToolStall'
 import { silentTurnNotice } from './acpSilentTurn'
+import { providerErrorNotice, type AntigravityProviderError, type AntigravityServerLogReader } from './antigravityServerLog'
 import { turnLock } from '../../../services/localAgents/turnLock'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLaunchContext, AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
@@ -5304,4 +5305,152 @@ describe('a prompted turn whose engine sends nothing at all', () => {
     expect(textOf(result)).toContain('Background. More.')
     expect(f.events.filter((event) => event.type === 'delta' && event.kind === 'notice')).toHaveLength(0)
   }, 10_000)
+})
+
+describe('a silent host Antigravity turn whose server logged a provider error', () => {
+  // The pinned server answers a Gemini 503 with nothing on the wire and keeps
+  // retrying; the error is only in its own transcript, which the driver polls
+  // (here an injected reader, every 100 ms) from the first prompt until anything
+  // is heard. The generic 300 ms notice would otherwise come too.
+  const SILENT = { silentTurnNoticeMs: 300, turnCeilingMs: 60_000, antigravityServerLogPollMs: 100 }
+  const GENERIC = silentTurnNotice('Antigravity', 300)
+  const unreachable = (at = Date.now()): AntigravityProviderError => ({ stepIndex: 2, message: 'The model is currently unreachable.', code: 503, at })
+  const NOTE = providerErrorNotice(unreachable())
+  const reply = (text: string): FakeAcpStep => ({
+    kind: 'update',
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }
+  })
+  const noted = (w: World, text: string): number =>
+    w.events.filter((event) => event.type === 'delta' && event.kind === 'notice' && event.text === text).length
+  /** A reader over a list the test changes, applying `since` as the real one does. */
+  const readerOf = (errors: () => AntigravityProviderError[]) =>
+    vi.fn<AntigravityServerLogReader>(async (_home, _sessionId, since) => errors().filter((error) => error.at >= since - 2_000))
+
+  it('notes the provider error once, and not the generic silence after it', async () => {
+    // Mutation: drop `providerErrorWatch?.start()` → no provider note, the generic one instead.
+    const t0 = Date.now()
+    const read = readerOf(() => [unreachable()])
+    const w = world({ launcher: 'antigravity', script: { prompt: { emit: [{ kind: 'delay', ms: 900 }, reply('Finally here.')] } }, deps: { ...SILENT, antigravityServerLog: read } })
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(result.text).toContain('Finally here.')
+    expect(NOTE).toBe('Gemini answered an error (503): The model is currently unreachable. Antigravity keeps retrying; Stop ends the turn.')
+    expect(noted(w, NOTE)).toBe(1)
+    expect(JSON.stringify(result.notices)).toContain(NOTE)
+    // Mutation: drop the `providerErrorShown` guard in `onSilent` → the generic notice comes too.
+    expect(noted(w, GENERIC)).toBe(0)
+    expect(w.fake.received('session/cancel')).toHaveLength(0)
+    const [, sessionId, since] = read.mock.calls[0]
+    expect(sessionId).toBe(w.fake.received('session/prompt')[0].params?.sessionId)
+    expect(since).toBeGreaterThanOrEqual(t0)
+  })
+
+  it('notes two distinct errors once each', async () => {
+    let errors = [unreachable()]
+    const read = readerOf(() => errors)
+    const w = world({ launcher: 'antigravity', script: { prompt: { emit: [{ kind: 'delay', ms: 400 }, { kind: 'delay', ms: 600 }, reply('Done.')] } }, deps: { ...SILENT, antigravityServerLog: read } })
+    const running = w.run()
+    await waitFor(() => noted(w, NOTE) > 0 || undefined, 'the first provider note')
+    const quota: AntigravityProviderError = { stepIndex: 5, message: 'Resource has been exhausted.', code: 429, at: Date.now() }
+    errors = [unreachable(), quota]
+    await running
+    expect(noted(w, NOTE)).toBe(1)
+    expect(noted(w, providerErrorNotice(quota))).toBe(1)
+    expect(noted(w, GENERIC)).toBe(0)
+  })
+
+  it('surfaces nothing once anything was heard', async () => {
+    // Mutation: drop `providerErrorWatch?.heard()` → the note comes after the thought.
+    const read = readerOf(() => [unreachable()])
+    const w = world({
+      launcher: 'antigravity',
+      script: { prompt: { emit: [{ kind: 'update', update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Hmm.' } } }, { kind: 'delay', ms: 700 }, reply('Done.')] } },
+      deps: { ...SILENT, antigravityServerLogPollMs: 150, antigravityServerLog: read }
+    })
+    const result = await w.run()
+    expect(result.text).toContain('Done.')
+    expect(noted(w, NOTE)).toBe(0)
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('notes a 503 the server retried three times once', async () => {
+    // Each retry is a new step with the same error. Mutation: dedupe by step only → three notes.
+    const read = readerOf(() => [2, 3, 4].map((stepIndex) => ({ ...unreachable(), stepIndex })))
+    const w = world({ launcher: 'antigravity', script: { prompt: { emit: [{ kind: 'delay', ms: 600 }, reply('Done.')] } }, deps: { ...SILENT, antigravityServerLog: read } })
+    await w.run()
+    expect(noted(w, NOTE)).toBe(1)
+    expect(w.events.filter((event) => event.type === 'delta' && event.kind === 'notice')).toHaveLength(1)
+  })
+
+  it('stops polling at the user’s Stop, while the agent takes its time to stop', async () => {
+    // Mutation: drop `silentWatch.stop()` from `askAgentToStop` → reads go on inside the cancel's grace.
+    const read = readerOf(() => [])
+    const controller = new AbortController()
+    const w = world({
+      launcher: 'antigravity',
+      script: { prompt: { emit: [{ kind: 'awaitCancel' }, { kind: 'delay', ms: 700 }], response: { stopReason: 'cancelled' } } },
+      deps: { ...SILENT, cancelGraceMs: 2_000, antigravityServerLog: read }
+    })
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => read.mock.calls.length > 0 || undefined, 'the first read')
+    controller.abort()
+    const calls = read.mock.calls.length
+    const result = await running
+    expect(result.taskState).toBe('canceled')
+    await settle(200)
+    expect(read.mock.calls.length).toBe(calls)
+  })
+
+  it('does not show an error logged before this turn’s prompt', async () => {
+    const read = readerOf(() => [unreachable(Date.now() - 60_000)])
+    const w = world({ launcher: 'antigravity', script: { prompt: { emit: [{ kind: 'delay', ms: 700 }, reply('Done.')] } }, deps: { ...SILENT, antigravityServerLog: read } })
+    await w.run()
+    expect(read).toHaveBeenCalled()
+    expect(noted(w, NOTE)).toBe(0)
+    expect(noted(w, GENERIC)).toBe(1)
+  })
+
+  it('stops polling when a turn that stayed silent ends', async () => {
+    // Mutation: drop `providerErrorWatch?.stop()` → the reader is still called after the turn.
+    const read = readerOf(() => [])
+    const w = world({ launcher: 'antigravity', script: { prompt: { emit: [{ kind: 'delay', ms: 250 }] } }, deps: { ...SILENT, antigravityServerLog: read } })
+    await w.run()
+    const calls = read.mock.calls.length
+    expect(calls).toBeGreaterThan(0)
+    await settle(400)
+    expect(read.mock.calls.length).toBe(calls)
+  })
+
+  it('never reads for another engine', async () => {
+    const read = readerOf(() => [unreachable()])
+    const w = world({ launcher: 'codex', script: { prompt: { emit: [{ kind: 'delay', ms: 600 }] } }, deps: { ...SILENT, antigravityServerLog: read } })
+    await w.run()
+    expect(read).not.toHaveBeenCalled()
+    expect(noted(w, silentTurnNotice('Codex', 300))).toBe(1)
+  })
+
+  it('never reads for an Antigravity agent in a vault, which keeps the generic notice', async () => {
+    // Mutation: drop `!vaultSession(runtime)` from the watch's condition → the reader is called.
+    const read = readerOf(() => [unreachable()])
+    let self: World | undefined
+    const w = world({
+      launcher: 'antigravity',
+      folder: { ...FOLDER, runtime: { engine: 'antigravity' }, vault: { vaultId: 'v1', engine: 'antigravity' } },
+      script: { prompt: { emit: [{ kind: 'delay', ms: 600 }] } },
+      deps: {
+        ...SILENT,
+        antigravityServerLog: read,
+        vault: {
+          launcher: () => self!.deps.launcher('antigravity') ?? null,
+          readiness: async () => ({ state: 'ready' }) as never,
+          hold: async () => async () => {}
+        }
+      }
+    })
+    self = w
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(read).not.toHaveBeenCalled()
+    expect(noted(w, GENERIC)).toBe(1)
+  })
 })
