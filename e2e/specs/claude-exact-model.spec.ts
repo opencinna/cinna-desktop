@@ -239,7 +239,10 @@ test('a declared model Claude Code no longer offers: the panel line, the compose
     const traffic = turnTraffic(fake, agent.path)
     const order = traffic.map(subtype)
     const argv = traffic.find((entry) => entry.dir === 'argv')
-    expect(argv?.args, 'the turn’s CLI was launched on the stale model').toEqual(expect.arrayContaining(['--model', STALE_MODEL]))
+    // `--model=<id>` since the 0.101 adapter's SDK (deps round 1fb413fb); `--model <id>` before it.
+    const args = argv?.args ?? []
+    const launchedOn = args.flatMap((arg, i) => arg === '--model' ? [args[i + 1]] : arg.startsWith('--model=') ? [arg.slice('--model='.length)] : [])
+    expect(launchedOn, 'the turn’s CLI was launched on the stale model').toEqual([STALE_MODEL])
     const setModels = traffic.filter((entry) => entry.message?.request?.subtype === 'set_model').map((entry) => entry.message?.request?.model)
     expect(setModels, `the turn's CLI was moved onto the default: ${order.join(', ')}`).toEqual(['default'])
     const setModel = order.indexOf('control:set_model')
