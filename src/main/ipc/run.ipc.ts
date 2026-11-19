@@ -54,6 +54,10 @@ export function registerRunHandlers(): void {
     const scope = ownedChatScope(chatId)
     return typeof id === 'string' && runQueueService.remove(scope, chatId, id)
   })
+  ipcHandle('run:queue-send-now', (_event, chatId: string, id: string) => {
+    const scope = ownedChatScope(chatId)
+    return typeof id === 'string' && runQueueService.sendNow(scope, chatId, id)
+  })
   ipcHandle('run:queue-edit', (_event, chatId: string, id: string, content: string) => {
     const scope = ownedChatScope(chatId)
     return typeof id === 'string' && runQueueService.edit(scope, chatId, id, content)

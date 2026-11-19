@@ -3,6 +3,7 @@ const run = vi.hoisted(() => {
   const methods = {
     queueList: vi.fn(),
     queueRemove: vi.fn(async () => true),
+    queueSendNow: vi.fn(async () => true),
     onQueueChanged: vi.fn((_handler: (payload: { chatId: string; view: unknown }) => void) => () => undefined)
   }
   Object.assign(window, { api: { app: { setTheme: async () => {} }, run: methods, files } })
@@ -518,5 +519,81 @@ describe('a message the running turn took in', () => {
     expect(message.closest('[data-queued-message]')).toBeNull()
     // A message steered straight in, with no queued bubble before it, pops in.
     expect(message.closest('.anim-user-bubble-pop')).not.toBeNull()
+  })
+})
+
+describe('sending a queued message now', () => {
+  it('has a send chip before the [x] whose hover and focus read Stop & send?, without resizing the badge', async () => {
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }], held: false })
+    renderStream()
+    await screen.findByText('Queued one')
+
+    const send = screen.getByRole('button', { name: 'Stop and send now' })
+    expect(follows(send, screen.getByRole('button', { name: 'Cancel queued message' }))).toBe(true)
+    expect(send.className.split(/\s+/)).toContain('bg-[var(--color-bg-secondary)]')
+    expect(screen.getByText('Stop & send?').parentElement).toBe(screen.getByText('Queued').parentElement)
+    expect(shown('Stop & send?')).toBe(false)
+
+    fireEvent.mouseEnter(send)
+    expect(shown('Stop & send?')).toBe(true)
+    expect(shown('Queued')).toBe(false)
+    expect(shown('Cancel?')).toBe(false)
+    fireEvent.mouseLeave(send)
+    expect(shown('Queued')).toBe(true)
+    fireEvent.focus(send)
+    expect(shown('Stop & send?')).toBe(true)
+    fireEvent.blur(send)
+    expect(shown('Queued')).toBe(true)
+  })
+
+  it('asks main to stop the turn and send this message, and the bubble leaves as sent when the queue drains', async () => {
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }, { id: 'q-2', content: 'Queued two', createdAt: 2 }], held: false })
+    renderStream()
+    await screen.findByText('Queued two')
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Stop and send now' })[1])
+    await waitFor(() => expect(run.queueSendNow).toHaveBeenCalledWith('chat', 'q-2'))
+    expect(run.queueRemove).not.toHaveBeenCalled()
+    // Main drains the queue rather than holding it: both left as one send.
+    await queueBecomes({ items: [], held: false })
+    expect(bubbleRow('Queued one').dataset.phase).toBe('sent')
+    expect(bubbleRow('Queued two').dataset.phase).toBe('sent')
+    for (const send of screen.getAllByRole('button', { name: 'Stop and send now' })) {
+      expect(send.hasAttribute('disabled')).toBe(true)
+    }
+    expect(useChatStore.getState().sendError).toBeNull()
+  })
+
+  it('says so in the composer when main refuses, and says nothing when the message had already left', async () => {
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }], held: false })
+    renderStream()
+    await screen.findByText('Queued one')
+    const send = screen.getByRole('button', { name: 'Stop and send now' })
+
+    run.queueSendNow.mockResolvedValueOnce(false)
+    await act(async () => { fireEvent.click(send) })
+    expect(useChatStore.getState().sendError).toBeNull()
+
+    run.queueSendNow.mockRejectedValueOnce(new Error("Error invoking remote method 'run:queue-send-now': Error: Chat not found"))
+    await act(async () => { fireEvent.click(send) })
+    await waitFor(() => expect(useChatStore.getState().sendError).toBe('Chat not found'))
+    expect(bubbleRow('Queued one').dataset.phase).toBe('queued')
+  })
+
+  it('is disabled on every bubble while a queued message in the chat is being edited', async () => {
+    run.queueList.mockResolvedValue({ items: [{ id: 'q-1', content: 'Queued one', createdAt: 1 }, { id: 'q-2', content: 'Queued two', createdAt: 2 }], held: false })
+    renderStream()
+    await screen.findByText('Queued two')
+
+    act(() => useChatStore.getState().setEditingQueued({ chatId: 'chat', id: 'q-1' }))
+    const sends = screen.getAllByRole('button', { name: 'Stop and send now' })
+    for (const send of sends) expect(send.hasAttribute('disabled')).toBe(true)
+    fireEvent.mouseEnter(sends[1])
+    expect(screen.getAllByText('Stop & send?').every((label) => label.classList.contains('invisible'))).toBe(true)
+    fireEvent.click(sends[1])
+    expect(run.queueSendNow).not.toHaveBeenCalled()
+
+    act(() => useChatStore.getState().setEditingQueued(null))
+    for (const send of screen.getAllByRole('button', { name: 'Stop and send now' })) expect(send.hasAttribute('disabled')).toBe(false)
   })
 })

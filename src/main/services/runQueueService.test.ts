@@ -687,3 +687,119 @@ describe('runQueueService take, remove, edit and clear', () => {
     expect(service.list({ profileUserId: 'user-2', settingsUserId: 's' }, CHAT).items).toEqual([])
   })
 })
+
+describe('runQueueService.sendNow', () => {
+  it('stops the running turn and drains the queue from its head instead of holding it', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('first'), options)
+    const second = await service.submit(SCOPE, payload('second'), options) as { queuedId: string }
+    expect(service.sendNow(SCOPE, CHAT, second.queuedId)).toBe(true)
+    expect(active.handle.cancel).toHaveBeenCalledTimes(1)
+    expect(start).not.toHaveBeenCalled()
+    active.end('canceled')
+    await flush()
+    const merged = { chatId: CHAT, content: 'first\n\nsecond', addressedAgentId: 'agent-a' }
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledWith(SCOPE, merged, { observe: expect.any(Function), sent: merged })
+    expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
+  })
+
+  it('answers false and stops nothing for a message that is not queued', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('first'), options)
+    expect(service.sendNow(SCOPE, CHAT, 'nope')).toBe(false)
+    expect(active.handle.cancel).not.toHaveBeenCalled()
+    // Nor does a later plain Stop drain.
+    active.end('canceled')
+    await flush()
+    expect(start).not.toHaveBeenCalled()
+    expect(service.list(SCOPE, CHAT).held).toBe(true)
+  })
+
+  it('answers false for a held queue', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    const queued = await service.submit(SCOPE, payload('wait'), options) as { queuedId: string }
+    active.end('canceled')
+    await flush()
+    expect(service.sendNow(SCOPE, CHAT, queued.queuedId)).toBe(false)
+    expect(start).not.toHaveBeenCalled()
+    expect(service.list(SCOPE, CHAT)).toMatchObject({ items: [{ content: 'wait' }], held: true })
+  })
+
+  it.each(['failed', 'budget'] as const)('still holds the queue when the stopped turn ends %s', async (state) => {
+    const service = createRunQueueService()
+    const active = running()
+    const queued = await service.submit(SCOPE, payload('wait'), options) as { queuedId: string }
+    service.sendNow(SCOPE, CHAT, queued.queuedId)
+    active.end(state)
+    await flush()
+    expect(start).not.toHaveBeenCalled()
+    expect(service.list(SCOPE, CHAT)).toMatchObject({ items: [{ content: 'wait' }], held: true })
+  })
+
+  it('is not carried into a later turn: a plain Stop then still holds', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    const queued = await service.submit(SCOPE, payload('first'), options) as { queuedId: string }
+    service.sendNow(SCOPE, CHAT, queued.queuedId)
+    active.end('canceled')
+    await flush()
+    expect(start).toHaveBeenCalledTimes(1)
+    const drained = runs.at(-1)!
+    await service.submit(SCOPE, payload('second'), options)
+    drained.end('canceled')
+    await flush()
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(service.list(SCOPE, CHAT)).toMatchObject({ items: [{ content: 'second' }], held: true })
+  })
+
+  it('is not carried past a turn that ended on its own before the stop reached it', async () => {
+    const service = createRunQueueService()
+    answererOf.mockImplementation((_chat, sent) => ({ kind: 'agent', agentId: sent?.addressedAgentId ?? 'agent-a' }))
+    const active = running()
+    await service.submit(SCOPE, payload('first'), options)
+    const second = await service.submit(SCOPE, payload('second', { addressedAgentId: 'agent-b' }), options) as { queuedId: string }
+    service.sendNow(SCOPE, CHAT, second.queuedId)
+    active.end('completed')
+    await flush()
+    expect(start).toHaveBeenCalledTimes(1)
+    // The drained turn is stopped by hand: what is left holds.
+    runs.at(-1)!.end('canceled')
+    await flush()
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(service.list(SCOPE, CHAT).held).toBe(true)
+  })
+
+  it('drains once a hand-over in flight is answered, when the turn was stopped meanwhile', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    await service.submit(SCOPE, payload('one'), options)
+    let answer!: (outcome: Awaited<ReturnType<RunHandle['steer']>>) => void
+    active.steer.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+    active.offer()
+    const two = await service.submit(SCOPE, payload('two'), options) as { queuedId: string }
+    expect(service.sendNow(SCOPE, CHAT, two.queuedId)).toBe(true)
+    expect(active.handle.cancel).toHaveBeenCalledTimes(1)
+    active.end('canceled')
+    await flush()
+    expect(start).not.toHaveBeenCalled()
+    answer('unavailable')
+    await flush()
+    expect(start.mock.calls.map((call) => call[1].content)).toEqual(['one\n\ntwo'])
+    expect(service.list(SCOPE, CHAT)).toEqual({ items: [], held: false })
+  })
+
+  it('drains at once when no turn is running and no hand-over is in flight', async () => {
+    const service = createRunQueueService()
+    const active = running()
+    const queued = await service.submit(SCOPE, payload('first'), options) as { queuedId: string }
+    // The turn left without its ending reaching the queue yet.
+    activeRunsByChat.delete(CHAT)
+    expect(service.sendNow(SCOPE, CHAT, queued.queuedId)).toBe(true)
+    expect(active.handle.cancel).not.toHaveBeenCalled()
+    expect(start.mock.calls.map((call) => call[1].content)).toEqual(['first'])
+  })
+})

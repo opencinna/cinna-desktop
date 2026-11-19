@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { X } from 'lucide-react'
+import { SendHorizontal, X } from 'lucide-react'
 import type { RunQueueView } from '../../../../shared/ipcPayloads'
 import type { MessageAttachment } from '../../../../shared/attachments'
 import { useRunQueue } from '../../hooks/useRunQueue'
@@ -79,6 +79,11 @@ export interface QueuedMessagesView {
    */
   handsOver: (content: string) => boolean
   cancel: (id: string) => void
+  /**
+   * Stop the running turn and send the queue now, from its head, this message
+   * included. The bubbles leave as any drained message does.
+   */
+  sendNow: (id: string) => void
 }
 
 const LEAVE_MS = 200
@@ -329,6 +334,13 @@ export function useQueuedMessages(
     removeQueued(id, false)
   }, [removeQueued])
 
+  const sendNow = useCallback((id: string) => {
+    // A false answer needs nothing: the message already left the queue, and
+    // the queue's push says where it went.
+    void window.api.run.queueSendNow(chatId, id)
+      .catch((error) => setSendError(unwrapIpcError(error, 'The queued message could not be sent now.')))
+  }, [chatId, setSendError])
+
   const bubbles = tracked
     .filter((entry) => !retired.has(entry.id) && !(entry.phase === 'queued' && data?.held))
     .map(({ id, content, attachments, phase, animateIn }) => ({ id, content, attachments, phase, animateIn }))
@@ -340,7 +352,8 @@ export function useQueuedMessages(
     bubbles,
     holdsSent: bubbles.some((bubble) => bubble.phase === 'sent'),
     handsOver: (content) => handsOverTexts.has(content),
-    cancel
+    cancel,
+    sendNow
   }
 }
 
@@ -360,29 +373,42 @@ export function QueuedMessages({ view }: { view: QueuedMessagesView }): React.JS
           bubble={bubble}
           editing={editing?.chatId === view.chatId && editing.id === bubble.id}
           onCancel={() => view.cancel(bubble.id)}
+          onSendNow={() => view.sendNow(bubble.id)}
+          // Mid-edit, a drain would send the text before the edit and call the
+          // edit too late: Save or Esc first.
+          sendBlocked={editing?.chatId === view.chatId}
         />
       ))}
     </>
   )
 }
 
-const BADGE_LABELS = ['Queued', 'Cancel?', 'Editing'] as const
+const BADGE_LABELS = ['Queued', 'Cancel?', 'Stop & send?', 'Editing'] as const
+const SEND_NOW_NAME = 'Stop and send now'
 
 function QueuedBubbleRow({
   bubble,
   editing,
-  onCancel
+  onCancel,
+  onSendNow,
+  sendBlocked
 }: {
   bubble: QueuedBubble
   editing: boolean
   onCancel: () => void
+  onSendNow: () => void
+  /** A queued message in this chat is being edited. */
+  sendBlocked: boolean
 }): React.JSX.Element {
-  const [armed, setArmed] = useState(false)
+  // Which chip is under the pointer or focus, if any.
+  const [armed, setArmed] = useState<'cancel' | 'send' | null>(null)
   const queued = bubble.phase === 'queued'
   const leaving = bubble.phase === 'leaving'
-  // The [x] under the pointer or focus confirms what a click does, even on the
+  // A chip under the pointer or focus confirms what a click does, even on the
   // message being edited.
-  const label = armed && queued ? 'Cancel?' : editing ? 'Editing' : 'Queued'
+  const label = armed === 'cancel' && queued ? 'Cancel?'
+    : armed === 'send' && queued && !sendBlocked ? 'Stop & send?'
+      : editing ? 'Editing' : 'Queued'
   return (
     // The 12px gap above the row is the transcript's `space-y-3` margin, which
     // belongs to the element before it. The row takes it back (`-mt-3`) and
@@ -411,7 +437,7 @@ function QueuedBubbleRow({
                 className={`mr-3 flex items-center gap-0.5 rounded-b-lg bg-[var(--color-bg-tertiary)] pt-2 pb-0.5 pl-2 pr-0.5
                   text-[10px] font-medium transition-transform duration-200 ease-out motion-reduce:transition-none
                   ${queued ? '' : '-translate-y-full'}
-                  ${label === 'Cancel?' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'}`}
+                  ${label === 'Cancel?' ? 'text-[var(--color-danger)]' : label === 'Stop & send?' ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-secondary)]'}`}
               >
                 {/* Every label in one cell, sized by the longest: the swap never resizes the badge. */}
                 <span className="grid">
@@ -425,15 +451,29 @@ function QueuedBubbleRow({
                     </span>
                   ))}
                 </span>
-                {/* A chip of its own at rest, so it reads as a control beside its label before any hover (ux_rules §11). */}
+                {/* Chips of their own at rest, so they read as controls beside the label before any hover (ux_rules §11). */}
+                <button
+                  type="button"
+                  onClick={onSendNow}
+                  disabled={!queued || sendBlocked}
+                  onMouseEnter={() => setArmed('send')}
+                  onMouseLeave={() => setArmed(null)}
+                  onFocus={() => setArmed('send')}
+                  onBlur={() => setArmed(null)}
+                  aria-label={SEND_NOW_NAME}
+                  className="inline-flex h-5 w-5 items-center justify-center rounded bg-[var(--color-bg-secondary)]
+                    hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent)] transition-colors"
+                >
+                  <SendHorizontal size={10} />
+                </button>
                 <button
                   type="button"
                   onClick={onCancel}
                   disabled={!queued}
-                  onMouseEnter={() => setArmed(true)}
-                  onMouseLeave={() => setArmed(false)}
-                  onFocus={() => setArmed(true)}
-                  onBlur={() => setArmed(false)}
+                  onMouseEnter={() => setArmed('cancel')}
+                  onMouseLeave={() => setArmed(null)}
+                  onFocus={() => setArmed('cancel')}
+                  onBlur={() => setArmed(null)}
                   aria-label="Cancel queued message"
                   className="inline-flex h-5 w-5 items-center justify-center rounded bg-[var(--color-bg-secondary)]
                     hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-danger)] transition-colors"

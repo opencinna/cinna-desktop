@@ -1294,6 +1294,13 @@ const api = {
     queueTake: (chatId: string): Promise<RunQueueTakenItem[]> => ipcRenderer.invoke('run:queue-take', chatId),
     queueRemove: (chatId: string, id: string): Promise<boolean> =>
       ipcRenderer.invoke('run:queue-remove', chatId, id),
+    /**
+     * Stop the chat's running turn and send the queue now, from its head, the
+     * message `id` included. False when it is no longer queued or the queue is
+     * held; a turn that fails on its way out still holds the queue.
+     */
+    queueSendNow: (chatId: string, id: string): Promise<boolean> =>
+      ipcRenderer.invoke('run:queue-send-now', chatId, id),
     /** Replace a queued message's text; false when it is no longer queued. */
     queueEdit: (chatId: string, id: string, content: string): Promise<boolean> =>
       ipcRenderer.invoke('run:queue-edit', chatId, id, content),

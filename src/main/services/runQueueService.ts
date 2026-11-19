@@ -48,6 +48,12 @@ interface ChatQueue {
   endedDuringFlush: RunOutcome | null
   /** Starts the bound on the waiting flush once its turn has ended; set only while a flush waits. */
   startFlushGrace: (() => void) | null
+  /**
+   * The user asked to send now: the running turn was stopped for the queue,
+   * so its `canceled` ending drains instead of holding. Consumed by the next
+   * ending (whatever its state) or by the drain that starts.
+   */
+  sendNowRequested: boolean
 }
 
 /** Stops that must not carry the next message along with them. */
@@ -137,6 +143,7 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
     let count = 1
     while (count < queue.items.length && queue.items[count].addressedAgentId === address) count++
     const items = queue.items.splice(0, count)
+    queue.sendNowRequested = false
     // Joined over the non-empty texts only, so a files-only message adds no
     // stray separator; its files ride along in order.
     const attachments: MessageAttachment[] = items.flatMap((item) => item.attachments ?? [])
@@ -177,8 +184,11 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
       queue.startFlushGrace?.()
       return
     }
+    // A send now is for the turn it stopped: never for a later one's ending.
+    const sendNow = !!queue?.sendNowRequested
+    if (queue) queue.sendNowRequested = false
     if (!queue || !queue.items.length) return
-    if (HOLDING_STATES.has(outcome.state)) {
+    if (HOLDING_STATES.has(outcome.state) && !(sendNow && outcome.state === 'canceled')) {
       if (!queue.held) {
         queue.held = true
         announce(key)
@@ -333,7 +343,7 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
         if (delivered === 'saved') return { kind: 'injected', saved: true }
       }
 
-      const queue = queues.get(key) ?? { chatId, items: [], held: false, scope, options, flushing: false, endedDuringFlush: null, startFlushGrace: null }
+      const queue = queues.get(key) ?? { chatId, items: [], held: false, scope, options, flushing: false, endedDuringFlush: null, startFlushGrace: null, sendNowRequested: false }
       queues.set(key, queue)
       queue.scope = scope
       queue.options = options
@@ -380,8 +390,36 @@ export function createRunQueueService(serviceOptions: RunQueueServiceOptions = {
       const index = queue?.items.findIndex((item) => item.id === id) ?? -1
       if (!queue || index < 0) return false
       queue.items.splice(index, 1)
+      if (!queue.items.length) queue.sendNowRequested = false
       forget(key, queue)
       announce(key)
+      return true
+    },
+
+    /**
+     * Stop the chat's running turn and drain the queue from its head — the
+     * message asked for, and any queued ahead of it — instead of holding it.
+     * False when the message is no longer queued, or the queue is held.
+     *
+     * Never a steer: whenever the turn can take a message, `flush` has
+     * already handed it every one it could, so what is still queued waits
+     * for the turn to end. A turn that fails or runs out of budget on its way
+     * out still holds the queue.
+     */
+    sendNow(scope: RunScope, chatId: string, id: string): boolean {
+      const key = chatKey(scope, chatId)
+      const queue = queues.get(key)
+      if (!queue || queue.held || !queue.items.some((item) => item.id === id)) return false
+      queue.sendNowRequested = true
+      const active = activeRunsByChat.get(chatId)
+      if (active) {
+        // Its ending must reach `ended`, which settles the queue.
+        watch(key, active)
+        active.cancel()
+      } else if (!queue.flushing) {
+        // Nothing to stop; a flush in flight settles the queue once answered.
+        settle(key)
+      }
       return true
     },
 

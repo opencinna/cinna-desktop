@@ -48,6 +48,12 @@ A message typed while an agent or model is still answering is neither refused no
    - Main sent it first — it drained before Save, or Save found it already gone: the composer says "Sent before your edit was saved — your edit is still here." The sentence goes with the next successful send or Save, when the input is emptied, or when a later edit is left with Esc.
    - Main handed it to the running turn, and the turn would not take it: main puts it back in the queue, and edit mode comes back on it with the text the composer holds. The sentence, if it showed, goes. A Save that finds the message already back stays in edit mode and says nothing. Once the edit has been sent as a message of its own, or the input emptied, the message stays queued as it was.
 
+### Sending a queued message now
+
+1. A turn runs with two messages queued, which it has not taken. The user hovers the send chip on the second bubble, whose tab reads **Stop & send?**, and clicks it.
+2. The turn is stopped. Its `canceled` ending drains the queue instead of holding it: from its head, so the first message goes with the second, joined as any drain joins them.
+3. The merged message starts a new turn. The bubbles leave as on any drain.
+
 ### Stopping with messages queued
 
 1. The user presses Stop, or Esc Esc, with two messages queued.
@@ -69,7 +75,7 @@ A message typed while an agent or model is still answering is neither refused no
 - **Known gap: a hand-off answered after those 3 s can reach the agent twice.** The messages are already back in the queue by then, and nothing takes text back from an agent. Main only logs it.
 - **Who answers is settled at queue time.** An unaddressed message in a `human` chat follows the last addressed one; by the time it drains, that can be a message queued after it, which would silently re-point it at somebody else.
 - **A drain is one turn per agent run.** Consecutive messages for the same agent are joined with blank lines and sent as one message; a message for a different agent waits for that turn to end and drains next. Splitting would cost a full turn per line; merging across agents would hand one agent another's instructions.
-- **Only a finished turn drains.** `completed` and `needs_input` drain; `canceled`, `failed` and `budget` hold. Sending the next message into a conversation that just stopped — most of all one the user just stopped — carries forward work nobody asked to continue. Returning the text to the input is also what Claude Code does on an interrupt.
+- **Only a finished turn drains, or one stopped by Send now.** `completed` and `needs_input` drain; `canceled`, `failed` and `budget` hold, except that a `canceled` ending the user asked for with Send now drains (see Sending a queued message now). Sending the next message into a conversation that just stopped — most of all one the user just stopped — carries forward work nobody asked to continue. Returning the text to the input is also what Claude Code does on an interrupt.
 - **A refused drain holds too.** If the drained start throws — the profile changed, a task runner took the chat — the messages go back to the head of the queue and it is held, so the user finds them in the composer rather than behind a queue that silently never sends.
 - **A message with files is never steered.** Files, images and notes can be sent while a turn runs in an active chat, through the same path as an idle send (a note becomes a `.md` file there), so the upload's ingest scope is decided at the send, not at the drain. A steer has no attachment channel, so main queues such a message and it leaves when the turn ends, with the files it carries. A hand-off stops before the first message with files, and one at the head is not handed in at all: text queued behind a file waits with it, or it would reach the agent first. A drain joins the texts of the leading run that are not empty and sends all their files, in order, as one message. The message may have no text; an edit empties the text only of a message that carries files. The new-chat screen still takes no files until its first send has landed: it has no chat to queue into.
 - **Chats something else drives are never queued into.** A chat a task runner owns (autonomous or script), one being handed off, or one with an unresolved handoff receipt goes straight to the ordinary start, which refuses it in its own words.
@@ -104,7 +110,11 @@ A message typed while an agent or model is still answering is neither refused no
 
 ### The queued bubble
 
-- **The tab never resizes.** Queued, Cancel? and Editing share one cell sized by the longest label, so the [x] does not slide out from under the pointer as its label changes.
+- **The tab never resizes.** Queued, Cancel?, Stop & send? and Editing share one cell sized by the longest label, so the [x] does not slide out from under the pointer as its label changes.
+- **Send now stops the turn, always.** It never steers: whenever the turn can take a message, the queue has already been handed in, so what is still queued cannot be steered. A `canceled` ending the click asked for drains; `failed` and `budget` endings still hold. The request is consumed by the next ending or the drain, so it never reaches a later turn: a plain Stop after it holds again.
+- **It drains from the head, in order.** Messages ahead of the clicked one go first or with it; when the head is for another agent, the clicked message goes in a later turn. Cancelling the clicked message afterwards does not undo the stop, and the rest still drains.
+- **Disabled on every bubble while a queued message in the chat is being edited.** The drain would send the text from before the edit, and the composer would then call the edit too late: Save or Esc first.
+- **The chip sits before the [x]**, and on hover or focus the tab reads **Stop & send?** in the accent colour; its accessible name is "Stop and send now". The label cell is sized by the longest label, so the badge is slightly wider at rest. A refused call shows in the composer's send error; a message that had already left needs no notice.
 - **The [x] is a chip at rest.** It has a background of its own before any hover, so it reads as a control beside the label rather than as part of its text ([UX rule 11](../../development/ui_guidelines/ux_rules.md#11-a-control-must-look-like-a-control-not-like-the-text-beside-it)).
 - **A cancel closes the gap above the bubble along with the bubble.** The transcript's spacing above the row collapses with it. Collapsing the bubble alone left that 12 px gap behind to snap shut when the row unmounted ([UX rule 1](../../development/ui_guidelines/ux_rules.md#1-nothing-jumps-while-the-user-is-acting)).
 - **On a drain the tab goes and the bubble stays** until the saved row renders, and the swap is a single render. A frame with neither read as the message vanishing. When a drained start is refused, main puts the messages back as a held queue with the same IDs; a sent bubble whose message is back in a held queue is dropped at once, so it does not stand in for a message that is now in the composer. Any other bubble whose row never appears stops standing in after 15 s.
@@ -119,7 +129,7 @@ A message typed while an agent or model is still answering is neither refused no
 
 - **No persistence** — see above.
 - **No files in a running turn.** Files wait for the turn to end, whatever the engine; a steer is text only.
-- **No reordering and no "send now".** A queued message cannot be moved ahead or forced into a turn that does not take messages; Stop, then send, is that action.
+- **No reordering, and no sending into a turn that does not take messages.** A queued message cannot be moved ahead. Send now does not force it in: it stops the turn and drains the queue from its head.
 - **No interrupting a running command with a message.** A message sent during a tool call waits for the call to end. Stop is how the user interrupts a command.
 - **No change to the Claude adapter's steering priority.** Why it stays `now` is in [the ACP contract](../../agents/local_agents/acp_contract.md#the-steering-extension).
 - **No steering into a remote A2A agent.** The A2A driver offers no mid-turn delivery, so a message for a cinna-core agent always queues rather than opening a second stream beside the one running.
@@ -145,7 +155,7 @@ ChatInput (turn running) -> useChatStream.startRun -> run:start
             unavailable, or no answer 3 s after the turn ended -> back at the head of the queue
   RunHandle.completed
        completed / needs_input  -> drain the leading same-agent run -> runExecutionService.start
-       canceled / failed / budget -> held -> ChatInput run:queue-take -> composer text and files
+       canceled (unless Send now) / failed / budget -> held -> ChatInput run:queue-take -> composer text and files
 ```
 
 ## Integration Points
