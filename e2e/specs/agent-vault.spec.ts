@@ -4,6 +4,7 @@ import { join, relative } from 'node:path'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { createFolderAgent } from '../fixtures/seed'
 import { writeFakeClaudeCli, type FakeClaudeCli, type FakeClaudeInput } from '../fixtures/fakeClaudeCli'
+import { FAKE_MODEL_DENIAL, writeFakeAntigravity } from '../fixtures/fakeAntigravity'
 import type { LocalAgentDto } from '../../src/shared/localAgents'
 import { RUNTIME_PINS } from '../../src/shared/runtimePins'
 
@@ -25,6 +26,13 @@ import { RUNTIME_PINS } from '../../src/shared/runtimePins'
  * the SDK's interrupt (logged by the fake), so Send now's stop and the drained
  * prompt are witnessed at the CLI inside the vault. A tool call in progress
  * withdraws steering, so the follow-up is queued without a file.
+ *
+ * V10 switches the vault agent to the fake Antigravity server
+ * (`fakeAntigravity.ts`, `silent-provider-error`, streamed in as the vault's
+ * `antigravity`) on a dummy Gemini key (Google's key check answered 200 by a
+ * `fetch` stub in main): the server never answers and writes a 503 into its
+ * transcript under the vault's home, which vaultd's `engine.providerErrors`
+ * reads and the driver turns into the warning note.
  *
  * **Needs the network.** The move's `rebuild` step runs `uv python install`
  * in a fresh vault directory for the scaffold's `pyproject.toml` and
@@ -588,6 +596,96 @@ test('V9 Send now in a vault chat stops the turn inside the vault and sends the 
   const status = await page.evaluate(async (id) => (await window.api.chat.list()).find((c) => c.id === id)?.lastRunResult?.status ?? null, chat.id)
   expect(status).toBe('completed')
 
+  const stored = await sqliteMessageCount(cinna, chat.id)
+  expect(stored.vaultId, 'the chat row is bound to the vault').not.toBeNull()
+  expect(stored.messages, 'no message of the vault chat is in SQLite').toBe(0)
+})
+
+const PROVIDER_NOTE = 'Gemini answered an error (503): The model is currently unreachable.'
+const AGY_PROMPT = 'Summarise the notes folder in one line'
+
+/**
+ * Google's key check (`engineLoginCheck.ts`) answered 200 in the main process,
+ * so the dummy key is saved without asking Google; every other request goes on.
+ */
+async function stubGeminiKeyCheck(cinna: CinnaApp): Promise<void> {
+  await cinna.electronApp.evaluate(() => {
+    const g = globalThis as unknown as { fetch: typeof fetch; __v10RealFetch?: typeof fetch }
+    g.__v10RealFetch ??= g.fetch
+    const real = g.__v10RealFetch
+    g.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.startsWith('https://generativelanguage.googleapis.com/')) return new Response('{"models":[]}', { status: 200, headers: { 'content-type': 'application/json' } })
+      return real(input, init)
+    }) as typeof fetch
+  })
+}
+
+test('V10 a vault Antigravity turn whose server stays silent shows the Gemini error vaultd read from its transcript, and Stop ends it cleanly', async ({ cinna }) => {
+  test.setTimeout(MOVE_TIMEOUT + 180_000)
+  const agent = await arrangeClaudeAgent(cinna)
+  // The fake server, logged in, that never answers a prompt and logs a 503 into
+  // `<GEMINI_HOME>/antigravity-acp/brain/<sid>/…` — inside the vault, the vault's home.
+  const fake = writeFakeAntigravity(cinna, { mode: 'silent-provider-error' })
+  await cinna.page.evaluate((path) => window.api.settings.set('localAgentsAntigravityPath', path), fake.path)
+  await expect
+    .poll(async () => {
+      const resolved = await cinna.page.evaluate(() => window.api.engine.resolveAntigravity())
+      return resolved.state === 'ready' ? resolved.path : resolved.state
+    }, { timeout: 30_000 })
+    .toBe(fake.path)
+  await stubGeminiKeyCheck(cinna)
+  await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+  await moveOverIpc(cinna, agent.id)
+  const page = cinna.page
+  await openAgent(cinna)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+
+  const panel = page.getByRole('region', { name: 'Runs with' })
+  const runsOn = panel.getByLabel('Runs on', { exact: true })
+  await expect(runsOn).toHaveValue('claude')
+  await runsOn.selectOption('antigravity')
+  const dialog = page.getByRole('dialog', { name: 'Set up Antigravity in the vault' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByLabel('API key for Antigravity inside the vault').fill('AIza-e2e-not-a-real-key-000000000000')
+  await dialog.getByRole('button', { name: 'Set up', exact: true }).click()
+  await expect(dialog).toHaveCount(0, { timeout: 60_000 })
+  await expect(runsOn).toHaveValue('antigravity')
+
+  await page.getByRole('button', { name: 'Start chat', exact: true }).click()
+  const box = page.getByRole('combobox', { name: 'Type a message...', exact: true })
+  await box.fill(AGY_PROMPT)
+  await box.press('Enter')
+
+  // Written inside the vault: the vault home's own Antigravity home.
+  await expect.poll(() => fake.transcripts().length, { timeout: 30_000 }).toBe(1)
+  expect(fake.transcripts()[0]).toMatch(/\/home\/\.gemini\/antigravity-acp\/brain\/ses-silent-/)
+  // The server never answers; vaultd reads the 503 out of its transcript (polled every 5 s).
+  const warning = page.locator('[data-notice-tone="warning"]')
+  const note = warning.getByText(PROVIDER_NOTE, { exact: true })
+  await expect(note).toBeVisible({ timeout: 20_000 })
+  await expect(warning).toHaveCount(1)
+  await expect(warning).toHaveText(`${PROVIDER_NOTE} Stop ends the turn.`)
+  await expect(page.getByText(FAKE_MODEL_DENIAL)).toHaveCount(0)
+  expect(fake.received('session/update')).toEqual([])
+  expect(fake.received('authenticate')).toHaveLength(1)
+
+  const stop = page.getByRole('button', { name: 'Stop', exact: true })
+  await expect(stop).toBeVisible()
+  await stop.click()
+  await expect(stop).toHaveCount(0, { timeout: 15_000 })
+  await expect.poll(() => fake.received('session/cancel').length, { timeout: 15_000 }).toBe(1)
+
+  const chat = (await page.evaluate(() => window.api.chat.list())).find((c) => c.agentId === agent.id)
+  if (!chat) throw new Error('no chat with the vault agent')
+  // The vault's transcript: the prompt and the note, no error row, nothing of the denial.
+  const saved = await page.evaluate(async (id) => {
+    const detail = await window.api.chat.get(id)
+    return (detail?.messages ?? []).map((message) => ({ role: message.role, content: message.content }))
+  }, chat.id)
+  expect(saved).toEqual([{ role: 'user', content: AGY_PROMPT }, { role: 'agent_transition', content: PROVIDER_NOTE }])
+  const status = await page.evaluate(async (id) => (await window.api.chat.list()).find((c) => c.id === id)?.lastRunResult?.status ?? null, chat.id)
+  expect(status).toBe('canceled')
   const stored = await sqliteMessageCount(cinna, chat.id)
   expect(stored.vaultId, 'the chat row is bound to the vault').not.toBeNull()
   expect(stored.messages, 'no message of the vault chat is in SQLite').toBe(0)

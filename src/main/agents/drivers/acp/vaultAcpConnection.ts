@@ -21,7 +21,8 @@ import type { InitializeRequest, InitializeResponse } from '@agentclientprotocol
 import { ndJsonStream } from '@agentclientprotocol/sdk'
 import { createLogger } from '../../../logger/logger'
 import type { VaultChannel } from '../../../vault/backend'
-import type { VaultdClient } from '../../../vault/vaultdClient'
+import { VAULT_PROVIDER_ERRORS_SINCE_MAX_MS } from '../../../../shared/vault/protocol'
+import { RPC_METHOD_NOT_FOUND, type VaultdClient } from '../../../vault/vaultdClient'
 import { connectAcpClient } from './acpClient'
 import {
   ACP_ASYNC_TASK_STOP_METHOD,
@@ -237,6 +238,28 @@ export async function startVaultAcpConnection(
   }
   stopWatchingStart()
   logger.info('vault ACP engine ready', { vaultId: vault.vaultId, engine: vault.engine, protocolVersion: initialized.protocolVersion })
+
+  // Antigravity's provider errors are only in its transcript inside the guest:
+  // vaultd reads it as the agent user. An older guest has no such method: its
+  // "Method not found" ends the asking for this connection, once. Any other
+  // failure (a timeout while the VM pauses, a refusal) is a quiet empty poll.
+  let providerErrorsUnsupported = false
+  const providerErrors = async (sessionId: string, since: number): Promise<unknown> => {
+    if (providerErrorsUnsupported || !alive) return null
+    try {
+      // As a span, not a date: vaultd rebases it on the guest's own clock.
+      const sinceAgoMs = Math.min(Math.max(0, Date.now() - since), VAULT_PROVIDER_ERRORS_SINCE_MAX_MS)
+      return await client.request('engine.providerErrors', { stream: streamId!, sessionId, sinceAgoMs }, 10_000)
+    } catch (error) {
+      if ((error as { rpcCode?: unknown } | null)?.rpcCode === RPC_METHOD_NOT_FOUND) {
+        providerErrorsUnsupported = true
+        logger.info('the vault cannot report Antigravity’s provider errors; the generic silent-turn note stays', { vaultId: vault.vaultId })
+        return null
+      }
+      return { errors: [] }
+    }
+  }
+
   return {
     pid: undefined,
     initialized,
@@ -255,6 +278,7 @@ export async function startVaultAcpConnection(
     observeSession,
     aliasSession,
     onConnectionExt,
+    ...(vault.engine === 'antigravity' ? { providerErrors } : {}),
     stderrTail: () => tail,
     dispose
   }

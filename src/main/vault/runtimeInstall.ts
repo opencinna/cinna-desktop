@@ -545,16 +545,20 @@ export function defaultRuntimeSource(): RuntimeSource {
  * The fake backend's source (its "guest" is this computer): the `claude` and
  * `codex` this app resolved for itself (`resolveClaude`, `resolveCodex`, which
  * never download when the download is switched off, as in E2E) and the
- * adapters this build carries. No network, and no pin to compare the
- * executables with: the guest's hash must equal what main streamed. OpenCode
- * and Antigravity ship Linux builds only for vaults, so they are not offered.
+ * adapters this build carries, and the `antigravity` server it resolved
+ * (`resolveAntigravity`; it has no adapter). No network, and no pin to compare
+ * the executables with: the guest's hash must equal what main streamed.
+ * OpenCode ships Linux builds only for vaults, so it is not offered.
  */
-export function hostRuntimeSource(resolveClaude: () => Promise<string>, resolveCodex?: () => Promise<string>): RuntimeSource {
+export function hostRuntimeSource(resolveClaude: () => Promise<string>, resolveCodex?: () => Promise<string>, resolveAntigravity?: () => Promise<string>): RuntimeSource {
   /** The engines this computer runs for the fake: how to find its executable, what to call it, and its adapter. */
-  const hosts: Partial<Record<VaultEngine, { resolve: () => Promise<string>; label: string; adapter: () => Promise<RuntimeArtifact> }>> = {
-    claude: { resolve: resolveClaude, label: 'Claude Code', adapter: hostAdapterArtifact },
-    ...(resolveCodex ? { codex: { resolve: resolveCodex, label: 'Codex', adapter: codexAdapterArtifact } } : {})
+  const hosts: Partial<Record<VaultEngine, { resolve: () => Promise<string>; label: string; short: string; adapter: (() => Promise<RuntimeArtifact>) | null }>> = {
+    claude: { resolve: resolveClaude, label: 'Claude Code', short: 'Claude', adapter: hostAdapterArtifact },
+    ...(resolveCodex ? { codex: { resolve: resolveCodex, label: 'Codex', short: 'Codex', adapter: codexAdapterArtifact } } : {}),
+    ...(resolveAntigravity ? { antigravity: { resolve: resolveAntigravity, label: 'Antigravity', short: 'Antigravity', adapter: null } } : {})
   }
+  const offered = Object.values(hosts).map((host) => host.short)
+  const offeredWords = offered.length > 1 ? `${offered.slice(0, -1).join(', ')} or ${offered.at(-1)}` : offered[0]
   const version = (engine: VaultEngine): string => `${RUNTIME_PINS[engine].cli}-host`
   return {
     // As `artifacts` below: this computer's executable (nothing pins it) and the pinned adapter.
@@ -564,16 +568,17 @@ export function hostRuntimeSource(resolveClaude: () => Promise<string>, resolveC
     async artifacts(engine) {
       const host = hosts[engine]
       // The others ship Linux builds only for vaults; the fake's "guest" is this Mac.
-      if (!host) throw new VaultRuntimeError(`The test backend runs agents in a vault on Claude or Codex only, not ${engine}.`)
+      if (!host) throw new VaultRuntimeError(`The test backend runs agents in a vault on ${offeredWords} only, not ${engine}.`)
       // The adapter first: a build that wrote none is the likelier problem, and its words name the fix.
-      const adapter = await host.adapter()
+      const adapter = host.adapter ? await host.adapter() : null
       let executable: string
       try {
         executable = await host.resolve()
       } catch (error) {
         throw new VaultRuntimeError(`${host.label} is not available on this computer: ${error instanceof Error ? error.message : String(error)}`)
       }
-      return [{ engine, version: version(engine), kind: 'executable', name: engine, open: () => readFileChunks(executable), expectedSha256: null }, adapter]
+      const artifact: RuntimeArtifact = { engine, version: version(engine), kind: 'executable', name: engine, open: () => readFileChunks(executable), expectedSha256: null }
+      return adapter ? [artifact, adapter] : [artifact]
     }
   }
 }

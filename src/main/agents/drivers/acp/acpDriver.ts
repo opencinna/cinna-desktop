@@ -114,7 +114,7 @@ import { expandPluginCommand, type PluginCommandTemplate } from '../../../servic
 import { createAcpActivityStopper } from './acpActivityStop'
 import { createToolStallWatch, TOOL_STALL_RETRY_NOTICE, TOOL_STALL_RETRY_PROMPT, toolStallMessage, type ToolStallWatch } from './acpToolStall'
 import { ACP_SILENT_TURN_NOTICE_MS, createSilentTurnWatch, type SilentTurnWatch, silentTurnEngineName, silentTurnNotice } from './acpSilentTurn'
-import { ANTIGRAVITY_SERVER_LOG_POLL_MS, classifyProviderError, createProviderErrorWatch, providerErrorNotice, readAntigravityProviderErrors, type AntigravityServerLogReader } from './antigravityServerLog'
+import { ANTIGRAVITY_SERVER_LOG_POLL_MS, classifyProviderError, createProviderErrorWatch, providerErrorNotice, readAntigravityProviderErrors, vaultProviderErrorReader, type AntigravityServerLogReader } from './antigravityServerLog'
 import { antigravityHome } from './antigravityEnv'
 import { createFollowUpGate, deliverHeld, type FollowUpGate, type HeldHandover, type HeldTraffic } from './acpFollowUp'
 import {
@@ -307,7 +307,7 @@ export interface AcpDriverDeps {
   silentTurnNoticeMs?: number
   /** Override how often a silent host Antigravity turn's own transcript is read ({@link ANTIGRAVITY_SERVER_LOG_POLL_MS}). Tests only. */
   antigravityServerLogPollMs?: number
-  /** Override the reader of Antigravity's transcript for provider errors (`antigravityServerLog.ts`). Tests only. */
+  /** Override the reader of a host Antigravity turn's transcript for provider errors (`antigravityServerLog.ts`). Tests only. */
   antigravityServerLog?: AntigravityServerLogReader
   /** Override the wait for a `session/cancel` acknowledgement. Tests only. */
   cancelGraceMs?: number
@@ -1419,17 +1419,22 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       emit(stream.note(silentTurnNotice(engine, silentMs), { tone: 'warning' }).message)
     }
   })
-  // Over the same silence, a host Antigravity turn reads the server's own
+  // Over the same silence, an Antigravity turn reads the server's own
   // transcript: a provider error (a Gemini 503) never reaches the ACP wire, it
-  // only lands there (see `antigravityServerLog.ts`). Not for a vault agent:
-  // its transcript is inside the guest (`/vault/home/.gemini/…`) and vaultd's
-  // `files.read` only reaches agent-relative paths, so it keeps the generic
-  // notice until the guest can hand the log over.
-  const providerErrorWatch = ctx.launcherId === 'antigravity' && !plan.spec.vault && !plan.spec.remote && !vaultSession(runtime)
+  // only lands there (see `antigravityServerLog.ts`). A host agent's is read
+  // here; a vault agent's is inside the guest, so vaultd reads it as the agent
+  // user (`engine.providerErrors`, asked over the engine's own vault
+  // connection). An older guest without the method answers nothing: the watch
+  // stops and the generic notice stays.
+  // A vault turn's connection is the vault's (`vaultAcpConnection.ts`); one without
+  // `providerErrors` makes the reader answer null, which ends the watch.
+  const vaultAntigravity = (plan.spec.vault?.engine ?? (runtime.type === 'folder' ? runtime.folder.vault?.engine : undefined)) === 'antigravity'
+  const hostAntigravity = !plan.spec.vault && !vaultSession(runtime)
+  const providerErrorWatch = ctx.launcherId === 'antigravity' && !plan.spec.remote && (hostAntigravity || vaultAntigravity)
     ? createProviderErrorWatch({
         pollMs: deps.antigravityServerLogPollMs ?? ANTIGRAVITY_SERVER_LOG_POLL_MS,
-        read: deps.antigravityServerLog ?? readAntigravityProviderErrors,
-        home: antigravityHome(plan.spec.env),
+        read: vaultAntigravity ? vaultProviderErrorReader(() => connection) : deps.antigravityServerLog ?? readAntigravityProviderErrors,
+        home: vaultAntigravity ? '' : antigravityHome(plan.spec.env),
         sessionId: () => sessionId,
         onError: (error) => {
           if (!turn.open || input.signal.aborted) return

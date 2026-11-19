@@ -1196,9 +1196,13 @@ async function readAcpRuntime(userId: string, agent: AgentRow, options?: Readine
 
 // What Move to vault… captures from the host agent before its folder is in the vault.
 installVaultMoveDeps({
-  // A fake vault runs on this computer: the Claude and Codex this app resolved for itself, never the Linux downloads.
+  // A fake vault runs on this computer: the Claude, Codex and Antigravity this app resolved for itself, never the Linux downloads.
   runtimeSource: () => vaultBackend().kind === 'fake'
-    ? hostRuntimeSource(async () => (await claudeBinaryService.ensure()).path, async () => (await codexBinaryService.ensure()).path)
+    ? hostRuntimeSource(
+        async () => (await claudeBinaryService.ensure()).path,
+        async () => (await codexBinaryService.ensure()).path,
+        async () => (await antigravityBinaryService.ensure()).path
+      )
     : defaultRuntimeSource(),
   // OpenCode's prompt is the same assembled kit document (it has no native-engine prompt of its own here).
   instructions: (userId, agentId, engine) => folderSystemPrompt(engine === 'codex' ? 'codex' : 'claude')(userId, agentId, 'isolated') || null,

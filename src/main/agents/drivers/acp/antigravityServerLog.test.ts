@@ -6,17 +6,17 @@ import {
   ANTIGRAVITY_PROVIDER_ERROR_MAX_CHARS,
   ANTIGRAVITY_SERVER_LOG_TAIL_BYTES,
   antigravityTranscriptPath,
-  classifyProviderError,
   createProviderErrorWatch,
-  providerErrorNotice,
   readAntigravityProviderErrors,
+  vaultProviderErrorReader,
   type AntigravityProviderError
 } from './antigravityServerLog'
 
 /**
  * Antigravity's server writes a Gemini error into its own transcript and
- * nothing on the ACP wire. Only SYSTEM ERROR_MESSAGE steps from this turn on
- * are provider errors; nothing else of the file (the user's prompts) is read out.
+ * nothing on the ACP wire. The host's file IO and the watch; what a line means,
+ * the redaction and the note's words are tested with the shared parser
+ * (`src/shared/antigravityProviderErrors.test.ts`).
  */
 
 const SESSION = '7d0c3a52-1b9e-4f3e-9a51-2f7a3c1d9e00'
@@ -98,71 +98,12 @@ describe('readAntigravityProviderErrors', () => {
   })
 
   it('caps the message and strips control characters', async () => {
-    const long = step(2, { source: 'SYSTEM', type: 'ERROR_MESSAGE', error: `Bad\u001b[31m\nthing ${'y'.repeat(1000)}`, error_code: 500 })
+    const long = step(2, { source: 'SYSTEM', type: 'ERROR_MESSAGE', error: `Bad\u001b[31m\nthing ${'y '.repeat(1000)}`, error_code: 500 })
     const [found] = await readAntigravityProviderErrors(home([long]), SESSION, SINCE)
     expect(found.message.length).toBeLessThanOrEqual(ANTIGRAVITY_PROVIDER_ERROR_MAX_CHARS)
-    expect(found.message.startsWith('Bad [31m thing yyy')).toBe(true)
+    expect(found.message.startsWith('Bad [31m thing y y')).toBe(true)
     expect(found.message.endsWith('…')).toBe(true)
     expect(/[\u0000-\u001f]/.test(found.message)).toBe(false)
-  })
-})
-
-describe('which errors belong to this turn', () => {
-  const input = (index: number, created = '2026-11-19T09:42:05Z'): Record<string, unknown> =>
-    step(index, { source: 'USER_EXPLICIT', type: 'USER_INPUT', user_input: 'secret prompt', created_at: created })
-  const error = (index: number, text: string, created = '2026-11-19T09:42:13Z'): Record<string, unknown> =>
-    step(index, { source: 'SYSTEM', type: 'ERROR_MESSAGE', error: text, error_code: 503, created_at: created })
-
-  it('takes only errors after the last USER_INPUT, whatever their timestamps', async () => {
-    // Mutation: drop the `stepIndex <= lastInput.index` check → the earlier turn's fresh-stamped error shows.
-    const dir = home([input(0), error(1, 'earlier turn'), input(2), error(3, 'this turn', 'not a date')])
-    const found = await readAntigravityProviderErrors(dir, SESSION, SINCE)
-    expect(found.map((e) => e.message)).toEqual(['this turn'])
-    expect(JSON.stringify(found)).not.toContain('secret')
-  })
-
-  it('falls back on `since` when the last USER_INPUT is an earlier turn’s (this turn’s is not written yet)', async () => {
-    const dir = home([input(0, '2026-11-19T09:30:00Z'), error(1, 'old', '2026-11-19T09:31:00Z'), error(2, 'new')])
-    expect((await readAntigravityProviderErrors(dir, SESSION, SINCE)).map((e) => e.message)).toEqual(['new'])
-  })
-})
-
-/** Verbatim from a real 1.4.5 transcript with Gemini blackholed (error_code 2). */
-const BLACKHOLE = 'doRequest: error sending request: Post "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse": dial tcp 10.255.255.1:443: i/o timeout: doRequest: error sending request: Post "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse": dial tcp 10.255.255.1:443: i/o timeout'
-
-describe('providerErrorNotice', () => {
-  it('says a transport failure as a phrase, without the URL, the address or the non-HTTP code', () => {
-    expect(BLACKHOLE.length).toBe(368)
-    expect(classifyProviderError({ message: BLACKHOLE, code: 2 })).toEqual({ kind: 'transport', phrase: 'connection timed out' })
-    const note = providerErrorNotice({ message: BLACKHOLE, code: 2 })
-    expect(note).toBe('Antigravity could not reach Gemini (connection timed out).')
-    expect(note).not.toMatch(/googleapis|10\.255|\(2\)/)
-  })
-
-  it.each([
-    ['dial tcp: lookup generativelanguage.googleapis.com: no such host', 'host not found'],
-    ['dial tcp 1.2.3.4:443: connect: connection refused', 'connection refused'],
-    ['read tcp: connection reset by peer', 'connection reset'],
-    ['doRequest: error sending request: net/http: TLS handshake timeout', 'TLS handshake failed'],
-    ['remote error: TLS handshake failure in dial tcp', 'TLS handshake failed'],
-    ['doRequest: error sending request: EOF', 'network error']
-  ])('names %s as %s', (message, phrase) => {
-    expect(providerErrorNotice({ message })).toBe(`Antigravity could not reach Gemini (${phrase}).`)
-  })
-
-  it('names an HTTP status', () => {
-    expect(providerErrorNotice({ message: 'The model is currently unreachable.', code: 503 }))
-      .toBe('Gemini answered an error (503): The model is currently unreachable.')
-  })
-
-  it('says anything else once, capped, with no code that is not an HTTP status', () => {
-    expect(providerErrorNotice({ message: 'Quota exhausted: Quota exhausted', code: 2 }))
-      .toBe('Antigravity reported an error from Gemini: Quota exhausted.')
-    expect(providerErrorNotice({ message: 'Something odd.' }))
-      .toBe('Antigravity reported an error from Gemini: Something odd.')
-    const long = providerErrorNotice({ message: 'z'.repeat(500) })
-    expect(long.length).toBeLessThan(300)
-    expect(long).toContain('…')
   })
 })
 
@@ -211,5 +152,38 @@ describe('createProviderErrorWatch', () => {
     watch.stop()
     expect(seen).toEqual([2, 5])
     expect(repeats).toEqual([3, 4])
+  })
+})
+
+describe('a reader that cannot answer for its connection', () => {
+  const tick = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('ends the watch at the first null: no more reads, nothing reported', async () => {
+    // Mutation: drop the `errors === null` finish → reads go on every poll.
+    const read = vi.fn(async () => null)
+    const seen: number[] = []
+    const watch = createProviderErrorWatch({ pollMs: 10, read, home: '', sessionId: () => 's1', onError: (e) => void seen.push(e.stepIndex) })
+    watch.start()
+    await tick(60)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(seen).toEqual([])
+    watch.stop()
+  })
+
+  it('asks the vault connection, checks and redacts its answer, and answers null when it cannot ask', async () => {
+    const providerErrors = vi.fn(async () => ({ errors: [
+      { key: 'k', stepIndex: 2, code: 503, message: 'The model is currently unreachable.', at: 7 },
+      { key: 'k', stepIndex: 'three', message: 'malformed', at: 7 },
+      { key: 'k', stepIndex: 4, message: 'Bearer abc.def refused', at: 7 }
+    ] }))
+    const read = vaultProviderErrorReader(() => ({ providerErrors }))
+    expect(await read('', 's1', 1234)).toEqual([
+      { stepIndex: 2, code: 503, message: 'The model is currently unreachable.', at: 7 },
+      { stepIndex: 4, message: 'Bearer [redacted] refused', at: 7 }
+    ])
+    expect(providerErrors).toHaveBeenCalledWith('s1', 1234)
+    expect(await vaultProviderErrorReader(() => ({ providerErrors: async () => null }))('', 's1', 0)).toBeNull()
+    expect(await vaultProviderErrorReader(() => ({}))('', 's1', 0)).toBeNull()
+    expect(await vaultProviderErrorReader(() => undefined)('', 's1', 0)).toBeNull()
   })
 })

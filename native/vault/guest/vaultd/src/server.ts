@@ -11,6 +11,7 @@ import { layoutOf, type VaultdConfig } from './config'
 import type { Conn, Ctx, Handler, Params } from './context'
 import { authLogin, authStatus, engineKill, engineSpawn } from './engine'
 import { exec } from './exec'
+import { engineProviderErrors } from './providerErrors'
 import { filesExport, filesImport, filesList, filesRead, filesStat } from './files'
 import { cryptsetupOps, fakeOps, HELPER_CONNECTIONS_MAX, HelperEvents, serveHelper, type HelperOps } from './helperControl'
 import { killGroup } from './procs'
@@ -44,6 +45,7 @@ export const HANDLERS: Record<VaultdMethod, Handler> = {
   'secrets.putFile': secretsPutFile,
   'engine.spawn': engineSpawn,
   'engine.kill': engineKill,
+  'engine.providerErrors': engineProviderErrors,
   'auth.status': authStatus,
   'auth.login': authLogin,
   'transcript.append': transcriptAppend,
@@ -244,6 +246,7 @@ export function createVaultd(config: VaultdConfig, options: VaultdOptions = {}):
     helperEvents: new HelperEvents(),
     streams: new Streams(options.attachTimeoutMs),
     engines: new Map(),
+    engineNames: new Map(),
     shells: new Map(),
     ptyOps: options.ptyOps !== undefined ? options.ptyOps : ptyOpsFor(config.fake),
     serial: serialQueue()

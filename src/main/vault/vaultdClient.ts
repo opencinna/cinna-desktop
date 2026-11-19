@@ -9,8 +9,12 @@
 import type { VaultdHello, VaultdMethod, VaultdNotification, VaultdRequestMap } from '../../shared/vault/protocol'
 import type { VaultChannel } from './backend'
 
+/** JSON-RPC's "Method not found": a guest older than the method asked. */
+export const RPC_METHOD_NOT_FOUND = -32601
+
 export class VaultdError extends Error {
-  constructor(readonly code: string, message: string) {
+  /** `rpcCode`: the JSON-RPC error code vaultd answered (-32000 for its own refusals), when there was one. */
+  constructor(readonly code: string, message: string, readonly rpcCode?: number) {
     super(message)
     this.name = 'VaultdError'
   }
@@ -139,7 +143,7 @@ export class VaultdClient {
   }
 
   private handle(line: string): void {
-    let message: { id?: unknown; result?: unknown; error?: { message?: unknown; data?: { code?: unknown } }; method?: unknown; params?: unknown }
+    let message: { id?: unknown; result?: unknown; error?: { code?: unknown; message?: unknown; data?: { code?: unknown } }; method?: unknown; params?: unknown }
     try {
       message = JSON.parse(line)
     } catch {
@@ -162,7 +166,8 @@ export class VaultdClient {
     if (entry.timer) clearTimeout(entry.timer)
     if (message.error) {
       const code = typeof message.error.data?.code === 'string' ? message.error.data.code : 'internal'
-      entry.reject(new VaultdError(code, typeof message.error.message === 'string' ? message.error.message : 'cinna-vaultd refused.'))
+      const rpcCode = typeof message.error.code === 'number' && Number.isInteger(message.error.code) ? message.error.code : undefined
+      entry.reject(new VaultdError(code, typeof message.error.message === 'string' ? message.error.message : 'cinna-vaultd refused.', rpcCode))
       return
     }
     entry.resolve(message.result)

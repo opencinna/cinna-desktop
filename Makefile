@@ -10,7 +10,7 @@ PW := npx playwright test -c e2e/playwright.config.ts
 # (CINNA_E2E_LIVE_ENGINE, e2e/fixtures/liveEngine.ts); claude/codex/antigravity use your own login.
 LIVE_ENV = $(if $(LIVE_ENGINE),CINNA_E2E_LIVE_ENGINE=$(LIVE_ENGINE) )
 
-.PHONY: help test test-hub typecheck build speech-helper vault-image vault-helper vault-release vault-clean vault-helper-smoke vault-dev vault-dev-restart vault-move-smoke vault-live vault-switch-live vault-send-now-live kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-notes-matrix e2e-live e2e-integration e2e-integration-notes e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
+.PHONY: help test test-hub typecheck build speech-helper vault-image vault-helper vault-release vault-clean vault-helper-smoke vault-dev vault-dev-restart vault-move-smoke vault-live vault-switch-live vault-send-now-live vault-provider-error-smoke kit-sync contract contract-next contract-snapshot pin-assets demo-localdev demo-clean dashboard-gallery e2e e2e-only e2e-one e2e-notes-matrix e2e-live e2e-integration e2e-integration-notes e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine bare-mac-image bare-mac bare-mac-clean live-ctl live-help live-flow
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -69,6 +69,9 @@ vault-switch-live: ## BILLED: Agent Vault engine switch live lane — real VM: m
 
 vault-send-now-live: ## BILLED: Agent Vault Send now live lane — real VM, hub core + real run queue: per engine a turn held on `sleep 90`, a queued follow-up, Send now, the drained answer (≈2 short turns each; VAULT_SEND_NOW_ENGINES=claude,opencode,antigravity,codex, repo .env keys; VAULT_SEND_NOW_DRY=1 bills nothing); sandboxed HOME/userData
 	npx vitest run --config scripts/vault/vitest.vault-send-now-live.config.ts --silent=false
+
+vault-provider-error-smoke: ## Agent Vault provider-error smoke (not billed) — real VM, hub core + real run queue: a vault Antigravity turn on a dummy key with Gemini's hosts off the allowlist, a SYSTEM 503 appended to the server's transcript as the agent user, the warning note from vaultd's engine.providerErrors, Stop; VAULT_PROVIDER_ERROR_GUEST_DIR=<dir> runs it against an older guest (expects the generic note instead); VAULT_PROVIDER_ERROR_DRY=1 wiring only
+	npx vitest run --config scripts/vault/vitest.vault-provider-error-smoke.config.ts --silent=false
 
 # The agent kit bundle (resources/cinna-agent-kit/) is a byte-exact render of
 # cinna-core's docs/local_agent_kit/, the whole kit; never edit it by hand.

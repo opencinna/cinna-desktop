@@ -242,8 +242,10 @@ export const engineSpawn: Handler = async (ctx, params, conn) => {
     () => killGroup(child)
   )
   ctx.engines.set(stream, child)
+  ctx.engineNames.set(stream, engine)
   child.on('exit', (code, signal) => {
     ctx.engines.delete(stream)
+    ctx.engineNames.delete(stream)
     log('info', 'engine exited', { engine, stream, code, signal, attached })
     // Wait for stderr to drain so the tail is complete.
     const send = (): void => conn.notify('engine.exit', { stream, code, signal, stderrTail: tail.text() })

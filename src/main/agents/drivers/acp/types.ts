@@ -317,6 +317,15 @@ export interface AcpConnection {
    */
   onConnectionExt?(listener: ConnectionExtListener): () => void
 
+  /**
+   * A vault Antigravity engine only: vaultd's `engine.providerErrors` for this
+   * engine's stream — the raw answer, which the caller checks
+   * (`antigravityServerLog.ts`). Null once the guest answered "Method not
+   * found" (an older guest): it is not asked again on this connection. Any
+   * other failure answers no errors.
+   */
+  providerErrors?(sessionId: string, since: number): Promise<unknown>
+
   /** The last stderr lines, for an error message. */
   stderrTail(): string
   /** Kill the process tree. Idempotent; resolves once it has exited. */

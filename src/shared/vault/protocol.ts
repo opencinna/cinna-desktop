@@ -477,6 +477,25 @@ export interface VaultdRequestMap {
     result: { stream: string; pid: number }
   }
   'engine.kill': { params: { stream: string }; result: Record<string, never> }
+  /**
+   * The provider errors (a Gemini 503, a quota) a live **antigravity** engine
+   * `stream` logged for ACP session `sessionId` in the last `sinceAgoMs` (the
+   * time since the turn's prompt, on the host's clock; vaultd rebases it on
+   * its own, `Date.now() - sinceAgoMs`, so a guest clock that drifted from the
+   * host's never drops a note; ≥ 0, at most {@link VAULT_PROVIDER_ERRORS_SINCE_MAX_MS}): the
+   * pinned server sends them only into its own transcript,
+   * `<home>/.gemini/antigravity-acp/brain/<sessionId>/.system_generated/logs/
+   * transcript_full.jsonl`, never on the wire. Read as the `agent` user (its
+   * last 256 KB, the final component opened without following a link, refused
+   * when it resolves outside the brain folder) and parsed in vaultd
+   * (`src/shared/antigravityProviderErrors.ts`): only SYSTEM error steps after
+   * the tail's last prompt, at most {@link VAULT_PROVIDER_ERRORS_MAX}, each
+   * message cleaned, redacted and capped at 1000 characters; nothing else of
+   * the file leaves. A missing transcript is `{ errors: [] }`; another
+   * engine's stream, a dead one, a session id that is not plain or a bad
+   * `sinceAgoMs` is `invalid`. No token. An older guest answers JSON-RPC -32601.
+   */
+  'engine.providerErrors': { params: { stream: string; sessionId: string; sinceAgoMs: number }; result: { errors: VaultProviderErrorEntry[] } }
   /** `keyName`: the secret this engine signs in with in this vault ({@link vaultEngineKeyName}), when it has one. */
   'auth.status': { params: { engine: VaultEngine }; result: { loggedIn: boolean; method?: 'api_key' | 'oauth_token' | 'login'; keyName?: string } }
   'auth.login': { params: { engine: VaultEngine }; result: { stream: string } }
@@ -488,6 +507,20 @@ export interface VaultdRequestMap {
   'kv.put': { params: { key: string; value: unknown }; result: Record<string, never> }
 }
 export type VaultdMethod = keyof VaultdRequestMap
+
+/** One error of `engine.providerErrors`. `key` dedupes a retried error; `at` is 0 for a step with no date. */
+export interface VaultProviderErrorEntry {
+  key: string
+  stepIndex: number
+  code?: number
+  message: string
+  at: number
+}
+
+/** The most errors one `engine.providerErrors` answer carries (the newest kept). */
+export const VAULT_PROVIDER_ERRORS_MAX = 8
+/** The longest look back `engine.providerErrors` takes (`sinceAgoMs`): a day, longer than any turn's ceiling. */
+export const VAULT_PROVIDER_ERRORS_SINCE_MAX_MS = 24 * 60 * 60_000
 
 /** One answer of `files.stat`, in request order. */
 export interface VaultFileStatEntry {

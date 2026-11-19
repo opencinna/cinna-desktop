@@ -41,7 +41,7 @@ import { turnLock } from '../../../services/localAgents/turnLock'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLaunchContext, AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
 import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpHandlerScript, type FakeAcpScript, type FakeAcpStep } from './testSupport/fakeAcp'
-import { ACP_PROTOCOL_VERSION, type AcpConnection, type AcpLauncherId, type AcpProcessPool } from './types'
+import { ACP_PROTOCOL_VERSION, type AcpConnection, type AcpLaunchSpec, type AcpLauncherId, type AcpProcessPool } from './types'
 import { antigravityQuotaNotice } from './antigravityLauncher'
 import type { SessionTrafficScope, SessionTrafficSink } from './acpSessionObserver'
 import type { SessionTelemetry, SessionTelemetryChange, SessionTelemetryReporter } from '../../../../shared/sessionTelemetry'
@@ -149,7 +149,7 @@ interface WorldOptions {
   /** Per-launcher readiness, for the readiness clause. */
   launcherReadiness?: AcpLauncher['readiness']
   deps?: Partial<AcpDriverDeps>
-  spec?: { command?: string; args?: string[] }
+  spec?: { command?: string; args?: string[]; vault?: AcpLaunchSpec['vault'] }
   /** The launcher ends every turn with a costed `usage_update`. Default: only `claude` does, as the real ones. */
   costedEnd?: boolean
   /** The idle reap of `observedWorld`'s pool. */
@@ -5435,19 +5435,91 @@ describe('a silent host Antigravity turn whose server logged a provider error', 
     expect(noted(w, silentTurnNotice('Codex', 300))).toBe(1)
   })
 
-  it('never reads for an Antigravity agent in a vault, which keeps the generic notice', async () => {
-    // Mutation: drop `!vaultSession(runtime)` from the watch's condition → the reader is called.
-    const read = readerOf(() => [unreachable()])
+  /**
+   * A vault Antigravity turn: the plan names the vault (`spec.vault`), the
+   * process is the scripted agent (the vault stripped before the start), and
+   * the connection carries `providerErrors` as `vaultAcpConnection.ts` does —
+   * here answering what the test says, as vaultd's `engine.providerErrors` would.
+   */
+  function vaultAntigravityWorld(providerErrors: (sessionId: string, since: number) => Promise<unknown>, emit: FakeAcpStep[]) {
     let self: World | undefined
+    const asked: { sessionId: string; since: number }[] = []
     const w = world({
       launcher: 'antigravity',
       folder: { ...FOLDER, runtime: { engine: 'antigravity' }, vault: { vaultId: 'v1', engine: 'antigravity' } },
+      spec: { vault: { agentId: 'folder:a', vaultId: 'v1', engine: 'antigravity', extraEnv: {} } },
+      script: { prompt: { emit } },
+      deps: {
+        ...SILENT,
+        // A host reader must never be the one asked for a vault turn.
+        antigravityServerLog: readerOf(() => [unreachable()]),
+        pool: createAcpProcessPool({
+          start: async (spec, init, options) => {
+            const connection = await startAcpConnection({ ...spec, vault: undefined }, init, options)
+            return Object.assign(connection, {
+              providerErrors: (sessionId: string, since: number) => { asked.push({ sessionId, since }); return providerErrors(sessionId, since) }
+            })
+          }
+        }),
+        vault: {
+          launcher: () => self!.deps.launcher('antigravity') ?? null,
+          readiness: async () => ({ state: 'ready' }) as never,
+          hold: async () => async () => {}
+        }
+      }
+    })
+    self = w
+    return { w, asked }
+  }
+
+  it('asks vaultd for a vault agent’s provider error and notes it once, with no generic notice', async () => {
+    // Mutation: drop `vaultAntigravity` from the watch's condition → no provider note, the generic one instead.
+    const t0 = Date.now()
+    const { w, asked } = vaultAntigravityWorld(async () => ({
+      errors: [{ key: '503|the model is currently unreachable.', stepIndex: 2, code: 503, message: 'The model is currently unreachable.', at: Date.now() }]
+    }), [{ kind: 'delay', ms: 700 }])
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(noted(w, NOTE)).toBe(1)
+    expect(w.events.find((event) => event.type === 'delta' && event.kind === 'notice' && event.text === NOTE)).toMatchObject({ tone: 'warning' })
+    expect(noted(w, GENERIC)).toBe(0)
+    expect(asked[0].sessionId).toBe(w.fake.received('session/prompt')[0].params?.sessionId)
+    expect(asked[0].since).toBeGreaterThanOrEqual(t0)
+    expect((w.deps.antigravityServerLog as ReturnType<typeof readerOf>)).not.toHaveBeenCalled()
+  })
+
+  it('stops asking a guest that cannot answer, notes nothing of it, and keeps the generic notice', async () => {
+    // The connection answers null once vaultd refused the method (an older guest: -32601).
+    // Mutation: drop the `errors === null` finish in the watch → it asks at every poll.
+    const { w, asked } = vaultAntigravityWorld(async () => null, [{ kind: 'delay', ms: 700 }])
+    const result = await w.run()
+    expect(result.error).toBeUndefined()
+    expect(asked).toHaveLength(1)
+    expect(noted(w, GENERIC)).toBe(1)
+    expect(w.events.filter((event) => event.type === 'delta' && event.kind === 'notice')).toHaveLength(1)
+    expect(result.notices.map((notice) => notice.text)).toEqual([GENERIC])
+  })
+
+  it('ignores a malformed answer, which leaves the generic notice', async () => {
+    const { w, asked } = vaultAntigravityWorld(async () => ({ errors: [{ stepIndex: 'two', message: 503 }, 'x'], extra: true }), [{ kind: 'delay', ms: 700 }])
+    await w.run()
+    expect(asked.length).toBeGreaterThan(0)
+    expect(noted(w, GENERIC)).toBe(1)
+    expect(w.events.filter((event) => event.type === 'delta' && event.kind === 'notice')).toHaveLength(1)
+  })
+
+  it('never asks for a vault agent on another engine', async () => {
+    const read = readerOf(() => [unreachable()])
+    let self: World | undefined
+    const w = world({
+      launcher: 'codex',
+      folder: { ...FOLDER, runtime: { engine: 'codex' }, vault: { vaultId: 'v1', engine: 'codex' } },
       script: { prompt: { emit: [{ kind: 'delay', ms: 600 }] } },
       deps: {
         ...SILENT,
         antigravityServerLog: read,
         vault: {
-          launcher: () => self!.deps.launcher('antigravity') ?? null,
+          launcher: () => self!.deps.launcher('codex') ?? null,
           readiness: async () => ({ state: 'ready' }) as never,
           hold: async () => async () => {}
         }
@@ -5457,6 +5529,6 @@ describe('a silent host Antigravity turn whose server logged a provider error', 
     const result = await w.run()
     expect(result.error).toBeUndefined()
     expect(read).not.toHaveBeenCalled()
-    expect(noted(w, GENERIC)).toBe(1)
+    expect(noted(w, silentTurnNotice('Codex', 300))).toBe(1)
   })
 })

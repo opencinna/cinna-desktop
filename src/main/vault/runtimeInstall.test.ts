@@ -187,6 +187,23 @@ describe('vault runtime install (D28)', () => {
     }
   }, 60_000)
 
+  it('the fake backend’s source sets up Antigravity from this computer’s server, with no adapter', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'host-agy-'))
+    try {
+      const server = join(dir, 'agy_acp_server.par')
+      writeFileSync(server, '#!/bin/sh\necho host antigravity\n', { mode: 0o755 })
+      const source = hostRuntimeSource(async () => '/bin/sh', async () => '/bin/sh', async () => server)
+      const version = `${RUNTIME_PINS.antigravity.cli}-host`
+      expect(source.pins('antigravity')).toEqual([{ engine: 'antigravity', kind: 'executable', version, sha256: null }])
+      const artifacts = await source.artifacts('antigravity')
+      expect(artifacts.map((a) => `${a.kind}:${a.name}:${a.version}`)).toEqual([`executable:antigravity:${version}`])
+      await expect(source.artifacts('opencode')).rejects.toThrow(/Claude, Codex or Antigravity only, not opencode/)
+      expect(hostRuntimeSource(async () => '/bin/sh', async () => '/bin/sh').pins('antigravity')).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('the build writes the adapter tar once and leaves an already pinned one alone', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-out-'))
     try {

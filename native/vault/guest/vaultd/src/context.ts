@@ -1,6 +1,6 @@
 /** What every handler receives. Kept free of the server so handlers stay testable on their own. */
 import type { ChildProcess } from 'node:child_process'
-import type { VaultdNotification } from '../../../../../src/shared/vault/protocol'
+import type { VaultdNotification, VaultEngine } from '../../../../../src/shared/vault/protocol'
 import type { Layout, VaultdConfig } from './config'
 import type { HelperEvents } from './helperControl'
 import type { PtyOps, ShellPty } from './pty'
@@ -21,6 +21,8 @@ export interface Ctx {
   helperEvents: HelperEvents
   /** Running engines by stream id, for `engine.kill`. */
   engines: Map<string, ChildProcess>
+  /** Which engine each of {@link engines} is, for `engine.providerErrors` (Antigravity only). */
+  engineNames: Map<string, VaultEngine>
   /** Live `shell` exec streams by stream id, for `exec.resize`. */
   shells: Map<string, ShellPty>
   /** How a shell's pty is sized; null where vaultd sizes nothing (fake mode, not Linux). */

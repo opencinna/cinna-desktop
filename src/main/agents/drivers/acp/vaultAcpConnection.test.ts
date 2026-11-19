@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { VaultdNotification } from '../../../../shared/vault/protocol'
 import { startVaultAcpConnection, type VaultEngineClient } from './vaultAcpConnection'
+import { VaultdError } from '../../../vault/vaultdClient'
 import { ACP_PROTOCOL_VERSION } from './types'
 
 vi.mock('../../../logger/logger', () => ({
@@ -16,7 +17,7 @@ const LAUNCH = { agentId: 'folder:a', vaultId: 'v1', engine: 'claude' as const, 
  * engine answers `initialize` (unless `silent`) and `session/new`, and stays
  * quiet otherwise: what a paused VM looks like from main.
  */
-function fakeVault(options: { silent?: boolean; authenticate?: 'ok' | 'reject' | 'hang' } = {}) {
+function fakeVault(options: { silent?: boolean; authenticate?: 'ok' | 'reject' | 'hang'; providerErrors?: (params: unknown) => unknown } = {}) {
   const engineMethods: string[] = []
   const listeners = new Set<(n: VaultdNotification) => void>()
   const calls: { method: string; params: unknown }[] = []
@@ -52,6 +53,7 @@ function fakeVault(options: { silent?: boolean; authenticate?: 'ok' | 'reject' |
     request: (async (method: string, params: unknown) => {
       calls.push({ method, params })
       if (method === 'engine.spawn') return { stream: 'stream-1', pid: 7 }
+      if (method === 'engine.providerErrors' && options.providerErrors) return options.providerErrors(params)
       return {}
     }) as VaultEngineClient['request'],
     attach: async () => ({
@@ -189,5 +191,51 @@ describe('VaultAcpConnection', () => {
       .rejects.toThrow("The vault's antigravity engine could not sign in (gemini-api-key): API key not valid. Please pass a valid API key.")
     expect(vault.calls.map((c) => c.method)).toContain('engine.kill')
     expect(vault.channelClosed).toBe(true)
+  })
+
+  it('asks vaultd for a vault Antigravity engine’s provider errors on its own stream, as a span since the prompt', async () => {
+    let answer: () => unknown = () => ({ errors: [] })
+    const vault = fakeVault({ authenticate: 'ok', providerErrors: () => answer() })
+    const connection = await startVaultAcpConnection({ ...LAUNCH, engine: 'antigravity', authMethod: 'gemini-api-key' }, INIT, { client: async () => vault.client })
+    const since = Date.now() - 7_000
+    expect(await connection.providerErrors!('s-1', since)).toEqual({ errors: [] })
+    const sent = vault.calls.at(-1) as { method: string; params: { stream: string; sessionId: string; sinceAgoMs: number } }
+    expect(sent.method).toBe('engine.providerErrors')
+    expect(sent.params).toMatchObject({ stream: 'stream-1', sessionId: 's-1' })
+    // Mutation: send the host's date → a drifted guest clock compares it with its own.
+    expect(sent.params.sinceAgoMs).toBeGreaterThanOrEqual(7_000)
+    expect(sent.params.sinceAgoMs).toBeLessThan(8_000)
+    expect(Object.keys(sent.params)).not.toContain('since')
+    // A prompt "in the future" (a clock step back on the host): never negative.
+    await connection.providerErrors!('s-1', Date.now() + 60_000)
+    expect((vault.calls.at(-1)!.params as { sinceAgoMs: number }).sinceAgoMs).toBe(0)
+
+    // Any failure but "Method not found" is a quiet empty poll, and the next poll asks again.
+    answer = () => { throw new VaultdError('timeout', 'cinna-vaultd did not answer engine.providerErrors in time.') }
+    expect(await connection.providerErrors!('s-1', since)).toEqual({ errors: [] })
+    answer = () => { throw new VaultdError('invalid', 'Not a running Antigravity engine.', -32000) }
+    expect(await connection.providerErrors!('s-1', since)).toEqual({ errors: [] })
+    answer = () => ({ errors: [] })
+    expect(await connection.providerErrors!('s-1', since)).toEqual({ errors: [] })
+    expect(vault.calls.filter((c) => c.method === 'engine.providerErrors')).toHaveLength(5)
+    await connection.dispose()
+  })
+
+  it('stops asking an older guest at its "Method not found"', async () => {
+    // As VaultdClient rejects a JSON-RPC -32601: code `internal`, the RPC code carried.
+    const vault = fakeVault({ authenticate: 'ok', providerErrors: () => { throw new VaultdError('internal', 'Method not found', -32601) } })
+    const connection = await startVaultAcpConnection({ ...LAUNCH, engine: 'antigravity', authMethod: 'gemini-api-key' }, INIT, { client: async () => vault.client })
+    // Mutation: drop the `providerErrorsUnsupported` mark → every poll asks the old guest again.
+    expect(await connection.providerErrors!('s-1', 42)).toBeNull()
+    expect(await connection.providerErrors!('s-1', 42)).toBeNull()
+    expect(vault.calls.filter((c) => c.method === 'engine.providerErrors')).toHaveLength(1)
+    await connection.dispose()
+  })
+
+  it('offers no provider-error read for another engine', async () => {
+    const vault = fakeVault()
+    const connection = await startVaultAcpConnection(LAUNCH, INIT, { client: async () => vault.client })
+    expect(connection.providerErrors).toBeUndefined()
+    await connection.dispose()
   })
 })
