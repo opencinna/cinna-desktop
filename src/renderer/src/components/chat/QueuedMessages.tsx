@@ -451,7 +451,9 @@ function QueuedBubbleRow({
                     </span>
                   ))}
                 </span>
-                {/* Chips of their own at rest, so they read as controls beside the label before any hover (ux_rules §11). */}
+                {/* Chips of their own at rest, so they read as controls beside the label before any hover (ux_rules §11).
+                    Each icon keeps its own grey: only the armed chip — pointer or keyboard alike — lights up and takes
+                    its label's colour, and a Send now blocked by an edit is dimmed. */}
                 <button
                   type="button"
                   onClick={onSendNow}
@@ -461,8 +463,9 @@ function QueuedBubbleRow({
                   onFocus={() => setArmed('send')}
                   onBlur={() => setArmed(null)}
                   aria-label={SEND_NOW_NAME}
-                  className="inline-flex h-5 w-5 items-center justify-center rounded bg-[var(--color-bg-secondary)]
-                    hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent)] transition-colors"
+                  className={`inline-flex h-5 w-5 items-center justify-center rounded transition-colors
+                    ${label === 'Stop & send?' ? 'bg-[var(--color-bg-hover)] text-[var(--color-accent)]' : 'bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]'}
+                    ${sendBlocked ? 'opacity-40' : ''}`}
                 >
                   <SendHorizontal size={10} />
                 </button>
@@ -475,8 +478,8 @@ function QueuedBubbleRow({
                   onFocus={() => setArmed('cancel')}
                   onBlur={() => setArmed(null)}
                   aria-label="Cancel queued message"
-                  className="inline-flex h-5 w-5 items-center justify-center rounded bg-[var(--color-bg-secondary)]
-                    hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-danger)] transition-colors"
+                  className={`inline-flex h-5 w-5 items-center justify-center rounded transition-colors
+                    ${label === 'Cancel?' ? 'bg-[var(--color-bg-hover)] text-[var(--color-danger)]' : 'bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]'}`}
                 >
                   <X size={10} />
                 </button>

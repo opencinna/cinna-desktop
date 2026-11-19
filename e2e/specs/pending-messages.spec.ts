@@ -495,6 +495,9 @@ test('8 the Send now chip is named "Stop and send now" and reads "Stop & send?" 
   const row = queuedRows(cinna)
   const chip = sendNowChip(row)
   const label = (name: string) => row.getByText(name, { exact: true })
+  /** The computed colour of a chip's icon (the chips fade colour, so poll it). */
+  const iconColor = (button: ReturnType<typeof sendNowChip>) =>
+    button.locator('svg').evaluate((icon) => getComputedStyle(icon).color)
 
   await sendFollowUp(cinna, FOLLOW_UP)
   await expect(label('Queued')).toBeVisible()
@@ -511,11 +514,22 @@ test('8 the Send now chip is named "Stop and send now" and reads "Stop & send?" 
     await row.screenshot({ path: join(SHOTS, 'send-now-badge-rest.png'), animations: 'disabled' })
   })
 
+  // At rest both icons wear the badge's grey, the "Queued" label's colour.
+  const grey = await label('Queued').evaluate((el) => getComputedStyle(el).color)
+  await expect.poll(() => iconColor(cancelChip(row))).toBe(grey)
+  await expect.poll(() => iconColor(chip)).toBe(grey)
+  const accent = () => label('Stop & send?').evaluate((el) => getComputedStyle(el).color)
+
   await test.step('under the pointer the badge reads "Stop & send?"', async () => {
     await chip.hover()
     await expect(label('Stop & send?')).toBeVisible()
     await expect(label('Queued')).toBeHidden()
     await expect(label('Cancel?')).toBeHidden()
+    // Only the label and the send chip take the accent; the [x] stays grey (user decision 2026-11-19).
+    const armed = await accent()
+    expect(armed).not.toBe(grey)
+    await expect.poll(() => iconColor(chip)).toBe(armed)
+    await expect.poll(() => iconColor(cancelChip(row))).toBe(grey)
     await row.screenshot({ path: join(SHOTS, 'send-now-badge-hover.png'), animations: 'disabled' })
     await composer(cinna, RUNNING_PLACEHOLDER).hover()
     await expect(label('Queued')).toBeVisible()
@@ -529,10 +543,13 @@ test('8 the Send now chip is named "Stop and send now" and reads "Stop & send?" 
     await expect(chip).toBeFocused()
     await expect(label('Stop & send?')).toBeVisible()
     await expect(label('Cancel?')).toBeHidden()
+    await expect.poll(() => iconColor(cancelChip(row))).toBe(grey)
     await cinna.page.keyboard.press('Tab')
     await expect(cancelChip(row)).toBeFocused()
     await expect(label('Cancel?')).toBeVisible()
     await expect(label('Stop & send?')).toBeHidden()
+    // And the other way round: Cancel? armed leaves the send chip grey.
+    await expect.poll(() => iconColor(chip)).toBe(grey)
   })
 
   // Pointing and focusing stopped nothing.
