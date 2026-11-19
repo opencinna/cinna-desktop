@@ -80,7 +80,10 @@
  *   model is currently unreachable." (read in run 3), which
  *   the server writes into its transcript and never sends on the wire, so the
  *   drained turn hangs until the lane's 180 s limit. A failed Antigravity
- *   scenario prints that transcript's error lines.
+ *   scenario prints that transcript's error lines. A fourth run, later the same
+ *   day on the same model, passed: stopped in 76 ms, the follow-up answered
+ *   `HERON-4d1ee9` 155 s after Send now (Gemini was slow; the vault showed the
+ *   generic 90 s note, since a vault's server log is out of the host's reach).
  */
 import { createRequire } from 'node:module'
 import { DatabaseSync } from 'node:sqlite'
@@ -104,8 +107,8 @@ const ENGINES = ['claude', 'opencode', 'antigravity', 'codex'] as const
 type Engine = (typeof ENGINES)[number]
 /** The cheap OpenAI model of the live lanes (overridable as in the E2E live specs). */
 const OPENAI_MODEL = process.env['CINNA_E2E_LIVE_MODEL'] || 'gpt-5.6-luna'
-/** Gemini Flash at its lowest tier, as the Antigravity live specs run it. */
-const ANTIGRAVITY_MODEL = 'gemini-3.8-flash-low'
+/** Gemini Flash at its lowest tier, as the Antigravity live specs run it; `VAULT_SEND_NOW_ANTIGRAVITY_MODEL` names another Flash tier. */
+const ANTIGRAVITY_MODEL = process.env['VAULT_SEND_NOW_ANTIGRAVITY_MODEL'] || 'gemini-3.8-flash-low'
 const DRY = process.env['VAULT_SEND_NOW_DRY'] === '1'
 /**
  * A first-turn event that shows the turn busy on its tool: an ACP agent's tool
