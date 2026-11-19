@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSy
 import { join, relative } from 'node:path'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import { createFolderAgent } from '../fixtures/seed'
-import { writeFakeClaudeCli } from '../fixtures/fakeClaudeCli'
+import { writeFakeClaudeCli, type FakeClaudeCli, type FakeClaudeInput } from '../fixtures/fakeClaudeCli'
 import type { LocalAgentDto } from '../../src/shared/localAgents'
 import { RUNTIME_PINS } from '../../src/shared/runtimePins'
 
@@ -19,7 +19,12 @@ import { RUNTIME_PINS } from '../../src/shared/runtimePins'
  * The engine inside is the scripted Claude CLI (`fakeClaudeCli.ts`) saved as
  * `localAgentsClaudePath`: E2E downloads no Claude, and the move streams in
  * whatever binary the app resolved for itself. Its answer is a constant, so a
- * reply proves a turn ran inside the vault and nothing about what it was sent.
+ * reply proves a turn ran inside the vault and nothing about what it was sent —
+ * except in V9, where a prompt with a code word is answered `Heard <code>.`
+ * and a prompt with the hold marker is held open on a `Bash` tool use until
+ * the SDK's interrupt (logged by the fake), so Send now's stop and the drained
+ * prompt are witnessed at the CLI inside the vault. A tool call in progress
+ * withdraws steering, so the follow-up is queued without a file.
  *
  * **Needs the network.** The move's `rebuild` step runs `uv python install`
  * in a fresh vault directory for the scaffold's `pyproject.toml` and
@@ -44,10 +49,18 @@ test.use({ env: { CINNA_VAULT_FAKE: '1' } })
  * engine in the default agents home, as the scaffold makes it (no `uv.lock`).
  */
 async function arrangeClaudeAgent(cinna: CinnaApp, reply = REPLY): Promise<LocalAgentDto> {
+  return (await arrangeClaude(cinna, { reply })).agent
+}
+
+/** `arrangeClaudeAgent`, with the scripted CLI's options and its handle. */
+async function arrangeClaude(
+  cinna: CinnaApp,
+  input: Omit<FakeClaudeInput, 'models'>
+): Promise<{ agent: LocalAgentDto; fake: FakeClaudeCli }> {
   await cinna.skipOnboarding()
   const fake = writeFakeClaudeCli(cinna, {
     models: [{ value: 'default', displayName: 'Default', description: 'fake', supportsAutoMode: true }],
-    reply
+    ...input
   })
   await cinna.page.evaluate((path) => window.api.settings.set('localAgentsClaudePath', path), fake.path)
   // The default agents home: a vault moves only agents in the main agents folder.
@@ -67,7 +80,7 @@ async function arrangeClaudeAgent(cinna: CinnaApp, reply = REPLY): Promise<Local
   )
   expect(set.ok, JSON.stringify(set)).toBe(true)
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
-  return created
+  return { agent: created, fake }
 }
 
 async function openAgent(cinna: CinnaApp): Promise<void> {
@@ -508,4 +521,74 @@ test('V8 a vault agent switches to Codex through setup, answers on it, switches 
   await expect(panel.getByRole('button', { name: 'Unlock', exact: true })).toBeEnabled()
   await expect(panel.getByRole('combobox', { name: 'Work complexity' })).toBeDisabled()
   await expect(runsOn).toHaveValue('claude')
+})
+
+/** Holds the scripted Claude's turn open on a `Bash` tool use until it is interrupted. */
+const HOLD = 'HOLD-THE-TURN'
+const HELD_PROMPT = `Run the long check. ${HOLD}`
+const FOLLOW_UP = 'Then say PLUM-42 back.'
+const HEARD = 'Heard PLUM-42.'
+
+test('V9 Send now in a vault chat stops the turn inside the vault and sends the queued message as the next turn', async ({ cinna }) => {
+  test.setTimeout(MOVE_TIMEOUT + 120_000)
+  const { agent, fake } = await arrangeClaude(cinna, { reply: REPLY, holdMarker: HOLD, echoPattern: 'PLUM-\\d+' })
+  await cinna.page.evaluate(() => window.api.settings.set('autoChatTitles', false))
+  await moveOverIpc(cinna, agent.id)
+  const page = cinna.page
+  await openSecurity(cinna)
+  await page.getByRole('button', { name: 'Start chat', exact: true }).click()
+  const idle = page.getByRole('combobox', { name: 'Type a message...', exact: true })
+  await idle.fill(HELD_PROMPT)
+  await idle.press('Enter')
+
+  // The Bash call in progress withdraws steering, so the follow-up is queued, not steered.
+  await expect.poll(() => fake.log().filter((entry) => entry.event === 'held').length, { timeout: 60_000 }).toBe(1)
+  await expect(page.getByRole('button', { name: 'Tool: Bash', exact: true })).toBeVisible()
+  const stop = page.getByRole('button', { name: 'Stop', exact: true })
+  await expect(stop).toBeVisible()
+  const running = page.getByRole('combobox', { name: 'Send a follow-up · Esc Esc to stop', exact: true })
+  await running.fill(FOLLOW_UP)
+  await running.press('Enter')
+  await expect(running).toHaveValue('')
+  const row = page.locator('[data-queued-message]')
+  await expect(row.getByText('Queued', { exact: true })).toBeVisible()
+  await expect(row.getByText(FOLLOW_UP, { exact: true })).toBeVisible()
+  const chat = (await page.evaluate(() => window.api.chat.list())).find((c) => c.agentId === agent.id)
+  if (!chat) throw new Error('no chat with the vault agent')
+  expect((await page.evaluate((id) => window.api.run.queueList(id), chat.id)).items.map((item) => item.content)).toEqual([FOLLOW_UP])
+  expect(fake.prompts(), 'nothing but the held prompt reached the CLI yet').toHaveLength(1)
+
+  await row.getByRole('button', { name: 'Stop and send now', exact: true }).click()
+
+  // The stop reached the engine inside the vault, then the queued text went as the next prompt.
+  await expect.poll(() => fake.interrupted().length, { timeout: 30_000 }).toBe(1)
+  await expect.poll(() => fake.prompts().length, { timeout: 30_000 }).toBe(2)
+  const [first, second] = fake.prompts()
+  expect(first).toContain(HELD_PROMPT)
+  expect(second).toContain(FOLLOW_UP)
+  expect(second).not.toContain(HOLD)
+
+  await expect(page.getByText(HEARD, { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText(REPLY, { exact: true })).toHaveCount(0)
+  await expect(stop).toHaveCount(0, { timeout: 15_000 })
+  await expect(idle).toHaveValue('')
+  await expect(row).toHaveCount(0)
+  await expect(page.getByText(FOLLOW_UP, { exact: true })).toHaveCount(1)
+  expect(await page.evaluate((id) => window.api.run.queueList(id), chat.id)).toEqual({ held: false, items: [] })
+  expect(fake.interrupted()).toHaveLength(1)
+
+  // The vault's transcript: both prompts and the answer, no error row; the turn ended completed.
+  const saved = await page.evaluate(async (id) => {
+    const detail = await window.api.chat.get(id)
+    return (detail?.messages ?? []).map((message) => ({ role: message.role, content: message.content }))
+  }, chat.id)
+  expect(saved.filter((m) => m.role === 'error'), JSON.stringify(saved)).toEqual([])
+  expect(saved.filter((m) => m.role === 'user').map((m) => m.content)).toEqual([HELD_PROMPT, FOLLOW_UP])
+  expect(saved.at(-1)).toEqual({ role: 'assistant', content: HEARD })
+  const status = await page.evaluate(async (id) => (await window.api.chat.list()).find((c) => c.id === id)?.lastRunResult?.status ?? null, chat.id)
+  expect(status).toBe('completed')
+
+  const stored = await sqliteMessageCount(cinna, chat.id)
+  expect(stored.vaultId, 'the chat row is bound to the vault').not.toBeNull()
+  expect(stored.messages, 'no message of the vault chat is in SQLite').toBe(0)
 })

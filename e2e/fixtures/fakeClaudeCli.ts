@@ -13,7 +13,11 @@ import type { CinnaApp } from './app'
  * control protocol to `fakeClaudeCli.mjs`, which answers `initialize` with the
  * model list below (so `session/new` offers it as the adapter builds it,
  * per-model `effort` options included), succeeds every other control request,
- * and answers a prompt with one text reply and a costed result. `--version`
+ * and answers a prompt with one text reply and a costed result — the constant
+ * `reply`, or `Heard <match>.` when `echoPattern` matches the prompt — while a
+ * prompt holding `holdMarker` gets a `Bash` tool use and then nothing until the
+ * SDK's `interrupt`, which ends it as the real CLI does (`interrupted()` is the
+ * witness that a stop reached the CLI). `--version`
  * and `auth status` answer as a logged-in install, so the launcher's own login
  * check passes without stubbing anything in main.
  *
@@ -35,8 +39,11 @@ export interface FakeClaudeModel {
 export interface FakeClaudeLogEntry {
   pid: number
   cwd: string
-  dir: 'argv' | 'in'
+  dir: 'argv' | 'in' | 'event'
   args?: string[]
+  /** `held`: a hold-marker prompt got its tool use; `interrupted`: the interrupt ended it. */
+  event?: 'held' | 'interrupted'
+  toolUseId?: string
   message?: { type: string; request?: { subtype?: string; [key: string]: unknown }; [key: string]: unknown }
 }
 
@@ -47,19 +54,33 @@ export interface FakeClaudeCli {
   log(): FakeClaudeLogEntry[]
   /** The control requests of one subtype, in order. */
   controls(subtype: string): FakeClaudeLogEntry[]
+  /** The text of every `user` message (prompt) the CLI read, in order. */
+  prompts(): string[]
+  /** The held turns that an interrupt ended. */
+  interrupted(): FakeClaudeLogEntry[]
+}
+
+export interface FakeClaudeInput {
+  models: FakeClaudeModel[]
+  /** The answer to every prompt the options below leave alone. */
+  reply: string
+  /** A prompt containing this is held open on a `Bash` tool use until interrupted. */
+  holdMarker?: string
+  /** A regex source: a prompt it matches is answered `Heard <match>.` instead of `reply`. */
+  echoPattern?: string
 }
 
 export const FAKE_CLAUDE_VERSION = '9.9.9'
 
 const SCRIPT = join(repoRoot, 'e2e', 'fixtures', 'fakeClaudeCli.mjs')
 
-export function writeFakeClaudeCli(cinna: CinnaApp, input: { models: FakeClaudeModel[]; reply: string }): FakeClaudeCli {
+export function writeFakeClaudeCli(cinna: CinnaApp, input: FakeClaudeInput): FakeClaudeCli {
   const dir = join(cinna.sandbox.root, 'fake-claude')
   mkdirSync(dir, { recursive: true })
   const configPath = join(dir, 'config.json')
   const logPath = join(dir, 'log.jsonl')
   const path = join(dir, 'claude')
-  writeFileSync(configPath, JSON.stringify({ models: input.models, reply: input.reply }, null, 2))
+  writeFileSync(configPath, JSON.stringify({ models: input.models, reply: input.reply, holdMarker: input.holdMarker, echoPattern: input.echoPattern }, null, 2))
   // The launcher builds the child's whole environment, so the shim names node,
   // the script and its files itself.
   writeFileSync(path, [
@@ -77,6 +98,18 @@ export function writeFakeClaudeCli(cinna: CinnaApp, input: { models: FakeClaudeM
   return {
     path,
     log,
-    controls: (subtype) => log().filter((entry) => entry.message?.type === 'control_request' && entry.message.request?.subtype === subtype)
+    controls: (subtype) => log().filter((entry) => entry.message?.type === 'control_request' && entry.message.request?.subtype === subtype),
+    prompts: () => log().filter((entry) => entry.dir === 'in' && entry.message?.type === 'user').map((entry) => promptText(entry.message)),
+    interrupted: () => log().filter((entry) => entry.event === 'interrupted')
   }
+}
+
+function promptText(message: FakeClaudeLogEntry['message']): string {
+  const content = (message as { message?: { content?: unknown } } | undefined)?.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block): block is { type: 'text'; text: string } => (block as { type?: string })?.type === 'text')
+    .map((block) => block.text)
+    .join('\n')
 }
