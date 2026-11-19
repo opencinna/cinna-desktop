@@ -149,4 +149,7 @@ No settings. Constants: `HOLDING_STATES` and `RUN_QUEUE_FLUSH_GRACE_MS` (3 s) in
 - `src/renderer/src/hooks/useLiveRunWatch.test.tsx` — a run held until the ended run's saved read lands, and applied at once when that read fails.
 - `src/renderer/src/hooks/useChatStream.commands.test.tsx` and `useChatStream.events.test.tsx` — result handling and `user_message`.
 
-These are unit and component tests over fakes. A steer against a real Claude Code or Codex CLI is not exercised by any test here; see [the ACP contract](../../agents/local_agents/acp_contract.md#the-steering-extension).
+- `e2e/specs/pending-messages.spec.ts` (E2E, the built app on the scriptable fake ACP agent, its JSONL log the wire witness) — steer, queue and drain, Esc Esc hold, edit in place, the running composer, files on a queued message, and Send now: the cancel then the queued text as the next prompt with nothing back in the composer, the chip's name and hover/focus label, disabled on every bubble while one is edited, the drain from the head, a cancel of the clicked message after the click (the stop stands, the rest sends), and a later plain Stop still holding.
+- `e2e/specs/live-queue-send-now.spec.ts` (billed, one short turn pair per engine) — Send now on a real OpenCode, Claude, Codex or Antigravity turn: the follow-up carries a file so it queues rather than steers, the stopped turn leaves no error row, and the drained turn's reply carries the follow-up's code word.
+
+The unit and component tests run over fakes. A steer against a real Claude Code or Codex CLI is not exercised by any test here; see [the ACP contract](../../agents/local_agents/acp_contract.md#the-steering-extension).

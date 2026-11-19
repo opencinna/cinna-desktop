@@ -1,8 +1,9 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 import { customAcpCommand, type CustomAcpCommand } from '../fixtures/customAcpCommand'
-import type { FakeAcpScript } from '../../src/main/agents/drivers/acp/testSupport/fakeAcp'
+import { repoRoot } from '../playwright.config'
+import type { FakeAcpHandlerScript, FakeAcpScript } from '../../src/main/agents/drivers/acp/testSupport/fakeAcp'
 
 /**
  * Messages sent while an agent turn is still running: steered into it, or
@@ -28,6 +29,25 @@ import type { FakeAcpScript } from '../../src/main/agents/drivers/acp/testSuppor
  *   ask, and **Allow once** is what completes it. The drained turn runs the
  *   same script, so it asks again.
  * - Stop / edit / composer: no steering; the prompt blocks on `awaitCancel`.
+ *   Every prompt does, so a turn drained by **Send now** (test 12) runs until
+ *   it is stopped too.
+ * - Send now (tests 7, 10, 11): the fake's prompt `sequence` — the first prompt
+ *   blocks on `awaitCancel`, the next (the drained turn) answers at once. In
+ *   test 11 the stopped prompt answers its cancel only after 2 s
+ *   (`delayMs`, under the driver's 3 s cancel grace, so the process is not
+ *   retired): the window in which the [x] lands before the turn's ending
+ *   reaches the queue, which the test checks rather than assumes.
+ *
+ * ## Send now (tests 7–12)
+ *
+ * The queued bubble's `Stop and send now` chip (`QueuedMessages.tsx`) →
+ * `run:queue-send-now` → `runQueueService.sendNow`. Witnesses: one
+ * `session/cancel` on the wire, then a second `session/prompt` carrying the
+ * queued text (merged from the head of the queue with `\n\n`), the saved user
+ * rows, main's `run.queueList`, and the composer — which a held queue would
+ * have refilled and a send now must leave empty. Screenshots of the badge at
+ * rest and with the pointer on the chip are written by test 8 to
+ * `e2e/test-results/pending-messages/send-now-badge-{rest,hover}.png`.
  *
  * ## What it does not cover
  *
@@ -35,15 +55,20 @@ import type { FakeAcpScript } from '../../src/main/agents/drivers/acp/testSuppor
  * engine's wire: `live-attachments.spec.ts` has a real agent read them.
  *
  * A real Claude Code or Codex steer, a steer that lands late (`saved`), a
- * refused drain, several queued messages merged into one turn, a message
- * addressed to a different agent in a human-routed chat, and the too-late edit
- * notice.
+ * refused drain, a message addressed to a different agent in a human-routed
+ * chat, and the too-late edit notice. For Send now: a stopped turn that fails
+ * or runs out of budget on its way out (it still holds), a turn that ends on
+ * its own before the stop reaches it, and a send now while a hand-over is in
+ * flight — `runQueueService.test.ts` covers those; a real engine stopped by
+ * Send now is `live-queue-send-now.spec.ts`.
  */
 
 const AGENT = 'Release Notes Fake'
 const PROMPT = 'Draft the release notes for 0.4.3.'
 const FOLLOW_UP = 'Mention the Linux artifacts too.'
 const EDITED = 'Mention the Linux and macOS artifacts.'
+const SECOND = 'Add the Windows installer note.'
+const THIRD = 'Credit the packaging volunteers.'
 const BEFORE = 'Reading the changelog: ash-3301.'
 const AFTER = 'Linux artifacts added: elm-7719.'
 
@@ -82,6 +107,31 @@ const RUNS_UNTIL_STOPPED: FakeAcpScript = {
   prompt: { emit: [chunk(BEFORE), { kind: 'awaitCancel' }], response: { stopReason: 'cancelled' } }
 }
 
+/** The first prompt of a `sequence`: runs until it is stopped. */
+const HOLDS_UNTIL_STOPPED: FakeAcpHandlerScript = {
+  emit: [chunk(BEFORE), { kind: 'awaitCancel' }],
+  response: { stopReason: 'cancelled' }
+}
+
+/** No steering; the first turn runs until stopped, the next one (the drained turn) answers at once. */
+const STOPPED_THEN_ANSWERS: FakeAcpScript = {
+  initialize: { response: identity },
+  prompt: { sequence: [HOLDS_UNTIL_STOPPED, { emit: [chunk(AFTER)] }] }
+}
+
+/**
+ * As {@link STOPPED_THEN_ANSWERS}, but the stopped prompt answers its cancel
+ * 2 s late — inside the driver's 3 s grace (`ACP_CANCEL_GRACE_MS`), so the
+ * turn ends `canceled` and the process stays.
+ */
+const STOPS_SLOWLY_THEN_ANSWERS: FakeAcpScript = {
+  initialize: { response: identity },
+  prompt: { sequence: [{ ...HOLDS_UNTIL_STOPPED, delayMs: 2_000 }, { emit: [chunk(AFTER)] }] }
+}
+
+/** Where test 8 writes the badge screenshots; outside any one test's output folder. */
+const SHOTS = join(repoRoot, 'e2e', 'test-results', 'pending-messages')
+
 const IDLE_PLACEHOLDER = 'Type a message...'
 const RUNNING_PLACEHOLDER = 'Send a follow-up · Esc Esc to stop'
 
@@ -96,6 +146,11 @@ const composer = (cinna: CinnaApp, placeholder: string) =>
 const stopButton = (cinna: CinnaApp) => cinna.page.getByRole('button', { name: 'Stop', exact: true })
 const sendButton = (cinna: CinnaApp) => cinna.page.getByRole('button', { name: 'Send', exact: true })
 const queuedRows = (cinna: CinnaApp) => cinna.page.locator('[data-queued-message]')
+const sendNowChip = (row: ReturnType<typeof queuedRows>) => row.getByRole('button', { name: 'Stop and send now', exact: true })
+const cancelChip = (row: ReturnType<typeof queuedRows>) => row.getByRole('button', { name: 'Cancel queued message', exact: true })
+const text = (value: string) => [{ type: 'text', text: value }]
+const prompts = (peer: CustomAcpCommand) => peer.received('session/prompt').map((entry) => entry.params?.prompt)
+const queueOf = (cinna: CinnaApp, chatId: string) => cinna.page.evaluate((id) => window.api.run.queueList(id), chatId)
 
 /** The command-line agent, added through the real test-then-save handlers, then a restart. */
 async function arrange(cinna: CinnaApp, script: FakeAcpScript): Promise<CustomAcpCommand> {
@@ -139,6 +194,15 @@ async function savedRows(cinna: CinnaApp, chatId: string): Promise<{ role: strin
     const detail = await window.api.chat.get(id)
     return (detail?.messages ?? []).map((message) => ({ role: message.role, content: message.content }))
   }, chatId)
+}
+
+/** How the chat's last turn ended, as the sidebar reads it (`chat.list`'s `lastRunResult`). */
+async function lastRunStatus(cinna: CinnaApp, chatId: string): Promise<string | null> {
+  return cinna.page.evaluate(async (id) => (await window.api.chat.list()).find((chat) => chat.id === id)?.lastRunResult?.status ?? null, chatId)
+}
+
+async function userRows(cinna: CinnaApp, chatId: string): Promise<string[]> {
+  return (await savedRows(cinna, chatId)).filter((r) => r.role === 'user').map((r) => r.content)
 }
 
 /** The transcript's paragraphs that are one of this spec's strings, in document order. */
@@ -388,5 +452,241 @@ test('6 files attached while a turn runs queue with their message and go with th
     }, chatId)).toEqual([[PROMPT, []], [FOLLOW_UP, [notes.name, extra.name]]])
     await expect(page.getByRole('button', { name: `Preview ${notes.name}`, exact: true })).toHaveCount(1)
     expect(await page.evaluate((id) => window.api.run.queueList(id), chatId)).toEqual({ held: false, items: [] })
+  })
+})
+
+test('7 Send now stops the running turn and sends the queued message as the next turn, not back to the composer', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const peer = await arrange(cinna, STOPPED_THEN_ANSWERS)
+  const chatId = await startTurn(cinna, peer)
+  const row = queuedRows(cinna)
+
+  await sendFollowUp(cinna, FOLLOW_UP)
+  await expect(row.getByText('Queued', { exact: true })).toBeVisible()
+
+  await test.step('the engine is told to cancel, then gets the queued text as its next prompt', async () => {
+    await sendNowChip(row).click()
+    await expect.poll(() => peer.received('session/cancel').length).toBe(1)
+    await expect.poll(() => prompts(peer)).toEqual([text(PROMPT), text(FOLLOW_UP)])
+  })
+
+  await test.step('the drained turn answers, and nothing went back to the composer', async () => {
+    await expect(cinna.page.getByText(AFTER, { exact: true })).toBeVisible()
+    await expect(stopButton(cinna)).toHaveCount(0, { timeout: 15_000 })
+    await expect(composer(cinna, IDLE_PLACEHOLDER)).toHaveValue('')
+    await expect(row).toHaveCount(0)
+    await expect(cinna.page.getByText(FOLLOW_UP, { exact: true })).toHaveCount(1)
+    await expect.poll(() => savedRows(cinna, chatId)).toEqual([
+      { role: 'user', content: PROMPT },
+      { role: 'assistant', content: BEFORE },
+      { role: 'user', content: FOLLOW_UP },
+      { role: 'assistant', content: AFTER }
+    ])
+    expect(await queueOf(cinna, chatId)).toEqual({ held: false, items: [] })
+    expect(peer.received('session/cancel')).toHaveLength(1)
+    expect(await lastRunStatus(cinna, chatId)).toBe('completed')
+  })
+})
+
+test('8 the Send now chip is named "Stop and send now" and reads "Stop & send?" under the pointer and under keyboard focus', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const peer = await arrange(cinna, RUNS_UNTIL_STOPPED)
+  await startTurn(cinna, peer)
+  const row = queuedRows(cinna)
+  const chip = sendNowChip(row)
+  const label = (name: string) => row.getByText(name, { exact: true })
+
+  await sendFollowUp(cinna, FOLLOW_UP)
+  await expect(label('Queued')).toBeVisible()
+
+  await test.step('a chip of its own before the [x], with a name and no native tooltip', async () => {
+    await expect(chip).toBeEnabled()
+    await expect(chip).toHaveAccessibleName('Stop and send now')
+    await expect(chip).not.toHaveAttribute('title')
+    // Before the [x] in the badge.
+    expect(await row.getByRole('button').evaluateAll((buttons) => buttons.map((b) => b.getAttribute('aria-label'))))
+      .toEqual(['Stop and send now', 'Cancel queued message'])
+    await composer(cinna, RUNNING_PLACEHOLDER).hover()
+    await expect(label('Stop & send?')).toBeHidden()
+    await row.screenshot({ path: join(SHOTS, 'send-now-badge-rest.png'), animations: 'disabled' })
+  })
+
+  await test.step('under the pointer the badge reads "Stop & send?"', async () => {
+    await chip.hover()
+    await expect(label('Stop & send?')).toBeVisible()
+    await expect(label('Queued')).toBeHidden()
+    await expect(label('Cancel?')).toBeHidden()
+    await row.screenshot({ path: join(SHOTS, 'send-now-badge-hover.png'), animations: 'disabled' })
+    await composer(cinna, RUNNING_PLACEHOLDER).hover()
+    await expect(label('Queued')).toBeVisible()
+    await expect(label('Stop & send?')).toBeHidden()
+  })
+
+  await test.step('keyboard focus reads the same, and Tab to the [x] reads "Cancel?"', async () => {
+    await cancelChip(row).focus()
+    await expect(label('Cancel?')).toBeVisible()
+    await cinna.page.keyboard.press('Shift+Tab')
+    await expect(chip).toBeFocused()
+    await expect(label('Stop & send?')).toBeVisible()
+    await expect(label('Cancel?')).toBeHidden()
+    await cinna.page.keyboard.press('Tab')
+    await expect(cancelChip(row)).toBeFocused()
+    await expect(label('Cancel?')).toBeVisible()
+    await expect(label('Stop & send?')).toBeHidden()
+  })
+
+  // Pointing and focusing stopped nothing.
+  expect(peer.received('session/cancel')).toEqual([])
+  expect(peer.received('session/prompt')).toHaveLength(1)
+  expect(existsSync(join(SHOTS, 'send-now-badge-rest.png')) && existsSync(join(SHOTS, 'send-now-badge-hover.png'))).toBe(true)
+})
+
+test('9 while a queued message is being edited Send now is disabled on every bubble, and enabled again after Esc or Save', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const peer = await arrange(cinna, RUNS_UNTIL_STOPPED)
+  const chatId = await startTurn(cinna, peer)
+  const rows = queuedRows(cinna)
+  const chips = sendNowChip(rows)
+  const input = composer(cinna, RUNNING_PLACEHOLDER)
+  const save = cinna.page.getByRole('button', { name: 'Save', exact: true })
+
+  await sendFollowUp(cinna, FOLLOW_UP)
+  await sendFollowUp(cinna, SECOND)
+  await expect(rows).toHaveCount(2)
+  await expect(chips).toHaveCount(2)
+  for (const chip of await chips.all()) await expect(chip).toBeEnabled()
+
+  await test.step('ArrowUp recalls the newest for editing: both Send now chips are disabled, the [x]s are not', async () => {
+    await input.focus()
+    await input.press('ArrowUp')
+    await expect(input).toHaveValue(SECOND)
+    await expect(save).toBeVisible()
+    await expect(rows.nth(1).getByText('Editing', { exact: true })).toBeVisible()
+    await expect(chips.nth(0)).toBeDisabled()
+    await expect(chips.nth(1)).toBeDisabled()
+    await expect(cancelChip(rows.nth(0))).toBeEnabled()
+    await expect(cancelChip(rows.nth(1))).toBeEnabled()
+    // The other bubble's disabled chip does not offer "Stop & send?" either.
+    await chips.nth(0).hover()
+    await expect(rows.nth(0).getByText('Stop & send?', { exact: true })).toBeHidden()
+    await expect(rows.nth(0).getByText('Queued', { exact: true })).toBeVisible()
+  })
+
+  await test.step('Esc leaves the edit and the chips are enabled again', async () => {
+    await input.press('Escape')
+    await expect(input).toHaveValue('')
+    await expect(save).toHaveCount(0)
+    await expect(chips.nth(0)).toBeEnabled()
+    await expect(chips.nth(1)).toBeEnabled()
+  })
+
+  await test.step('a second edit disables them again, and Save enables them', async () => {
+    await input.press('ArrowUp')
+    await expect(input).toHaveValue(SECOND)
+    await expect(chips.nth(0)).toBeDisabled()
+    await expect(chips.nth(1)).toBeDisabled()
+    await input.fill(EDITED)
+    await save.click()
+    await expect(rows.nth(1).getByText(EDITED, { exact: true })).toBeVisible()
+    await expect(save).toHaveCount(0)
+    await expect(chips.nth(0)).toBeEnabled()
+    await expect(chips.nth(1)).toBeEnabled()
+    expect((await queueOf(cinna, chatId)).items.map((item) => item.content)).toEqual([FOLLOW_UP, EDITED])
+  })
+
+  // Nothing was stopped or sent along the way.
+  expect(peer.received('session/cancel')).toEqual([])
+  expect(peer.received('session/prompt')).toHaveLength(1)
+})
+
+test('10 Send now on a later queued message drains the queue from its head, merged into one turn', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const peer = await arrange(cinna, STOPPED_THEN_ANSWERS)
+  const chatId = await startTurn(cinna, peer)
+  const rows = queuedRows(cinna)
+  const merged = [FOLLOW_UP, SECOND, THIRD].join('\n\n')
+
+  await sendFollowUp(cinna, FOLLOW_UP)
+  await sendFollowUp(cinna, SECOND)
+  await sendFollowUp(cinna, THIRD)
+  await expect(rows).toHaveCount(3)
+  await expect(rows.nth(1).getByText(SECOND, { exact: true })).toBeVisible()
+
+  await sendNowChip(rows.nth(1)).click()
+  await expect.poll(() => peer.received('session/cancel').length).toBe(1)
+  // From the head: the message ahead of the one clicked goes first, and the one behind it rides along.
+  await expect.poll(() => prompts(peer)).toEqual([text(PROMPT), text(merged)])
+  await expect(cinna.page.getByText(AFTER, { exact: true })).toBeVisible()
+  await expect(stopButton(cinna)).toHaveCount(0, { timeout: 15_000 })
+  await expect(rows).toHaveCount(0)
+  await expect(composer(cinna, IDLE_PLACEHOLDER)).toHaveValue('')
+  await expect.poll(() => userRows(cinna, chatId)).toEqual([PROMPT, merged])
+  expect(await queueOf(cinna, chatId)).toEqual({ held: false, items: [] })
+})
+
+test('11 cancelling the clicked message before the stopped turn ends: the stop stands and the rest of the queue still sends', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const peer = await arrange(cinna, STOPS_SLOWLY_THEN_ANSWERS)
+  const chatId = await startTurn(cinna, peer)
+  const rows = queuedRows(cinna)
+  const waiting = cinna.page.locator('[data-queued-message][data-phase="queued"]')
+
+  await sendFollowUp(cinna, FOLLOW_UP)
+  await sendFollowUp(cinna, SECOND)
+  await expect(rows).toHaveCount(2)
+
+  await test.step('Send now on the second, then its [x] while the engine has not yet answered the cancel', async () => {
+    await sendNowChip(rows.nth(1)).click()
+    await expect.poll(() => peer.received('session/cancel').length).toBe(1)
+    await cancelChip(rows.nth(1)).click()
+    await expect(waiting).toHaveCount(1)
+    await expect(waiting.getByText(FOLLOW_UP, { exact: true })).toBeVisible()
+    // The [x] landed before the stopped turn's ending reached the queue: nothing drained yet.
+    expect((await queueOf(cinna, chatId)).items.map((item) => item.content)).toEqual([FOLLOW_UP])
+    expect(peer.received('session/prompt')).toHaveLength(1)
+  })
+
+  await test.step('the turn ends stopped and what is left of the queue goes as the next turn', async () => {
+    await expect.poll(() => prompts(peer), { timeout: 15_000 }).toEqual([text(PROMPT), text(FOLLOW_UP)])
+    await expect(cinna.page.getByText(AFTER, { exact: true })).toBeVisible()
+    await expect(stopButton(cinna)).toHaveCount(0, { timeout: 15_000 })
+    await expect(rows).toHaveCount(0)
+    await expect(composer(cinna, IDLE_PLACEHOLDER)).toHaveValue('')
+    await expect(cinna.page.getByText(SECOND, { exact: true })).toHaveCount(0)
+    await expect.poll(() => userRows(cinna, chatId)).toEqual([PROMPT, FOLLOW_UP])
+    expect(await queueOf(cinna, chatId)).toEqual({ held: false, items: [] })
+    expect(peer.received('session/cancel')).toHaveLength(1)
+  })
+})
+
+test('12 a plain Stop still holds: after a Send now, stopping the drained turn puts the next queued message back in the input', async ({ cinna }) => {
+  test.setTimeout(90_000)
+  const peer = await arrange(cinna, RUNS_UNTIL_STOPPED)
+  const chatId = await startTurn(cinna, peer)
+  const rows = queuedRows(cinna)
+
+  await test.step('Send now drains the first queued message into a turn that keeps running', async () => {
+    await sendFollowUp(cinna, FOLLOW_UP)
+    await expect(rows.getByText('Queued', { exact: true })).toBeVisible()
+    await sendNowChip(rows).click()
+    await expect.poll(() => prompts(peer)).toEqual([text(PROMPT), text(FOLLOW_UP)])
+    await expect(rows).toHaveCount(0)
+    await expect(stopButton(cinna)).toBeVisible()
+    await expect(composer(cinna, RUNNING_PLACEHOLDER)).toHaveValue('')
+  })
+
+  await test.step('a message queued behind the drained turn, then the Stop button: held, back in the input', async () => {
+    await sendFollowUp(cinna, SECOND)
+    await expect(rows.getByText('Queued', { exact: true })).toBeVisible()
+    await stopButton(cinna).click()
+    await expect(stopButton(cinna)).toHaveCount(0)
+    await expect(composer(cinna, IDLE_PLACEHOLDER)).toHaveValue(SECOND)
+    await expect(rows).toHaveCount(0)
+    await expect.poll(() => peer.received('session/cancel').length).toBe(2)
+    // Held, not drained: no third prompt, and nothing saved for it.
+    expect(peer.received('session/prompt')).toHaveLength(2)
+    expect(await userRows(cinna, chatId)).toEqual([PROMPT, FOLLOW_UP])
+    expect(await queueOf(cinna, chatId)).toEqual({ held: false, items: [] })
+    expect(await lastRunStatus(cinna, chatId)).toBe('canceled')
   })
 })
