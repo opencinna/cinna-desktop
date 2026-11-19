@@ -44,6 +44,7 @@ import { CinnaCliBlock } from './CinnaCliBlock'
 import { pairCinnaCliTools } from '../../utils/cinnaCli'
 import { buildToolStepPreview, pairToolSteps, toolStepPreview } from '../../utils/toolStepPairs'
 import { NoticeBlock } from './NoticeBlock'
+import { NoticeWarningAnnouncer } from './NoticeWarningAnnouncer'
 import { SystemTurnBlock } from './SystemTurnBlock'
 import { AskUserQuestionBlock } from './AskUserQuestionBlock'
 import { BuildBriefCard } from './BuildBriefCard'
@@ -1115,11 +1116,14 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
       // small info-toned dot so it doesn't crowd the transcript; in
       // verbose mode it stays inline alongside the rest of the surfaced
       // meta. Excluded from catch-up replay + LLM history rebuilds by role.
+      // A warning notice (its tone kept as a one-part `parts` list) never
+      // collapses; a row without that part — every older row — reads as info.
       if (msg.role === 'agent_transition') {
+        const tone = Array.isArray(msg.parts) && msg.parts.some((part) => part.kind === 'notice' && part.tone === 'warning') ? 'warning' : undefined
         renderNodes.push({
           slot: 'plain',
           key: msg.id,
-          node: <NoticeBlock content={msg.content} defaultExpanded={verboseMode} />
+          node: <NoticeBlock content={msg.content} defaultExpanded={verboseMode} tone={tone} />
         })
         continue
       }
@@ -1568,6 +1572,8 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
         belongs to this transcript only. */}
     {fileRefSources.size > 0 && <FileRefResolver key={chatId} sources={fileRefSources} onChange={setFileRefScopes} />}
     {artifactsSupport.supported && <ArtifactCardsSource key={chatId} chatId={chatId} onChange={setArtifactCards} />}
+    {/* Screen-reader only (absolutely positioned): a live warning notice, read out once. */}
+    <NoticeWarningAnnouncer chatId={chatId} />
     <div
       ref={containerRef}
       onContextMenu={messageContextMenu.onContextMenu}
@@ -1844,7 +1850,7 @@ export function MessageStream({ chatId, bottomPadding, pillBottom, searchable = 
                 renderNodes.push({
                   slot: 'plain',
                   key: `stream-notice-${i}`,
-                  node: <NoticeBlock content={block.content} live />
+                  node: <NoticeBlock content={block.content} live tone={block.tone} stoppable={isStreaming} />
                 })
                 return
               }

@@ -42,7 +42,7 @@ vi.mock('../db/messages', () => ({
       rows.push({ role: 'user', content: i.content, addressedAgentId: i.addressedAgentId })
       return 'user-row'
     },
-    saveTransition: (i: Record<string, unknown>) => void rows.push({ role: 'agent_transition', content: i.content }),
+    saveTransition: (i: Record<string, unknown>) => void rows.push({ role: 'agent_transition', content: i.content, ...(i.tone ? { tone: i.tone } : {}) }),
     touchChat: () => {}
   }
 }))
@@ -126,6 +126,25 @@ describe('a2aStreamingService.streamToAgent', () => {
     savedAssistant.length = 0
     runCompletions.length = 0
     rows.length = 0
+  })
+
+  it('saves a warning notice with its tone and an info notice without one', async () => {
+    // Mutation: drop the `tone` spread in `persistTurn` → the warning row is saved as info.
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1',
+      agentId: 'folder:abc',
+      port: p.port,
+      run: async () => ({
+        text: 'ok',
+        parts: [{ kind: 'text', text: 'ok' }],
+        notices: [{ partKey: 'a', text: 'Starting up' }, { partKey: 'b', text: 'No reply from Antigravity', tone: 'warning' }]
+      })
+    })
+    expect(rows.slice(0, 2)).toEqual([
+      { role: 'agent_transition', content: 'Starting up' },
+      { role: 'agent_transition', content: 'No reply from Antigravity', tone: 'warning' }
+    ])
   })
 
   it('persists a message steered into the turn between the parts streamed before and after it', async () => {

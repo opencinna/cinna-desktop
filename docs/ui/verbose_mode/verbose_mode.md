@@ -42,7 +42,7 @@ A global UI preference that toggles between a **compact** (default) chat view �
 1. The agent emits a `cinna.content_kind: 'notice'` part (e.g. "Starting up the agent environment…") — see [Agent Notices](../../chat/agent_notices/agent_notices.md)
 2. **Live (both modes)**: the streaming notice renders as a left-aligned `Info`+text row so the user can see the in-flight ping
 3. **Compact mode (persisted)**: once the stream completes and the row persists, the notice collapses to a small info-toned blue dot. Click expands to the same `Info`+text row.
-4. **Verbose mode (persisted)**: the persisted notice row stays expanded inline, matching the rest of verbose mode's surfaced meta. Click still toggles back to the collapsed dot.
+4. **Verbose mode (persisted)**: the persisted notice row stays expanded inline, matching the rest of verbose mode's surfaced meta. Click still toggles back to the collapsed dot. A **warning** notice (a provider error, the 90 s no-reply note) is never collapsed, in either mode: it is the same amber row live and saved.
 
 ### Tool narration headers (A2A structured tool input)
 

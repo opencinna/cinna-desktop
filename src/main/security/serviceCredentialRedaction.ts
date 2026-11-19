@@ -88,7 +88,7 @@ export function createCredentialEventStream(): CredentialEventStream {
       }
       if (event.type === 'done' || event.type === 'error') return [...this.finish(), redactCredentialValues(event)]
       if (event.type !== 'delta') return [redactCredentialValues(event)]
-      const key = JSON.stringify([event.kind, event.toolId, event.parentToolId, event.toolStream])
+      const key = JSON.stringify([event.kind, event.toolId, event.parentToolId, event.toolStream, event.tone])
       const before = event.newPart ? drain(key) : []
       let item = streams.get(key)
       if (!item) { item = { stream: createCredentialTextStream(), event }; streams.set(key, item) }

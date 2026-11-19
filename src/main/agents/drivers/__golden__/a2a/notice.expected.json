@@ -9,7 +9,8 @@
     {
       "type": "delta",
       "kind": "notice",
-      "text": "Starting up the agent environment"
+      "text": "Starting up the agent environment",
+      "newPart": true
     },
     {
       "type": "delta",
@@ -19,7 +20,8 @@
     {
       "type": "delta",
       "kind": "notice",
-      "text": "Environment ready."
+      "text": "Environment ready.",
+      "newPart": true
     },
     {
       "type": "delta",

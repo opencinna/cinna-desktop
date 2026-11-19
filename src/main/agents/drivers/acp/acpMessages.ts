@@ -95,6 +95,7 @@ import type { InputQuestion } from '../../../../shared/runEvents'
 import { matchOfferedModel } from '../../../../shared/runtimeModelCatalog'
 import {
   KIND_METADATA_KEY,
+  NOTICE_TONE_METADATA_KEY,
   PARENT_TOOL_ID_METADATA_KEY,
   TOOL_ID_METADATA_KEY,
   TOOL_INPUT_METADATA_KEY,
@@ -447,15 +448,20 @@ export class AcpMessageStream {
   /**
    * The desktop speaking in the transcript, as a notice under the current
    * message — a notice rather than text because it is not the agent talking,
-   * and notices are the channel for that.
+   * and notices are the channel for that. `tone: 'warning'` marks a note the
+   * user must not miss (a provider error, a turn gone silent): the transcript
+   * draws it in the warning colour and never folds it to a dot.
    */
-  note(text: string): AcpStreamUpdate {
+  note(text: string, options: { tone?: 'warning' } = {}): AcpStreamUpdate {
     if (!str(text)) return {}
     this.notes += 1
     return this.writePart(
       this.owner(),
       `note:${this.notes}`,
-      { [KIND_METADATA_KEY]: 'notice' },
+      {
+        [KIND_METADATA_KEY]: 'notice',
+        ...(options.tone === 'warning' ? { [NOTICE_TONE_METADATA_KEY]: 'warning' } : {})
+      },
       text
     )
   }

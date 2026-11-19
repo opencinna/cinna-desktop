@@ -3,6 +3,7 @@ import type {
   ContentKind,
   MessagePart,
   MessagePartFile,
+  NoticeTone,
   ToolStream
 } from '../../../shared/messageParts'
 import type { InputRequest, InputResumeMode, RunEvent } from '../../../shared/runEvents'
@@ -154,6 +155,8 @@ interface TextBlock {
   file?: MessagePartFile
   /** A subagent's block: the Agent call it runs under — see MessagePart. */
   parentToolId?: string
+  /** A notice block's tone, set only for `'warning'` — see MessagePart. */
+  tone?: NoticeTone
 }
 
 /**
@@ -255,7 +258,8 @@ interface ChatStore {
     commandInvocation?: string,
     file?: MessagePartFile,
     parentToolId?: string,
-    newPart?: boolean
+    newPart?: boolean,
+    tone?: NoticeTone
   ) => void
   addToolCall: (tc: {
     id: string
@@ -388,13 +392,14 @@ export const useChatStore = create<ChatStore>((set) => ({
     commandInvocation,
     file,
     parentToolId,
-    newPart
+    newPart,
+    tone
   ) =>
     set((state) => {
       const blocks = [...state.streamingBlocks]
       // A non-text block is `undefined` here, which the rule counts as the
       // main lane: it ends the agent's own run of text, not a subagent's.
-      let index = continuingPartIndex(blocks.map((block) => block.type === 'text' ? block : undefined), { kind, toolName, toolId, toolStream, parentToolId })
+      let index = continuingPartIndex(blocks.map((block) => block.type === 'text' ? block : undefined), { kind, toolName, toolId, toolStream, parentToolId, tone })
       // A user message taken into the turn ends every lane, as the
       // accumulator's `breakContinuation` does: only a tool call named by id
       // may still grow on its far side. Otherwise a subagent's text would run
@@ -425,6 +430,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         if (commandInvocation) next.commandInvocation = commandInvocation
         if (file) next.file = file
         if (parentToolId) next.parentToolId = parentToolId
+        if (kind === 'notice' && tone === 'warning') next.tone = tone
         blocks.push(next)
       }
       return {

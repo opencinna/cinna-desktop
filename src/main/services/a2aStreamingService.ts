@@ -453,7 +453,8 @@ function persistTurn(
     messageRepo.saveTransition({
       chatId,
       content: notice.text,
-      sourceAgentId: agentId
+      sourceAgentId: agentId,
+      ...(notice.tone ? { tone: notice.tone } : {})
     })
     cursor.notices.add(notice.partKey)
   }

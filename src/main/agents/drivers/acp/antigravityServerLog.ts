@@ -192,11 +192,11 @@ export function providerErrorNotice(error: Pick<AntigravityProviderError, 'messa
   const kind = classifyProviderError(error)
   switch (kind.kind) {
     case 'http':
-      return `Gemini answered an error (${kind.code}): ${shown(kind.message)} Antigravity keeps retrying; Stop ends the turn.`
+      return `Gemini answered an error (${kind.code}): ${shown(kind.message)}`
     case 'transport':
-      return `Antigravity cannot reach Gemini (${kind.phrase}). It keeps retrying; Stop ends the turn.`
+      return `Antigravity could not reach Gemini (${kind.phrase}).`
     case 'other':
-      return `Antigravity reports an error from Gemini: ${shown(kind.message)} It keeps retrying; Stop ends the turn.`
+      return `Antigravity reported an error from Gemini: ${shown(kind.message)}`
   }
 }
 

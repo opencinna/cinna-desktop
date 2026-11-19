@@ -8,7 +8,7 @@
  *
  * Pure function, no runtime imports: shared by both Electron processes.
  */
-import type { ContentKind, ToolStream } from './messageParts'
+import type { ContentKind, NoticeTone, ToolStream } from './messageParts'
 
 export interface PartMergeKey {
   kind: ContentKind
@@ -20,11 +20,15 @@ export interface PartMergeKey {
    * call that launched it; the agent's own parts carry none (the main lane).
    */
   parentToolId?: string
+  /** A notice's tone: a warning never joins an info notice, either way round. */
+  tone?: NoticeTone
 }
 
 /**
  * - Different kinds never merge.
  * - `file` never merges: two attachments are two badges.
+ * - Different notice tones never merge: a warning is drawn apart from the info
+ *   notice before it.
  * - `tool_result` merges on `toolId` **and** `toolStream`, so interleaved
  *   stdout/stderr keep their chronology as separate parts.
  * - Everything else merges on `toolName` — and a `tool` part also refuses to
@@ -40,6 +44,8 @@ export function continuesPart(last: PartMergeKey, next: PartMergeKey): boolean {
   if (last.kind !== next.kind || next.kind === 'file') return false
   // Two lanes never merge: a subagent's text is not the agent's own.
   if (last.parentToolId !== next.parentToolId) return false
+  // An info notice and a warning are two notices, each drawn in its own tone.
+  if ((last.tone ?? 'info') !== (next.tone ?? 'info')) return false
   if (next.kind === 'tool_result') {
     return last.toolId === next.toolId && last.toolStream === next.toolStream
   }

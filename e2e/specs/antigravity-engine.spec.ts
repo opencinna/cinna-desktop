@@ -6,6 +6,7 @@ import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { FAKE_MODEL_DENIAL, signInAntigravityHome, writeFakeAntigravity, writeFakeSecurity, writeScriptedAntigravity } from '../fixtures/fakeAntigravity'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
+import { repoRoot } from '../playwright.config'
 
 /**
  * Google Antigravity as a runtime, with no network and no Google account.
@@ -66,8 +67,22 @@ const TERMS = 'Antigravity is Google’s software, with its own terms and teleme
 const CHIP_SETTLE_MS = 450
 const LOGIN_PENDING = /^(Getting Antigravity ready…|Waiting for sign-in in your browser…)$/
 const PROMPT = 'Summarise the notes folder in one line'
-const PROVIDER_NOTE = 'Gemini answered an error (503): The model is currently unreachable. Antigravity keeps retrying; Stop ends the turn.'
+const PROVIDER_NOTE = 'Gemini answered an error (503): The model is currently unreachable.'
+/** Element screenshots of the warning notice, live and saved, for a look by hand. */
+const SHOTS = join(repoRoot, 'e2e', 'test-results', 'antigravity-engine')
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** `--color-severity-warning-text` as the computed `color` an element wearing it reports. */
+async function warningTextColor(cinna: CinnaApp): Promise<string> {
+  return cinna.page.evaluate(() => {
+    const probe = document.createElement('span')
+    probe.style.color = 'var(--color-severity-warning-text)'
+    document.body.appendChild(probe)
+    const color = getComputedStyle(probe).color
+    probe.remove()
+    return color
+  })
+}
 
 test('Antigravity as the Default runtime: selecting installs nothing, Install with downloads off says so, and Log in on a configured server moves nothing', async ({ cinna }) => {
   await cinna.skipOnboarding()
@@ -319,9 +334,19 @@ test.describe('signed in, on Ask for approval', () => {
     await composer.press('Enter')
 
     // The server never answers; the note comes from its own transcript (polled every 5 s).
-    const note = page.getByText(PROVIDER_NOTE, { exact: true })
+    const warning = page.locator('[data-notice-tone="warning"]')
+    const note = warning.getByText(PROVIDER_NOTE, { exact: true })
     await expect(note).toBeVisible({ timeout: 15_000 })
     await expect(note).not.toContainText(PROMPT)
+    // Read out once through the transcript's own live region, not by the row.
+    await expect(page.getByTestId('notice-warning-announcer')).toHaveText(PROVIDER_NOTE)
+    // A warning notice: the warning colour, a triangle, never muted.
+    await expect(warning).toHaveCount(1)
+    // Live only, the row adds how to act on it; the saved text is the note alone.
+    await expect(warning).toHaveText(`${PROVIDER_NOTE} Stop ends the turn.`)
+    await expect(warning).toHaveCSS('color', await warningTextColor(cinna))
+    await expect(warning.locator('svg.lucide-triangle-alert, svg.lucide-alert-triangle')).toHaveCount(1)
+    await warning.screenshot({ path: join(SHOTS, 'notice-warning-live.png'), animations: 'disabled' })
     // Written where the app reads it: the isolated folder's own Antigravity home.
     expect(fake.transcripts()).toEqual([expect.stringMatching(new RegExp(`^${escape(join(agent.path, '.cinna', 'antigravity', 'antigravity-acp', 'brain'))}/ses-silent-`))])
     expect(fake.received('session/update')).toEqual([])
@@ -329,6 +354,7 @@ test.describe('signed in, on Ask for approval', () => {
 
     const stop = page.getByRole('button', { name: 'Stop', exact: true })
     await expect(stop).toBeVisible()
+    const liveBox = await warning.boundingBox()
     await stop.click()
     await expect(stop).toHaveCount(0)
     expect(fake.received('session/cancel')).toHaveLength(1)
@@ -337,12 +363,19 @@ test.describe('signed in, on Ask for approval', () => {
     const [chat] = await page.evaluate(() => window.api.chat.list())
     expect((await page.evaluate((id) => window.api.chat.get(id), chat.id))?.messages.map(({ role, content }) => ({ role, content })))
       .toEqual([{ role: 'user', content: PROMPT }, { role: 'agent_transition', content: PROVIDER_NOTE }])
-    // Once persisted, a notice collapses to its dot (compact mode); opening it reads the same sentence.
-    const dot = page.getByRole('button', { name: 'Show agent notice', exact: true })
-    await expect(dot).toHaveCount(1)
-    await expect(dot).toHaveAttribute('title', PROVIDER_NOTE)
-    await dot.click()
-    await expect(page.getByRole('button', { name: 'Hide agent notice', exact: true })).toHaveText(PROVIDER_NOTE)
+    // Persisted, a warning notice keeps its tone and stays expanded even in compact mode:
+    // no dot to open, nothing to click.
+    expect((await page.evaluate((id) => window.api.chat.get(id), chat.id))?.messages[1].parts)
+      .toEqual([{ kind: 'notice', text: PROVIDER_NOTE, tone: 'warning' }])
+    await expect(page.getByRole('button', { name: 'Show agent notice', exact: true })).toHaveCount(0)
+    await expect(warning).toHaveCount(1)
+    await expect(warning).toHaveText(PROVIDER_NOTE)
+    await expect(warning).toHaveCSS('color', await warningTextColor(cinna))
+    // The saved row takes the live one's place: it does not move up or down.
+    const savedBox = await warning.boundingBox()
+    expect(Math.abs(savedBox!.y - liveBox!.y)).toBeLessThanOrEqual(1)
+    expect(Math.abs(savedBox!.x - liveBox!.x)).toBeLessThanOrEqual(1)
+    await warning.screenshot({ path: join(SHOTS, 'notice-warning-saved.png'), animations: 'disabled' })
     await expect(page.getByText(FAKE_MODEL_DENIAL)).toHaveCount(0)
     // The generic notice is due only after 90 s of silence, which this test never waits for:
     // it is absent here because the turn ended first, not proven suppressed by the provider error.

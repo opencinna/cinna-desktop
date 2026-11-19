@@ -44,6 +44,14 @@ export type ContentKind =
 export type ToolStream = 'stdout' | 'stderr'
 
 /**
+ * How a `notice` reads: `info` (the default, and every row written before the
+ * tone existed) or `warning` — a provider error or a turn that has gone
+ * silent, which the transcript shows in the warning colour and never folds
+ * away. Carried on `metadata['cinna.notice_tone']`; set only for `warning`.
+ */
+export type NoticeTone = 'info' | 'warning'
+
+/**
  * Agent-attached file metadata carried on a `file`-kind {@link MessagePart}.
  * Sourced from the `cinna.file_*` metadata on an A2A `FilePart`. `fileId` is
  * the Cinna backend file UUID — the renderer builds a `cinna`-sourced
@@ -93,4 +101,10 @@ export interface MessagePart {
    * before it existed. The renderer nests these under that call.
    */
   parentToolId?: string
+  /**
+   * Only on `'notice'` parts, and only when it is `'warning'` (absent = info).
+   * A persisted `agent_transition` row carries it as a one-part `parts` list
+   * (`[{ kind: 'notice', text, tone: 'warning' }]`); see `messageRepo.saveTransition`.
+   */
+  tone?: NoticeTone
 }

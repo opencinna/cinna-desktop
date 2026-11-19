@@ -79,6 +79,13 @@ describe('continuingPartIndex lanes', () => {
     expect(continuesPart({ kind: 'text' }, { kind: 'text', parentToolId: 'a' })).toBe(false)
   })
 
+  it('never merges an info notice with a warning, either way round', () => {
+    expect(continuesPart({ kind: 'notice' }, { kind: 'notice', tone: 'warning' })).toBe(false)
+    expect(continuesPart({ kind: 'notice', tone: 'warning' }, { kind: 'notice' })).toBe(false)
+    expect(continuesPart({ kind: 'notice', tone: 'warning' }, { kind: 'notice', tone: 'warning' })).toBe(true)
+    expect(continuesPart({ kind: 'notice' }, { kind: 'notice', tone: 'info' })).toBe(true)
+  })
+
   it('is the plain last-part rule when no lane is set', () => {
     const parts: PartMergeKey[] = [{ kind: 'text' }, { kind: 'tool', toolName: 'Bash' }]
     expect(continuingPartIndex(parts, { kind: 'text' })).toBe(-1)

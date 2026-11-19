@@ -10,6 +10,7 @@ Renders agent-side system messages — startup pings, environment transitions, a
 - **`agent_transition` row** — A `messages.role` value reserved for agent-emitted system notices. Excluded by role from the LLM history rebuild.
 - **Streaming notice block** — The live counterpart of an `agent_transition` row. While a stream is in flight, notice deltas flow into `chat.store.streamingBlocks` as `text`-type blocks with `kind: 'notice'` and render as the expanded muted system-message pill. Once the stream completes and the chat re-fetches, the streaming block is cleared and the persisted `agent_transition` row takes its place — rendered by `NoticeBlock` as a collapsed accent-coloured dot (expand on click).
 - **Collapsed dot** — The persisted-notice visual: a single small accent-coloured dot centred in the transcript. Clicking it expands to the original notice text in a muted system-message pill (same look as the live streaming view). The dot exists so the notice survives reload for inspection without permanently consuming vertical space, since after the in-flight ping has served its purpose the user mostly wants their answer to be the visible content.
+- **Notice tone** — `info` (the default) or `warning`, from `metadata['cinna.notice_tone'] = 'warning'` on the part. Any notice part carrying `cinna.notice_tone: 'warning'` is drawn as a warning, whatever sent it — an A2A agent may set it too; the key is not stripped for non-ACP sources (it only changes colour and collapse, never routing). The desktop sets it on the ACP driver's provider-error notes ("Gemini answered an error (503): …") and the 90 s "No reply from <engine> …" note, host and vault turns alike. A warning reads in `--color-severity-warning-text` with an `AlertTriangle` in `--color-warning` (as `ComposerWarning`), live and persisted, and **never collapses to the dot** — compact mode included. Its saved text says only what happened; the live row alone appends " Stop ends the turn." (`LIVE_WARNING_HINT`), since there is nothing to stop once the turn is over.
 - **Notice persistence ordering** — Each unique `(messageId | artifactId, partIndex)` produces one persisted notice row. Notices are saved before the assistant message they preceded on the wire, so transcript order matches stream order.
 
 ## User Stories / Flows
@@ -34,7 +35,7 @@ Renders agent-side system messages — startup pings, environment transitions, a
 ### Persistence
 
 - Each distinct notice part becomes one `agent_transition` row. Two notice parts in the same stream produce two rows, in the order they were first seen.
-- Notice rows carry `source_agent_id` (the agent that emitted them) so the transcript can attribute them if needed; they do not carry `parts[]`.
+- Notice rows carry `source_agent_id` (the agent that emitted them) so the transcript can attribute them if needed. An info notice carries no `parts`; a warning keeps its tone in the existing `parts` column as one part, `[{ kind: 'notice', text, tone: 'warning' }]` (no migration). A row without that part — every row written before the tone — reads as info. The same row goes into a vault chat's transcript journal unchanged, so the tone survives a vault lock and unlock.
 - Notices are persisted **before** the assistant message of the same turn so `sort_order` matches wire chronology.
 
 ### Exclusion from model inputs
@@ -48,11 +49,12 @@ Renders agent-side system messages — startup pings, environment transitions, a
 - **Persisted (compact mode):** `<NoticeBlock content={…} defaultExpanded={false} />` — collapses to a small info-toned dot (`--color-severity-info` at 70% opacity, brightens on hover — blue in both light and dark themes). Hovering the dot exposes a 120-char preview via the native `title` attribute; clicking expands to the same `Info`+text row the live view used; clicking again collapses back.
 - **Persisted (verbose mode):** `<NoticeBlock content={…} defaultExpanded={true} />` — stays expanded inline, matching the rest of verbose mode's surfaced meta. Clicking still toggles back to the collapsed dot.
 - The swap from live row to persisted view happens when the chat detail query invalidates after stream `done` — `clearStreamingBlocks()` removes the live block on the next frame, and the now-saved `agent_transition` row renders via `NoticeBlock` with `defaultExpanded={verboseMode}`. The shared expanded styling means the verbose-mode swap is seamless; in compact mode the row collapses to a dot.
+- **Warning tone** (`tone="warning"`): one non-interactive row, the same live and persisted, in compact and verbose mode alike — `AlertTriangle` + text in `--color-severity-warning-text` (not muted), `data-notice-tone="warning"`, no role (the transcript's one visually hidden `role="status"` region, `NoticeWarningAnnouncer`, present and empty from the start, reads each distinct live warning out once per chat and turn — never again on a re-render or remount). Its left inset is `pl-1`, so the triangle starts where an info dot does. No Show/Hide toggle and no dot, so a provider error or a silent turn stays readable after the turn ends. Two notices never merge live: the accumulator opens each notice part with `newPart: true`, so two in a row are two live blocks (and two rows), and `continuesPart` also splits on tone.
 - Notices do not participate in the `CollapsibleGroup` run-merging used for `tool` / `tool_result` parts; each notice owns its own dot so the user can disambiguate individual notices when there are multiple in a turn.
 
 ### Verbose mode
 
-- Verbose mode keeps the persisted notice row expanded inline (`defaultExpanded={true}` to `NoticeBlock`). Compact mode collapses it to a dot. Either way the live (streaming) view stays expanded.
+- Verbose mode keeps the persisted notice row expanded inline (`defaultExpanded={true}` to `NoticeBlock`). Compact mode collapses an info notice to a dot; a warning notice stays expanded in both. Either way the live (streaming) view stays expanded.
 - Notice rows do not carry a `MessageMetaFooter` (no timestamp / kind label) because they are not authored content.
 
 ### Legacy compatibility

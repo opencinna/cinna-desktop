@@ -5,7 +5,7 @@ import { getDb } from './client'
 import { messages, chats } from './schema'
 import { vaultReadRoute, vaultTurnRoute, vaultWriteRoute } from './chats'
 import { vaultTranscripts, type ChatTranscript } from '../vault/transcriptStore'
-import type { MessagePart } from '../../shared/messageParts'
+import type { MessagePart, NoticeTone } from '../../shared/messageParts'
 import type { MessageAttachment } from '../../shared/attachments'
 import type { MessageTelemetry } from '../../shared/sessionTelemetry'
 
@@ -71,6 +71,12 @@ export interface SaveTransitionMessage {
   content: string
   /** The agent that emitted the transition. */
   sourceAgentId?: string | null
+  /**
+   * `'warning'` keeps the notice's tone on the row, as a one-part `parts` list
+   * (`[{ kind: 'notice', text, tone: 'warning' }]`); an info notice (and every
+   * row from before the tone) has no parts and reads as info.
+   */
+  tone?: NoticeTone
 }
 
 export interface InsertRawMessage {
@@ -242,7 +248,8 @@ const rawMessageRepo = {
       chatId: msg.chatId,
       role: 'agent_transition',
       content: msg.content,
-      sourceAgentId: msg.sourceAgentId ?? null
+      sourceAgentId: msg.sourceAgentId ?? null,
+      parts: msg.tone === 'warning' ? [{ kind: 'notice', text: msg.content, tone: 'warning' }] : null
     })
     return id
   },

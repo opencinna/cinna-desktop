@@ -87,6 +87,8 @@ export const TOOL_INPUT_METADATA_KEY = 'cinna.tool_input'
 export const TOOL_ID_METADATA_KEY = 'cinna.tool_id'
 export const TOOL_STREAM_METADATA_KEY = 'cinna.tool_stream'
 export const COMMAND_INVOCATION_METADATA_KEY = 'cinna.command_invocation'
+/** A notice's tone (`MessagePart.tone`): `'warning'`, or absent for info. */
+export const NOTICE_TONE_METADATA_KEY = 'cinna.notice_tone'
 /**
  * The Agent tool call a part runs under — set on a subagent's parts (ACP
  * child-session frames) so they form a lane of their own. See `partMerge.ts`.
@@ -143,6 +145,11 @@ export function partKindOf(part: PartLike): ContentKind {
     return k as ContentKind
   }
   return 'text'
+}
+
+/** `'warning'` when the part says so; anything else (absent, unknown) reads as info. */
+export function partNoticeToneOf(part: PartLike): 'warning' | undefined {
+  return part.metadata?.[NOTICE_TONE_METADATA_KEY] === 'warning' ? 'warning' : undefined
 }
 
 export function partToolNameOf(part: PartLike): string | undefined {
@@ -247,6 +254,8 @@ export interface AccumulatedNotice {
   partKey: string
   /** Final accumulated text for the notice. */
   text: string
+  /** Set only for a warning notice (see `MessagePart.tone`). */
+  tone?: 'warning'
 }
 
 export class StreamPartsAccumulator {
@@ -275,7 +284,7 @@ export class StreamPartsAccumulator {
    * `snapshotNotices()` returns — callers persist notices in that order to
    * keep transcript chronology stable.
    */
-  private notices = new Map<string, string>()
+  private notices = new Map<string, { text: string; tone?: 'warning' }>()
   private readonly opts: StreamPartsAccumulatorOptions
 
   constructor(opts: StreamPartsAccumulatorOptions = {}) {
@@ -324,8 +333,14 @@ export class StreamPartsAccumulator {
       // row after the stream completes. Live deltas still post to the port
       // so the renderer can show a streaming system block during startup.
       if (kind === 'notice') {
-        this.notices.set(key, (this.notices.get(key) ?? '') + delta)
-        port.postMessage({ type: 'delta', kind, text: delta })
+        // The tone is the part's own; a later fragment of the same part keeps it.
+        const earlier = this.notices.get(key)
+        const tone = earlier ? earlier.tone : partNoticeToneOf(part)
+        this.notices.set(key, { text: (earlier?.text ?? '') + delta, ...(tone ? { tone } : {}) })
+        // Each notice part is its own row once saved, so its first fragment
+        // opens a live block of its own too: without `newPart` the renderer's
+        // and the live cache's merge rule would join two notices in a row.
+        port.postMessage({ type: 'delta', kind, text: delta, ...(tone ? { tone } : {}), ...(earlier ? {} : { newPart: true as const }) })
         return
       }
 
@@ -414,8 +429,8 @@ export class StreamPartsAccumulator {
   private replayMatch(part: PartLike, kind: ContentKind, matched: Set<MessagePart | string>): boolean {
     const text = part.text ?? ''
     if (kind === 'notice') {
-      for (const [noticeKey, noticeText] of this.notices) {
-        if (matched.has(noticeKey) || noticeText !== text) continue
+      for (const [noticeKey, notice] of this.notices) {
+        if (matched.has(noticeKey) || notice.text !== text) continue
         matched.add(noticeKey)
         return true
       }
@@ -594,8 +609,8 @@ export class StreamPartsAccumulator {
    */
   snapshotNotices(): AccumulatedNotice[] {
     const out: AccumulatedNotice[] = []
-    for (const [partKey, text] of this.notices) {
-      if (text) out.push({ partKey, text: redactCredentialText(text) })
+    for (const [partKey, { text, tone }] of this.notices) {
+      if (text) out.push({ partKey, text: redactCredentialText(text), ...(tone ? { tone } : {}) })
     }
     return out
   }

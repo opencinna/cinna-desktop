@@ -1416,7 +1416,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       if (!turn.open || input.signal.aborted || providerErrorShown) return
       const engine = silentTurnEngineName(ctx.launcherId, plan.spec.vault?.engine, runtime.type === 'external' ? runtime.name : agent.name)
       logger.warn('an ACP agent has sent nothing since its prompt', { agentId: agent.id, chatId, sessionId, launcher: ctx.launcherId, afterMs: silentMs })
-      emit(stream.note(silentTurnNotice(engine, silentMs)).message)
+      emit(stream.note(silentTurnNotice(engine, silentMs), { tone: 'warning' }).message)
     }
   })
   // Over the same silence, a host Antigravity turn reads the server's own
@@ -1437,7 +1437,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           logger.info('surfaced a provider error from Antigravity’s transcript', { agentId: agent.id, chatId, sessionId, kind: classifyProviderError(error).kind, code: error.code ?? null })
           // The raw string (a transport chain names the endpoint, never a key) only at debug.
           logger.debug('the provider error as Antigravity logged it', { sessionId, error: error.message })
-          emit(stream.note(providerErrorNotice(error)).message)
+          emit(stream.note(providerErrorNotice(error), { tone: 'warning' }).message)
         },
         onRepeat: (error) => logger.debug('Antigravity logged the same provider error again', { sessionId, step: error.stepIndex, code: error.code ?? null })
       })

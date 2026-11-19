@@ -257,7 +257,7 @@ MessageStream
   ├── ToolResultBlock              -> collapsible card (terminal/alert icon; monospace body; danger colouring when cinna.tool_stream is "stderr")
   ├── CommandResultBlock           -> bordered "Command output" card (terminal icon; markdown body; default-expanded)
   ├── ApplyPatchBlock              -> git-style diff for the apply_patch tool (FileDiffCard per file; see Apply-Patch Diff)
-  ├── NoticeBlock                  -> persisted agent-transition row; collapsed accent dot, expand-on-click
+  ├── NoticeBlock                  -> persisted agent-transition row; info: collapsed accent dot, expand-on-click; warning: always expanded amber row
   ├── ToolCallBlock                -> borderless badge line (Plug=MCP / Wrench=local) + bordered detail card below on expand
   ├── AgentToolSubThread           -> nested sub-thread: an orchestrated specialist's tool call, or a subagent's lane under its Agent/Task call (subagentParts.ts); a specialist's own subagents nest inside it
   ├── SystemMessage                -> centered error box (inline in MessageStream)

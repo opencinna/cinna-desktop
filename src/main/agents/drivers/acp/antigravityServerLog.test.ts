@@ -135,7 +135,7 @@ describe('providerErrorNotice', () => {
     expect(BLACKHOLE.length).toBe(368)
     expect(classifyProviderError({ message: BLACKHOLE, code: 2 })).toEqual({ kind: 'transport', phrase: 'connection timed out' })
     const note = providerErrorNotice({ message: BLACKHOLE, code: 2 })
-    expect(note).toBe('Antigravity cannot reach Gemini (connection timed out). It keeps retrying; Stop ends the turn.')
+    expect(note).toBe('Antigravity could not reach Gemini (connection timed out).')
     expect(note).not.toMatch(/googleapis|10\.255|\(2\)/)
   })
 
@@ -147,19 +147,19 @@ describe('providerErrorNotice', () => {
     ['remote error: TLS handshake failure in dial tcp', 'TLS handshake failed'],
     ['doRequest: error sending request: EOF', 'network error']
   ])('names %s as %s', (message, phrase) => {
-    expect(providerErrorNotice({ message })).toBe(`Antigravity cannot reach Gemini (${phrase}). It keeps retrying; Stop ends the turn.`)
+    expect(providerErrorNotice({ message })).toBe(`Antigravity could not reach Gemini (${phrase}).`)
   })
 
   it('names an HTTP status', () => {
     expect(providerErrorNotice({ message: 'The model is currently unreachable.', code: 503 }))
-      .toBe('Gemini answered an error (503): The model is currently unreachable. Antigravity keeps retrying; Stop ends the turn.')
+      .toBe('Gemini answered an error (503): The model is currently unreachable.')
   })
 
   it('says anything else once, capped, with no code that is not an HTTP status', () => {
     expect(providerErrorNotice({ message: 'Quota exhausted: Quota exhausted', code: 2 }))
-      .toBe('Antigravity reports an error from Gemini: Quota exhausted. It keeps retrying; Stop ends the turn.')
+      .toBe('Antigravity reported an error from Gemini: Quota exhausted.')
     expect(providerErrorNotice({ message: 'Something odd.' }))
-      .toBe('Antigravity reports an error from Gemini: Something odd. It keeps retrying; Stop ends the turn.')
+      .toBe('Antigravity reported an error from Gemini: Something odd.')
     const long = providerErrorNotice({ message: 'z'.repeat(500) })
     expect(long.length).toBeLessThan(300)
     expect(long).toContain('…')

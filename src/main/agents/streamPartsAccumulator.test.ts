@@ -101,6 +101,33 @@ describe('replay', () => {
     accumulator.ingestMessage({ messageId: 'b', parts: [notice] }, port, { replay: true })
     expect(accumulator.snapshotNotices().map((n) => n.text)).toEqual(['Starting up'])
   })
+
+  it('opens each notice part with `newPart`, so two notices in a row stay two live blocks and two rows', () => {
+    // Mutation: drop the `newPart` spread on notice deltas → the renderer joins them into one block.
+    const { accumulator, events, port } = setup()
+    const warn = (text: string) => ({ kind: 'text', text, metadata: { 'cinna.content_kind': 'notice', 'cinna.notice_tone': 'warning' } })
+    const info = (text: string) => ({ kind: 'text', text, metadata: { 'cinna.content_kind': 'notice' } })
+    accumulator.ingestMessage({ messageId: 'a', parts: [warn('First.'), warn('Second.'), info('Third.'), info('Fourth.')] }, port)
+    expect(events.map((event) => (event as { newPart?: boolean }).newPart)).toEqual([true, true, true, true])
+    expect(accumulator.snapshotNotices().map((n) => n.text)).toEqual(['First.', 'Second.', 'Third.', 'Fourth.'])
+  })
+
+  it('keeps a warning notice’s tone on its delta and through the snapshot; info stays bare', () => {
+    const { accumulator, events, port } = setup()
+    const info = { kind: 'text', text: 'Starting up', metadata: { 'cinna.content_kind': 'notice' } }
+    const warn = (text: string) => ({ kind: 'text', text, metadata: { 'cinna.content_kind': 'notice', 'cinna.notice_tone': 'warning' } })
+    accumulator.ingestMessage({ messageId: 'a', parts: [info, warn('No reply')] }, port)
+    accumulator.ingestMessage({ messageId: 'a', parts: [info, warn('No reply from Gemini')] }, port)
+    expect(events).toEqual([
+      { type: 'delta', kind: 'notice', text: 'Starting up', newPart: true },
+      { type: 'delta', kind: 'notice', text: 'No reply', tone: 'warning', newPart: true },
+      { type: 'delta', kind: 'notice', text: ' from Gemini', tone: 'warning' }
+    ])
+    expect(accumulator.snapshotNotices()).toEqual([
+      { partKey: 'msg:a:0', text: 'Starting up' },
+      { partKey: 'msg:a:1', text: 'No reply from Gemini', tone: 'warning' }
+    ])
+  })
 })
 
 describe('subagent lanes', () => {

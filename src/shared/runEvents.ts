@@ -12,7 +12,7 @@
  * Pure type-only module plus the guard: imported from both Electron processes
  * and the renderer; no runtime dependencies.
  */
-import type { ContentKind, MessagePartFile, ToolStream } from './messageParts'
+import type { ContentKind, MessagePartFile, NoticeTone, ToolStream } from './messageParts'
 import type { RequestResolution } from './localAgentRequests'
 
 /**
@@ -111,6 +111,8 @@ export interface RunDeltaEvent {
   file?: MessagePartFile
   /** A subagent's fragment: the Agent tool call it runs under (see `MessagePart.parentToolId`). */
   parentToolId?: string
+  /** A `notice` fragment's tone, set only for `'warning'` (see `MessagePart.tone`). */
+  tone?: NoticeTone
   /**
    * Start a new part with this fragment even where "continue the last part of
    * the same lane" would join it to an earlier one: the main process saw it

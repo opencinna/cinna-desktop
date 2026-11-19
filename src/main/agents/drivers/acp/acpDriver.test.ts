@@ -5196,6 +5196,9 @@ describe('a prompted turn whose engine sends nothing at all', () => {
     expect(result.text).toContain('Finally here.')
     expect(noted(w)).toBe(1)
     expect(inNotices(result.notices)).toBe(1)
+    // Mutation: drop `{ tone: 'warning' }` from the silent note → info, live and saved.
+    expect(w.events.find((event) => event.type === 'delta' && event.kind === 'notice' && event.text === NOTE)).toMatchObject({ tone: 'warning' })
+    expect(result.notices.find((notice) => notice.text === NOTE)).toMatchObject({ tone: 'warning' })
     expect(w.fake.received('session/cancel')).toHaveLength(0)
     expect(w.fake.received('session/prompt')).toHaveLength(1)
   })
@@ -5334,9 +5337,12 @@ describe('a silent host Antigravity turn whose server logged a provider error', 
     const result = await w.run()
     expect(result.error).toBeUndefined()
     expect(result.text).toContain('Finally here.')
-    expect(NOTE).toBe('Gemini answered an error (503): The model is currently unreachable. Antigravity keeps retrying; Stop ends the turn.')
+    expect(NOTE).toBe('Gemini answered an error (503): The model is currently unreachable.')
     expect(noted(w, NOTE)).toBe(1)
     expect(JSON.stringify(result.notices)).toContain(NOTE)
+    // Mutation: drop `{ tone: 'warning' }` from the provider-error note → info, live and saved.
+    expect(w.events.find((event) => event.type === 'delta' && event.kind === 'notice' && event.text === NOTE)).toMatchObject({ tone: 'warning' })
+    expect(result.notices.find((notice) => notice.text === NOTE)).toMatchObject({ tone: 'warning' })
     // Mutation: drop the `providerErrorShown` guard in `onSilent` → the generic notice comes too.
     expect(noted(w, GENERIC)).toBe(0)
     expect(w.fake.received('session/cancel')).toHaveLength(0)

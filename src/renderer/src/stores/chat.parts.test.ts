@@ -113,3 +113,30 @@ it('replaces a live sub-thread tool part’s input with the same call’s later 
   const subParts = block?.type === 'tool_call' ? block.subParts ?? [] : []
   expect(subParts).toEqual([expect.objectContaining({ text: 'Skill', toolId: 's1', toolInput: { skill: 'x' } })])
 })
+
+it('keeps a warning notice’s tone on its live block, apart from the info notice before it', () => {
+  // Mutation: drop `next.tone = tone` in `appendDelta` → the warning block draws as info.
+  useChatStore.getState().startStreaming('request')
+  const append = useChatStore.getState().appendDelta
+  append('Starting up.', 'notice')
+  append('No reply', 'notice', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'warning')
+  append(' yet.', 'notice', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'warning')
+  const blocks = useChatStore.getState().streamingBlocks
+  expect(blocks).toHaveLength(2)
+  expect(blocks[0]).toMatchObject({ kind: 'notice', content: 'Starting up.' })
+  expect(blocks[0]).not.toHaveProperty('tone')
+  expect(blocks[1]).toMatchObject({ kind: 'notice', content: 'No reply yet.', tone: 'warning' })
+})
+
+it('keeps two notices in a row as two live blocks when main opens each with `newPart`', () => {
+  // The accumulator's notice deltas; without `newPart` the merge rule would join them.
+  useChatStore.getState().startStreaming('request')
+  const append = useChatStore.getState().appendDelta
+  const u = undefined
+  append('First warning.', 'notice', u, u, u, u, u, u, u, true, 'warning')
+  append('Second warning.', 'notice', u, u, u, u, u, u, u, true, 'warning')
+  append('Info one.', 'notice', u, u, u, u, u, u, u, true)
+  append('Info two.', 'notice', u, u, u, u, u, u, u, true)
+  const blocks = useChatStore.getState().streamingBlocks
+  expect(blocks.map((b) => (b.type === 'text' ? b.content : ''))).toEqual(['First warning.', 'Second warning.', 'Info one.', 'Info two.'])
+})

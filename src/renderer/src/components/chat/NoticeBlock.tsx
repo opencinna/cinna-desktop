@@ -1,5 +1,9 @@
-import { Info } from 'lucide-react'
+import { AlertTriangle, Info } from 'lucide-react'
+import type { NoticeTone } from '../../../../shared/messageParts'
 import { useTranscriptDisclosure } from './transcriptExpansion'
+
+/** Added to a live warning only: once the turn is over there is nothing to stop. */
+export const LIVE_WARNING_HINT = 'Stop ends the turn.'
 
 interface NoticeBlockProps {
   /** The notice text emitted by the agent (e.g. "Starting up the agent environment…"). */
@@ -17,6 +21,18 @@ interface NoticeBlockProps {
    * it) so notices collapse to a dot the user can click to read.
    */
   defaultExpanded?: boolean
+  /**
+   * `'warning'` (a provider error, a turn gone silent): drawn in the warning
+   * colour with a triangle, live and persisted alike, and never collapsed —
+   * there is no toggle, so `defaultExpanded` does not apply. Default `'info'`.
+   */
+  tone?: NoticeTone
+  /**
+   * A live warning's " Stop ends the turn." — true only while the turn still
+   * runs (the streamed blocks outlive the turn until its saved rows land).
+   * Defaults to `live`.
+   */
+  stoppable?: boolean
 }
 
 /**
@@ -30,9 +46,34 @@ interface NoticeBlockProps {
  *
  * The live view and the expanded persisted view share the same styling so the
  * swap from streaming to persisted has no visual seam.
+ *
+ * A `tone="warning"` notice is one row, the same live and persisted: the
+ * warning colour, a triangle, readable text, and no collapse in either mode.
  */
-export function NoticeBlock({ content, live, defaultExpanded }: NoticeBlockProps): React.JSX.Element {
+export function NoticeBlock({ content, live, defaultExpanded, tone, stoppable = live }: NoticeBlockProps): React.JSX.Element {
   const [expanded, setExpanded] = useTranscriptDisclosure(defaultExpanded ?? false)
+
+  if (tone === 'warning') {
+    // The saved text says what happened; how to act on it is only true while
+    // the turn runs, so the live row alone adds it. No role here: the
+    // transcript's one live region reads a new warning out
+    // (`NoticeWarningAnnouncer`), and a saved one is history.
+    return (
+      <div
+        data-notice-tone="warning"
+        // `pl-1`: the triangle starts where an info notice's dot does (its
+        // button's `p-1`), so a warning between two dots lines up with them.
+        className="inline-flex items-start gap-1.5 pl-1 pr-2 py-1 rounded-md
+          text-xs text-[var(--color-severity-warning-text)] max-w-full"
+      >
+        <AlertTriangle size={12} className="shrink-0 mt-0.5 text-[var(--color-warning)]" aria-hidden="true" />
+        <span className="min-w-0 [overflow-wrap:anywhere]">
+          <span data-notice-text>{content}</span>
+          {live && stoppable && <span data-notice-live-hint>{` ${LIVE_WARNING_HINT}`}</span>}
+        </span>
+      </div>
+    )
+  }
 
   if (live) {
     return (

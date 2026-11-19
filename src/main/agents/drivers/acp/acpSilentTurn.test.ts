@@ -58,7 +58,7 @@ describe('the silent turn watch', () => {
 describe('the silent turn notice', () => {
   it('names the engine and the span from the constant', () => {
     expect(silentTurnNotice('Antigravity')).toBe(
-      'No reply from Antigravity after 90 seconds. It may not be reaching its provider; Stop ends the turn.'
+      'No reply from Antigravity after 90 seconds. It may not be reaching its provider.'
     )
     expect(silentTurnNotice('Codex', 120_000)).toContain('after 2 minutes.')
   })

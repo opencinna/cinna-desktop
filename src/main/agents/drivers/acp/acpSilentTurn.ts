@@ -51,7 +51,7 @@ function span(ms: number): string {
 
 /** The transcript's notice, naming the engine (see {@link silentTurnEngineName}). */
 export function silentTurnNotice(engine: string, ms = ACP_SILENT_TURN_NOTICE_MS): string {
-  return `No reply from ${engine} after ${span(ms)}. It may not be reaching its provider; Stop ends the turn.`
+  return `No reply from ${engine} after ${span(ms)}. It may not be reaching its provider.`
 }
 
 /**

@@ -723,6 +723,17 @@ describe('robustness', () => {
     ])
     expect(stream.note('')).toEqual({})
   })
+
+  it('marks a warning note with cinna.notice_tone and leaves an info note unmarked', () => {
+    const stream = new AcpMessageStream()
+    stream.note('Starting up.')
+    const last = stream.note('No reply yet.', { tone: 'warning' })
+    const notices = (last.message?.parts ?? []).filter((p) => kindOf(p) === 'notice')
+    expect(notices.map((p) => p.metadata)).toEqual([
+      { 'cinna.content_kind': 'notice' },
+      { 'cinna.content_kind': 'notice', 'cinna.notice_tone': 'warning' }
+    ])
+  })
 })
 
 describe('which Cinna tool a call is for (cinnaTool)', () => {
