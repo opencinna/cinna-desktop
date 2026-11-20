@@ -6,7 +6,7 @@ const { tmpdir } = require('node:os')
 const { createHash } = require('node:crypto')
 const {
   patchCodexAcp, verifyCodexAcpPatch, original: mcpOriginal, replacement: mcpReplacement, instructions, instructionAnchors, airClientAnchor, airClientOff, commandEndAnchor, commandEndWhole,
-  childrenAnchor, interruptChildren, cancelAnchor, cancelChildren
+  childrenAnchor, interruptChildren, cancelAnchor, cancelChildren, networkTurnAnchor, networkTurn, networkPolicyAnchor, networkPolicy
 } = require('./patch-codex-acp.cjs')
 const policy = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 
@@ -22,6 +22,7 @@ function fixture(t) {
   const installed = readFileSync(join(__dirname, '../node_modules/@agentclientprotocol/codex-acp/dist/index.js'), 'utf8')
   const original = installed.replaceAll(instructions, '').replace(mcpReplacement, () => mcpOriginal).replace(airClientOff, () => airClientAnchor)
     .replace(commandEndWhole, () => commandEndAnchor).replace(interruptChildren, () => '').replace(cancelChildren, () => cancelAnchor)
+    .replace(networkTurn, () => networkTurnAnchor).replace(networkPolicy, () => '')
   assert.equal(createHash('sha256').update(original).digest('hex'), policy.originalSha256)
   writeFileSync(path, original)
   return { root, path, manifest, original }
@@ -95,6 +96,43 @@ test('the completing update of every command carries its whole output', (t) => {
   for (const terminal of [true, false]) {
     assert.deepEqual(method.commandEndRawOutput({ terminal, exitCode: 0, output: 'head\ntail\n', streamed: true }), { exit_code: 0, formatted_output: 'head\ntail\n' })
   }
+})
+
+/*
+ * Every turn sends the mode's own sandboxPolicy, whose workspace-write says
+ * networkAccess: false whatever CODEX_CONFIG holds. The patched turn keeps the
+ * network that CODEX_CONFIG's sandbox_workspace_write.network_access grants,
+ * on a workspaceWrite policy only, and leaves every other policy as it is.
+ */
+test('a workspace-write turn keeps the network CODEX_CONFIG grants, and only then', (t) => {
+  const f = fixture(t)
+  patchCodexAcp(f.root)
+  const applied = readFileSync(f.path, 'utf8')
+  assert.equal(applied.split(networkTurn).length, 2)
+  // The one place a turn's sandbox policy is sent.
+  assert.equal(applied.match(/sandboxPolicy: /g).length, 1)
+  const network = new Function('process', `${networkPolicy}; return cinnaSandboxNetwork`)
+  const workspace = { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
+  const withConfig = (config) => network({ env: config === undefined ? {} : { CODEX_CONFIG: config } })
+  assert.deepEqual(withConfig(JSON.stringify({ sandbox_workspace_write: { network_access: true } }))(workspace), { ...workspace, networkAccess: true })
+  for (const config of [undefined, '{}', JSON.stringify({ sandbox_workspace_write: { network_access: false } }),
+    JSON.stringify({ sandbox_workspace_write: { network_access: 'true' } }), 'not json']) {
+    assert.equal(withConfig(config)(workspace), workspace, String(config))
+  }
+  const readOnly = { type: 'readOnly', networkAccess: false }
+  assert.equal(withConfig(JSON.stringify({ sandbox_workspace_write: { network_access: true } }))(readOnly), readOnly)
+})
+
+test('a checkout carrying the five-edit 2.5.0 patch is upgraded to the reviewed six', (t) => {
+  const f = fixture(t)
+  let previous = f.original.replace(mcpOriginal, () => mcpReplacement)
+  for (const [anchor] of instructionAnchors) previous = previous.replaceAll(anchor, () => anchor + instructions)
+  previous = previous.replace(airClientAnchor, () => airClientOff).replace(commandEndAnchor, () => commandEndWhole)
+    .replace(childrenAnchor, () => interruptChildren + childrenAnchor).replace(cancelAnchor, () => cancelChildren)
+  assert.equal(createHash('sha256').update(previous).digest('hex'), 'f1dc49e2a08c26832c29df4f2fb949715a985c198383f9cfaa1fde76eac8a7da')
+  writeFileSync(f.path, previous)
+  patchCodexAcp(f.root)
+  assert.equal(createHash('sha256').update(readFileSync(f.path)).digest('hex'), policy.patchedSha256)
 })
 
 /*

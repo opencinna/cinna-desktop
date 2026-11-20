@@ -92,7 +92,25 @@ export interface CodexLauncherDeps {
   systemPrompt(userId: string, agentId: string, mode: AcpRuntimeMode): string
   settings(userId: string, agentId: string): {
     model: string | null; effort: string; approval: ClaudeApproval
+    /**
+     * Outbound network for the session's sandboxed commands. Only a build
+     * session sets it: its `cinna` commands call Cinna Core, and the
+     * `workspace-write` sandbox has the network off. Writes stay confined to
+     * the workspace and approval stays as it is.
+     */
+    network?: boolean
   }
+}
+
+/**
+ * The `CODEX_CONFIG` entries for {@link CodexLauncherDeps.settings}'s
+ * `network`: `sandbox_workspace_write.network_access`, which the pinned CLI
+ * honours under the adapter's `workspace-write` mode
+ * (`codex.sandbox.network-access`). Nothing when it is off, so every other
+ * launch's config, and its pooled-process key, is what it was.
+ */
+export function codexSandboxConfig(network: boolean | undefined): { sandbox_workspace_write?: { network_access: true } } {
+  return network ? { sandbox_workspace_write: { network_access: true } } : {}
 }
 
 /** Pinned app-server adapter, always driving Cinna's managed (or explicitly configured) Codex executable. */
@@ -158,7 +176,8 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
           // exactly as it does for a terminal session there.
           developer_instructions: deps.systemPrompt(ctx.userId, ctx.agentId, ctx.folder.runtimeMode),
           ...(settings.model ? { model: settings.model } : {}),
-          model_reasoning_effort: settings.effort
+          model_reasoning_effort: settings.effort,
+          ...codexSandboxConfig(settings.network)
         }
         phase = 'runtime'
         const runtime = deps.nodeRuntime()

@@ -4,12 +4,15 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { RUNTIME_PINS } from '../../../../../shared/runtimePins'
 import { ConductorMcpServer } from '../../../../services/conductorMcpServer'
 import { prepareCodexConductorPolicy, prepareCodexWorkspacePolicy } from '../codexConductorPolicy'
 import { cinnaToolName } from '../conductorToolPolicy'
 import { isPromptPlaceholder } from '../acpSessionTitle'
 import { parseCodexAuthStatus } from '../codexAuth'
+import { codexSandboxConfig } from '../codexLauncher'
 import { airClientMeta, createAcpActivityState, translateActivity } from '../acpActivity'
 import { parsePromptTelemetry } from '../acpTelemetry'
 import { AcpMessageStream } from '../acpMessages'
@@ -144,6 +147,8 @@ const seen = {
    * ask, the option sent, the prompt's answer, the conversation requests the
    * prompt made, and whether the target file was written.
    */
+  /** Scenario N: a loopback connect from workspace-write, with and without the build-session sandbox config. */
+  network: { hits: 0, error: null as unknown, variants: {} as Record<string, { reached: boolean; asks: number; outputs: string[] }> },
   deny: [] as { name: string; asks: AdapterMessage[]; sent: (string | null)[]; answer: Json | null; requests: number; written: boolean }[],
   /** Scenario F: two `workspace` chats on one process, its cwd profile-owned, each session in its chat folder. */
   workspace: { error: null as unknown, prepared: null as AcpLaunchPlan | null, chats: [] as string[], processDir: '',
@@ -604,6 +609,63 @@ async function denyScenario(binary: string): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario N */
+
+/**
+ * Network from a `workspace-write` command, the build-session case: a loopback
+ * listener, and a `curl` to it run by exec_command (no escalation asked), once
+ * with the launcher's build-session sandbox config and once without it. The
+ * listener counts what reached it, so "no connection" is not read off curl's
+ * wording alone.
+ */
+async function networkScenario(binary: string): Promise<void> {
+  const listener = createServer((_request, response) => { seen.network.hits++; response.end('NETWORK_OK') })
+  await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', resolve))
+  const port = (listener.address() as AddressInfo).port
+  try {
+    for (const variant of ['build', 'plain'] as const) {
+      const scratch = makeScratch(`cinna-contract-network-${variant}-`)
+      let provider: FakeProvider | undefined
+      let connection: AdapterConnection | undefined
+      try {
+        let script: ProviderReply[] = []
+        provider = await startFakeProvider((turn): ProviderReply =>
+          turn.kind !== 'conversation' ? ownRequestReply(turn) : (script.shift() ?? { kind: 'text', text: 'OK' }))
+        writeProviderConfig(scratch.codexHome, provider.port, MODEL)
+        const config = { model: MODEL, model_provider: 'probe', ...(variant === 'build' ? codexSandboxConfig(true) : codexSandboxConfig(false)) }
+        connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, answer: allowOnce,
+          env: { ...scratch.env, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'workspace-write', MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify(config) } })
+        await connection.rpc('initialize', { protocolVersion: 1,
+          clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) }, clientInfo: { name: 'cinna-desktop', version: '1' } })
+        const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [] }, 60_000)
+        const sessionId = String(created.result?.sessionId ?? '')
+        if (!sessionId) { seen.network.error ??= created.error ?? 'no session'; continue }
+        await connection.rpc('session/set_mode', { sessionId, modeId: 'workspace-write' })
+        const hitsAt = seen.network.hits, asksAt = connection.clientRequests.length, turnsAt = provider.turns.length
+        script = [{ kind: 'tool', name: 'exec_command', args: JSON.stringify({
+          cmd: `curl -sS --max-time 5 http://127.0.0.1:${port}/`, yield_time_ms: 8000, max_output_tokens: 1000 }) }]
+        const answer = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Reach the listener.' }] }, 90_000)
+        if (answer.error) seen.network.error ??= answer.error
+        await sleep(500)
+        const turns = provider.turns.slice(turnsAt).filter((turn) => turn.kind === 'conversation')
+        seen.network.variants[variant] = {
+          reached: seen.network.hits > hitsAt,
+          asks: connection.clientRequests.slice(asksAt).filter((request) => request.method === 'session/request_permission').length,
+          outputs: turns.flatMap((turn) => turn.pendingOutputs ? turn.outputs.slice(-turn.pendingOutputs) : [])
+        }
+      } finally {
+        await connection?.close()
+        await provider?.close()
+        scratch.dispose()
+      }
+    }
+  } catch (error) {
+    seen.network.error ??= error instanceof Error ? error.message : String(error)
+  } finally {
+    await new Promise<void>((resolve) => listener.close(() => resolve()))
+  }
+}
+
 /* -------------------------------------------------------------- scenario F */
 
 const WORKSPACE_MARKER = 'CONTRACT_WORKSPACE_INSTRUCTIONS_c61'
@@ -869,6 +931,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     await subagentScenario(binary)
     await subagentScenario(binary, 'v1')
     await denyScenario(binary)
+    await networkScenario(binary)
     await workspaceScenario(binary)
     seen.handover = await probeFolderHandovers('codex', binary, adapter)
   }, 420_000)
@@ -1277,6 +1340,15 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
       { mode: 'workspace-write', permissionCount: 0, kinds: [], read: true, promptError: null },
       { mode: 'agent', permissionCount: 0, kinds: [], read: true, promptError: null }
     ])
+  })
+  it(entry('codex.sandbox.network-access'), () => {
+    expect(seen.network.error).toBeNull()
+    // The build-session config: the command reaches the listener, and nothing is asked.
+    expect(seen.network.variants['build']).toMatchObject({ reached: true, asks: 0 })
+    expect(seen.network.variants['build']?.outputs.join(' ')).toContain('NETWORK_OK')
+    // Every other launch: refused by the sandbox, still without an ask.
+    expect(seen.network.variants['plain']).toMatchObject({ reached: false, asks: 0 })
+    expect(seen.network.hits).toBe(1)
   })
   it(entry('codex.sandbox.write-outside-workspace'), () => {
     expect(seen.handover?.writes.map((write) => write.mode)).toEqual([

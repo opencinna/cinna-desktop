@@ -128,6 +128,13 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'the whole flow does not write another adopted folder' }
   },
   {
+    id: 'codex.sandbox.network-access', area: 'permissions & questions', surface: 'adapter patch', name: 'CODEX_CONFIG sandbox_workspace_write.network_access',
+    expectation: 'In `workspace-write`, an exec_command connecting to a loopback listener (no escalation asked) reaches it without an ACP ask when the process’s `CODEX_CONFIG` carries `sandbox_workspace_write: { network_access: true }`, and is refused by the sandbox, again without an ask, when it does not. Unpatched, codex-acp 2.5.0 sends the mode’s own `sandboxPolicy` (`networkAccess: false`) on every `turn/start`, which overrides the config: measured 20 Nov 2026 on 0.167.0, both variants refused; the adapter patch keeps the configured network on a `workspaceWrite` policy.',
+    owners: ['src/main/agents/drivers/acp/codexLauncher.ts#codexSandboxConfig', 'scripts/patch-codex-acp.cjs#networkPolicy', 'src/main/agents/drivers/index.ts#network'],
+    feature: 'A Codex build session’s `cinna` commands cannot reach Cinna Core (`Operation not permitted`), so the build stalls on every platform call; were the network on everywhere, every other Codex chat would gain it too.',
+    flow: { steps: ['none'], note: 'the whole flow runs no build session and no networked command' }
+  },
+  {
     id: 'codex.sandbox.read-outside-workspace', area: 'permissions & questions', surface: 'ACP method', name: 'sibling read / session/request_permission',
     expectation: 'A shell read (`cat`) of a file outside the workspace and outside the system temp roots runs without an ACP ask and returns the file’s content, in workspace-write and in agent mode alike: the sandbox confines writes, not reads. Measured 6 Oct 2026, and again 11 Oct 2026 on 0.162.1 with codex-acp 2.2.2, against a fake provider.',
     owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId'],

@@ -297,8 +297,8 @@ export const RUNTIME_PINS = {
     adapter: '2.5.0',
     /** `@agentclientprotocol/codex-acp/dist/index.js` as published (checked against the locked npm tarball). */
     adapterOriginalSha256: '15de6b2dd5203876a48b12861378bcf87040d623ab2159e05052dc9d54c32b16',
-    /** The same file after `scripts/patch-codex-acp.cjs` (MCP merge, session instructions, `isAirClient` forced false, the whole command output on the completing update, and a cancel that interrupts the subagent threads too). */
-    adapterPatchedSha256: 'f1dc49e2a08c26832c29df4f2fb949715a985c198383f9cfaa1fde76eac8a7da',
+    /** The same file after `scripts/patch-codex-acp.cjs` (MCP merge, session instructions, `isAirClient` forced false, the whole command output on the completing update, a cancel that interrupts the subagent threads too, and a `workspace-write` turn that keeps the network `CODEX_CONFIG`'s `sandbox_workspace_write.network_access` grants). */
+    adapterPatchedSha256: '9c888c3b1c04944d31ed53c7b848cad98e174eceb1482a441708f35b3da4b9ff',
     /**
      * Agent Vault: sha256 of the deterministic tar (`vault/adapterTar.ts`) of
      * the patched `@agentclientprotocol/codex-acp` package alone (its bundle
@@ -307,7 +307,7 @@ export const RUNTIME_PINS = {
      * adapter or its patch; `npm run vault:pin-adapter` prints it, and
      * `runtimeInstall.test.ts` fails until it is updated here.
      */
-    vaultAdapterTarSha256: '40ae19a642c9f578918f9bbcb6c6c1b582ba8dcbe14cc7031d94f2d8635e6d12',
+    vaultAdapterTarSha256: 'e4f049a1ead0e7af999a3ba205f5843be2efa22640ee49fe686a71960fa488c6',
     /**
      * Agent Vault: sha256 of the deterministic tar of `codex` and
      * `codex-code-mode-host`, as unpacked from this release's two

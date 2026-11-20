@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto')
 const policy = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 
 // The reviewed patch of the pinned `@agentclientprotocol/codex-acp`
-// `dist/index.js`, five edits. The user's Codex executable is never modified.
+// `dist/index.js`, six edits. The user's Codex executable is never modified.
 //
 // 1. MCP merge. The adapter discards explicit per-server restrictions whenever
 //    an ACP client injects a server. Preserve those entries, then let the
@@ -54,6 +54,15 @@ const policy = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 //    `interruptStandardChildren` covers only the standard subagent protocol;
 //    Cinna declares neither `subagents` nor `nativeSubagentSessions`, so
 //    `subagentProtocol` answers "hidden" and that path does nothing.
+// 6. Network in workspace-write, when configured. Every turn sends the mode's
+//    own `sandboxPolicy`, and `workspace-write`'s says `networkAccess: false`
+//    whatever `CODEX_CONFIG` holds, so the CLI's
+//    `sandbox_workspace_write.network_access` never reaches a sandboxed
+//    command (measured on 0.167.0, `codex.sandbox.network-access`). When the
+//    process's `CODEX_CONFIG` sets it to `true` — a Local Development build
+//    session's, and nothing else Cinna launches — a `workspaceWrite` policy
+//    keeps the network; writes stay confined and approval is unchanged.
+//    Without the key every policy is the adapter's own.
 const original = '"mcp_servers": Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, toCodexMcpServerConfig(mcp.server)]))'
 const replacement = '"mcp_servers": { ...configWithWorkspaceRoots.mcp_servers, ...Object.fromEntries(serversToConfigure.map((mcp) => [mcp.name, { enabled: true, ...toCodexMcpServerConfig(mcp.server) }])) }'
 const instructions = '\n      ...(typeof request._meta?.cinna?.systemPrompt === "string" ? { developerInstructions: request._meta.cinna.systemPrompt } : {}),'
@@ -119,17 +128,39 @@ const cancelChildren = `    await this.interruptSessionTurn(sessionState, "Cance
   }
 };
 `
+const networkTurnAnchor = '      sandboxPolicy: addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy, additionalDirectories),\n'
+const networkTurn = '      sandboxPolicy: cinnaSandboxNetwork(addAdditionalDirectoriesToSandboxPolicy(agentMode.sandboxPolicy, additionalDirectories)),\n'
+const networkPolicyAnchor = 'function addAdditionalDirectoriesToSandboxPolicy(sandboxPolicy, additionalDirectories) {\n'
+const networkPolicy = `// Cinna Desktop (scripts/patch-codex-acp.cjs): workspace-write keeps the network CODEX_CONFIG's sandbox_workspace_write.network_access grants.
+function cinnaSandboxNetwork(sandboxPolicy) {
+  if (sandboxPolicy.type !== "workspaceWrite") return sandboxPolicy;
+  let configured;
+  try {
+    configured = JSON.parse(process.env["CODEX_CONFIG"] ?? "null");
+  } catch {
+    configured = null;
+  }
+  return configured?.sandbox_workspace_write?.network_access === true ? { ...sandboxPolicy, networkAccess: true } : sandboxPolicy;
+}
+`
 const digest = (content) => createHash('sha256').update(content).digest('hex')
 
 /**
  * Earlier reviewed patches of the same pinned adapter, by the digest of the
  * file they produced, each with the exact reversal of its replacements. An
  * existing checkout carrying one is restored to the original (verified by
- * digest) and patched again; anything else is still refused. None at 2.5.0:
- * the earlier patches were reviewed on 2.2.2 only, and a version bump installs
- * the pristine file.
+ * digest) and patched again; anything else is still refused. The 2.2.2
+ * patches are not here: a version bump installs the pristine file.
  */
-const earlierPatches = {}
+const earlierPatches = {
+  // The five-edit 2.5.0 patch, before the workspace-write network edit.
+  f1dc49e2a08c26832c29df4f2fb949715a985c198383f9cfaa1fde76eac8a7da: (content) => {
+    if (content.split(instructions).length !== 4 || content.split(replacement).length !== 2 || content.split(airClientOff).length !== 2 ||
+      content.split(commandEndWhole).length !== 2 || content.split(interruptChildren).length !== 2 || content.split(cancelChildren).length !== 2) return null
+    return content.replaceAll(instructions, '').replace(replacement, () => original).replace(airClientOff, () => airClientAnchor)
+      .replace(commandEndWhole, () => commandEndAnchor).replace(interruptChildren, () => '').replace(cancelChildren, () => cancelAnchor)
+  }
+}
 
 function adapter(root) {
   const directory = join(root, 'node_modules/@agentclientprotocol/codex-acp')
@@ -140,7 +171,7 @@ function adapter(root) {
 
 function verifyCodexAcpPatch(root) {
   if (digest(readFileSync(adapter(root))) !== policy.patchedSha256) {
-    throw new Error('Codex ACP patch (MCP merge, session instructions, AIR client off, whole command output, subagent cancel) is missing or changed')
+    throw new Error('Codex ACP patch (MCP merge, session instructions, AIR client off, whole command output, subagent cancel, workspace-write network) is missing or changed')
   }
 }
 
@@ -170,6 +201,8 @@ function patchCodexAcp(root) {
   patched = patched.replace(commandEndAnchor, () => commandEndWhole)
   if (patched.split(childrenAnchor).length !== 2 || patched.split(cancelAnchor).length !== 2) throw new Error('Codex ACP subagent-cancel patch target changed')
   patched = patched.replace(childrenAnchor, () => interruptChildren + childrenAnchor).replace(cancelAnchor, () => cancelChildren)
+  if (patched.split(networkTurnAnchor).length !== 2 || patched.split(networkPolicyAnchor).length !== 2) throw new Error('Codex ACP workspace-write network patch target changed')
+  patched = patched.replace(networkTurnAnchor, () => networkTurn).replace(networkPolicyAnchor, () => networkPolicy + networkPolicyAnchor)
   if (digest(patched) !== policy.patchedSha256) throw new Error('Codex ACP patch output does not match reviewed content')
   const temporary = `${path}.${process.pid}.tmp`
   writeFileSync(temporary, patched, { mode: 0o644 })
@@ -179,6 +212,6 @@ function patchCodexAcp(root) {
 
 module.exports = {
   patchCodexAcp, verifyCodexAcpPatch, original, replacement, instructions, instructionAnchors, airClientAnchor, airClientOff, commandEndAnchor, commandEndWhole,
-  childrenAnchor, interruptChildren, cancelAnchor, cancelChildren
+  childrenAnchor, interruptChildren, cancelAnchor, cancelChildren, networkTurnAnchor, networkTurn, networkPolicyAnchor, networkPolicy
 }
 if (require.main === module) patchCodexAcp(resolve(__dirname, '..'))

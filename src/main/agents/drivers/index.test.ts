@@ -51,7 +51,7 @@ const state = vi.hoisted(() => ({
   restore: vi.fn(),
   developmentEngine: 'claude',
   developmentComplexity: 'complex',
-  codexSettings: null as null | ((userId: string, agentId: string) => { effort: string }),
+  codexSettings: null as null | ((userId: string, agentId: string) => { effort: string; network?: boolean }),
   developmentPaths: [] as string[],
   handovers: [] as unknown[],
   runtimeModes: [] as unknown[],
@@ -108,7 +108,7 @@ vi.mock('./acp/codexConductorPolicy', () => ({ prepareCodexConductorPolicy: asyn
   state.codexWorkspacePolicy(plan)
   return { ...(plan as object), conductorPolicy: 'workspace' }
 } }))
-vi.mock('./acp/codexLauncher', () => ({ createCodexLauncher: (options: { settings: (userId: string, agentId: string) => { effort: string }; systemPrompt: (userId: string, agentId: string, mode: unknown) => string }) => { state.codexSettings = options.settings; return { id: 'codex',
+vi.mock('./acp/codexLauncher', () => ({ createCodexLauncher: (options: { settings: (userId: string, agentId: string) => { effort: string; network?: boolean }; systemPrompt: (userId: string, agentId: string, mode: unknown) => string }) => { state.codexSettings = options.settings; return { id: 'codex',
   plan: async (context: { userId: string; agentId: string; folder: { path: string; runtimeMode?: unknown } }) => {
     if (state.utilityPlans) return { spec: { command: 'codex', args: [], env: { CODEX_CONFIG: JSON.stringify({ developer_instructions: options.systemPrompt(context.userId, context.agentId, context.folder.runtimeMode) }) }, cwd: context.folder.path, key: 'utility-key' }, init: { protocolVersion: 1 }, session: { mcpServers: [] }, setup: {} }
     state.ran.push('codex'); state.developmentPaths.push(context.folder.path)
@@ -448,6 +448,19 @@ describe('driverFor', () => {
     state.developmentComplexity = complexity
     expect(state.codexSettings?.('user-1', 'builder').effort).toBe(effort)
     expect(state.gets).toBe(0)
+  })
+  it('gives a Codex build session the network, keeping Ask for approval', () => {
+    // Its `cinna` commands call Cinna Core; `workspace-write` alone refuses them.
+    state.development = true
+    expect(state.codexSettings?.('user-1', 'builder')).toMatchObject({ approval: 'ask', network: true })
+  })
+  it('keeps the network off for every other Codex launch', () => {
+    state.liveRows = [{ ...folderRow('codex'), id: 'conductor:codex', source: 'local', enabled: true,
+      driverConfig: { launcher: 'codex', conductorChatId: 'chat-codex', conductorEngine: 'codex', cwd: '/owned/chat-codex', conductorPrompt: 'Chat' } } as AgentRow]
+    expect(state.codexSettings?.('user-1', 'conductor:codex').network).toBeUndefined()
+    vi.mocked(desktopStateService.read).mockReturnValue({ codexApproval: 'auto' } as never)
+    expect(state.codexSettings?.('user-1', 'folder:aaa')).toMatchObject({ approval: 'auto' })
+    expect(state.codexSettings?.('user-1', 'folder:aaa').network).toBeUndefined()
   })
   it.each([['simple', 'low'], ['medium', 'medium'], ['complex', 'high'], [undefined, 'medium']])('gives a chat runtime of %s effort Codex %s effort', (complexity, effort) => {
     state.liveRows = [{ ...folderRow('codex'), id: 'conductor:codex', source: 'local', enabled: true,

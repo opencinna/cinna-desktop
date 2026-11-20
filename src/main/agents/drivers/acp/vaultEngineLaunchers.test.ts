@@ -59,7 +59,7 @@ function defaultPins(engine: VaultEngine, runtimes: Vault['runtimes']): NonNulla
 const ctx = { userId: 'u', agentId: 'folder:a' } as never
 const codexRuntimes: Vault['runtimes'] = [
   { engine: 'codex', version: '0.167.0', kind: 'archive', sha256: 'c0de' },
-  { engine: 'codex', version: '2.5.0-f1dc49e2', kind: 'adapter', sha256: 'ada9' }
+  { engine: 'codex', version: '2.5.0-9c888c3b', kind: 'adapter', sha256: 'ada9' }
 ]
 
 describe('Codex in a vault', () => {

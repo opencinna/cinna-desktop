@@ -828,7 +828,9 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
       const conductor = agentRepo.getOwned(userId, agentId)
       if (conductor && isChatConductor(conductor)) return { model: conductorContext(conductor).modelId, effort: codexEffortForComplexity(conductorContext(conductor).complexity), approval: 'ask' }
       const development = desktopFeatures.developmentAgentContext(userId, agentId)
-      if (development) return { model: null, effort: codexEffortForComplexity(development.complexity), approval: 'ask' }
+      // A build session drives `cinna` against Cinna Core, which the `workspace-write`
+      // sandbox's network-off would refuse; it alone gets the network. Approval stays `ask`.
+      if (development) return { model: null, effort: codexEffortForComplexity(development.complexity), approval: 'ask', network: true }
       const agent = localAgentService.get(userId, agentId)
       const model = typeof agent.runtime?.model === 'string' ? agent.runtime.model.trim() || null : null
       return {

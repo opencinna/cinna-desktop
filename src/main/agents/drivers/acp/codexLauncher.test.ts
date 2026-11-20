@@ -123,6 +123,23 @@ describe('Codex ACP launcher', () => {
     }
   })
 
+  it('turns the workspace-write network on only when the settings ask for it, in a process of its own', async () => {
+    // A build session's `cinna` commands reach Cinna Core only with it; the
+    // patched adapter keeps it on the turn's `workspaceWrite` policy
+    // (`codex.sandbox.network-access`). Mutation: drop the spread and the
+    // build session is refused again; set it always and every chat has the network.
+    const plain = await createCodexLauncher(deps()).plan(context)
+    const build = await createCodexLauncher(deps({ settings: () => ({ model: null, effort: 'medium', approval: 'ask', network: true }) })).plan(context)
+    if (isRefusal(plain) || isRefusal(build)) throw new Error('refused')
+    expect(JSON.parse(build.spec.env.CODEX_CONFIG).sandbox_workspace_write).toEqual({ network_access: true })
+    expect(JSON.parse(plain.spec.env.CODEX_CONFIG)).not.toHaveProperty('sandbox_workspace_write')
+    // Writes stay confined and approval unchanged: the mode is workspace-write still.
+    expect(build.setup.modeId).toBe('workspace-write')
+    expect(build.spec.env.INITIAL_AGENT_MODE).toBe('workspace-write')
+    // A pooled process launched without the network is never reused with it.
+    expect(build.spec.key).not.toBe(plain.spec.key)
+  })
+
   it('passes the chosen model and uses automatic review only when selected', async () => {
     const plan = await createCodexLauncher(deps({ settings: () => ({ model: 'my-model', effort: 'high', approval: 'auto' }) })).plan(context)
     if (isRefusal(plan)) throw new Error(plan.error)
