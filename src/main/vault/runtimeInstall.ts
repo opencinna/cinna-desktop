@@ -70,6 +70,12 @@ export interface RuntimePin {
   version: string
   /** The sha256 the installed row must report; null = nothing pins it (the fake backend's host executable). */
   sha256: string | null
+  /**
+   * Earlier reviewed rows the launch gate still runs (`installedRuntime`),
+   * exact version and sha256 each. Never installed: `ensureRuntimes` installs
+   * `version`/`sha256` alone.
+   */
+  accepted?: readonly { version: string; sha256: string }[]
 }
 
 /** Where the runtime bytes come from (the pinned download and the app's adapter; a fake in tests). */
@@ -100,6 +106,12 @@ export function currentRuntimeRow<R extends RuntimeRow>(runtimes: readonly R[], 
 /** True when an installed `runtime.status` row is the one `pin` names. */
 export function matchesPin(row: RuntimeRow, pin: RuntimePin): boolean {
   return row.engine === pin.engine && row.kind === pin.kind && row.version === pin.version && (pin.sha256 === null || row.sha256 === pin.sha256)
+}
+
+/** {@link matchesPin}, or exactly one of the pin's `accepted` earlier rows (version and sha256 both). */
+export function runsAsPinned(row: RuntimeRow, pin: RuntimePin): boolean {
+  return matchesPin(row, pin) || (row.engine === pin.engine && row.kind === pin.kind &&
+    (pin.accepted ?? []).some((earlier) => row.version === earlier.version && row.sha256 === earlier.sha256))
 }
 
 export { VaultRuntimeError }
@@ -228,8 +240,8 @@ export function claudeAdapterVersionLabel(): string {
 }
 
 /** The Codex adapter's version in a vault, labelled like Claude's. */
-export function codexAdapterVersionLabel(): string {
-  return `${RUNTIME_PINS.codex.adapter}-${RUNTIME_PINS.codex.adapterPatchedSha256.slice(0, 8)}`
+export function codexAdapterVersionLabel(patchedSha256: string = RUNTIME_PINS.codex.adapterPatchedSha256): string {
+  return `${RUNTIME_PINS.codex.adapter}-${patchedSha256.slice(0, 8)}`
 }
 
 // ---------------------------------------------------------------------------
@@ -487,7 +499,9 @@ export function pinnedVaultRuntimes(engine: VaultEngine): RuntimePin[] {
     case 'codex':
       return [
         { engine, kind: 'archive', version: RUNTIME_PINS.codex.cli, sha256: RUNTIME_PINS.codex.vaultRuntimeTarSha256 },
-        { engine, kind: 'adapter', version: codexAdapterVersionLabel(), sha256: RUNTIME_PINS.codex.vaultAdapterTarSha256 }
+        { engine, kind: 'adapter', version: codexAdapterVersionLabel(), sha256: RUNTIME_PINS.codex.vaultAdapterTarSha256,
+          // A vault set up on 0.12.0 runs the five-edit patch; it is the same adapter there (RUNTIME_PINS.codex.vaultAdapterEarlier).
+          accepted: [{ version: codexAdapterVersionLabel(RUNTIME_PINS.codex.vaultAdapterEarlier.patchedSha256), sha256: RUNTIME_PINS.codex.vaultAdapterEarlier.tarSha256 }] }
       ]
     case 'opencode':
       return [{ engine, kind: 'archive', version: RUNTIME_PINS.opencode.cli, sha256: RUNTIME_PINS.opencode.assets[GUEST_PLATFORM]?.sha256 ?? '' }]

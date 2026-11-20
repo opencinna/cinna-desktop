@@ -309,6 +309,19 @@ export const RUNTIME_PINS = {
      */
     vaultAdapterTarSha256: 'e4f049a1ead0e7af999a3ba205f5843be2efa22640ee49fe686a71960fa488c6',
     /**
+     * Agent Vault: the one earlier reviewed adapter a vault may still run — the
+     * five-edit 2.5.0 patch shipped in v0.12.0, before the workspace-write
+     * network edit. Vaults never set `sandbox_workspace_write.network_access`,
+     * so it behaves as the current one there, and a vault set up on 0.12.0
+     * keeps running without Update dependencies (which still installs the
+     * current pin). Only the vault launch gate reads it; drop it with the next
+     * adapter bump.
+     */
+    vaultAdapterEarlier: {
+      patchedSha256: 'f1dc49e2a08c26832c29df4f2fb949715a985c198383f9cfaa1fde76eac8a7da',
+      tarSha256: '40ae19a642c9f578918f9bbcb6c6c1b582ba8dcbe14cc7031d94f2d8635e6d12'
+    },
+    /**
      * Agent Vault: sha256 of the deterministic tar of `codex` and
      * `codex-code-mode-host`, as unpacked from this release's two
      * `linux-arm64` archives below (each checked against its own row first).

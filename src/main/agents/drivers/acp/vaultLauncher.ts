@@ -38,7 +38,7 @@ import { airClientMeta } from './acpActivity'
 import { claudeEffortOption, type AcpLauncher, type AcpPlanResult } from './acpLaunchers'
 import { RAW_SDK_MESSAGE_FILTER } from './acpSdkTelemetry'
 import { ACP_PROTOCOL_VERSION, VAULT_AGENT_CWD } from './types'
-import { currentRuntimeRow, matchesPin, type RuntimePin } from '../../../vault/runtimeInstall'
+import { currentRuntimeRow, matchesPin, runsAsPinned, type RuntimePin } from '../../../vault/runtimeInstall'
 
 /** `driverConfig.vault` as the launcher reads it. */
 export interface VaultAgentLaunchInfo {
@@ -126,7 +126,8 @@ type RuntimeRow = { engine: VaultEngine; version: string; kind: RuntimeKind; sha
 /**
  * The executable (or archive) and adapter an engine would run in the vault —
  * the last installed of each kind, as cinna-vaultd picks them — when each is
- * exactly what `pins` names (version and sha256). `missing`: one it needs is
+ * exactly what `pins` names (version and sha256; an adapter may also be one of
+ * its pin's `accepted` earlier rows). `missing`: one it needs is
  * not there; `not_pinned`: what is there is another version or other bytes.
  */
 export function installedRuntime(
@@ -140,7 +141,7 @@ export function installedRuntime(
   const executable = currentRuntimeRow(runtimes, engine, false)
   const adapter = adapterPin ? currentRuntimeRow(runtimes, engine, true) : null
   if (!executable || (adapterPin && !adapter)) return 'missing'
-  if (!matchesPin(executable, executablePin) || (adapterPin && adapter && !matchesPin(adapter, adapterPin))) return 'not_pinned'
+  if (!matchesPin(executable, executablePin) || (adapterPin && adapter && !runsAsPinned(adapter, adapterPin))) return 'not_pinned'
   return { executable, adapter }
 }
 

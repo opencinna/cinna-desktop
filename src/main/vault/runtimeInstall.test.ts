@@ -11,7 +11,7 @@ import type { VaultChannel } from './backend'
 import { VaultdClient } from './vaultdClient'
 import { installRuntimeHost } from '../host/runtimeHost'
 import { adapterClosure, ADAPTER_TAR_PATH, claudeAdapterFiles, closureFiles, CODEX_ADAPTER_TAR_PATH, codexAdapterFiles, deterministicTar, deterministicTarSha256, deterministicTarSize, ensureClaudeAdapterTar, ensureCodexAdapterTar, writeClaudeAdapterTar, writeDeterministicTar } from './adapterTar'
-import { codexAdapterVersionLabel, defaultRuntimeSource, ensureRuntimes, hostRuntimeSource, claudeAdapterVersionLabel, installRuntimeArtifact, pinnedVaultVersions, tarFiles } from './runtimeInstall'
+import { codexAdapterVersionLabel, defaultRuntimeSource, matchesPin, pinnedVaultRuntimes, ensureRuntimes, hostRuntimeSource, claudeAdapterVersionLabel, installRuntimeArtifact, pinnedVaultVersions, tarFiles } from './runtimeInstall'
 import { installedRuntime } from '../agents/drivers/acp/vaultLauncher'
 
 /**
@@ -162,7 +162,8 @@ describe('vault runtime install (D28)', () => {
       const hostVersion = `${RUNTIME_PINS.codex.cli}-host`
       expect(source.pins('codex')).toEqual([
         { engine: 'codex', kind: 'executable', version: hostVersion, sha256: null },
-        { engine: 'codex', kind: 'adapter', version: codexAdapterVersionLabel(), sha256: RUNTIME_PINS.codex.vaultAdapterTarSha256 }
+        { engine: 'codex', kind: 'adapter', version: codexAdapterVersionLabel(), sha256: RUNTIME_PINS.codex.vaultAdapterTarSha256,
+          accepted: [{ version: codexAdapterVersionLabel(RUNTIME_PINS.codex.vaultAdapterEarlier.patchedSha256), sha256: RUNTIME_PINS.codex.vaultAdapterEarlier.tarSha256 }] }
       ])
       const artifacts = await source.artifacts('codex')
       expect(artifacts.map((a) => `${a.kind}:${a.name}:${a.version}`)).toEqual([`executable:codex:${hostVersion}`, `adapter:codex-acp:${codexAdapterVersionLabel()}`])
@@ -341,5 +342,40 @@ describe('vault runtime install (D28)', () => {
     } finally {
       client.close()
     }
+  })
+})
+
+/*
+ * A Codex vault set up on v0.12.0 holds the five-edit adapter patch. The launch
+ * gate still runs it (vaults never set the network key the sixth edit reads),
+ * and only that one earlier row: any other version or bytes are refused.
+ * Update dependencies still installs the current pin over it.
+ */
+describe('the Codex vault adapter gate accepts the one earlier reviewed patch', () => {
+  const executable = { engine: 'codex' as const, kind: 'archive' as const, version: RUNTIME_PINS.codex.cli, sha256: RUNTIME_PINS.codex.vaultRuntimeTarSha256 }
+  const adapterRow = (version: string, sha256: string) => ({ engine: 'codex' as const, kind: 'adapter' as const, version, sha256 })
+  const current = adapterRow(codexAdapterVersionLabel(), RUNTIME_PINS.codex.vaultAdapterTarSha256)
+  const earlier = adapterRow('2.5.0-f1dc49e2', '40ae19a642c9f578918f9bbcb6c6c1b582ba8dcbe14cc7031d94f2d8635e6d12')
+
+  it('runs the current adapter and the v0.12.0 one, and refuses anything else', () => {
+    const pins = pinnedVaultRuntimes('codex')
+    expect(installedRuntime([executable, current], 'codex', pins)).toMatchObject({ adapter: current })
+    expect(installedRuntime([executable, earlier], 'codex', pins)).toMatchObject({ adapter: earlier })
+    // The earlier label with other bytes, the earlier bytes under another label, and an unknown patch.
+    for (const row of [
+      adapterRow(earlier.version, 'ab'.repeat(32)),
+      adapterRow('2.5.0-deadbeef', earlier.sha256),
+      adapterRow('2.5.0-deadbeef', 'ab'.repeat(32)),
+      adapterRow(current.version, earlier.sha256)
+    ]) expect(installedRuntime([executable, row], 'codex', pins), JSON.stringify(row)).toBe('not_pinned')
+    // The last installed row is the one vaultd runs: a newer unknown one after the earlier is refused.
+    expect(installedRuntime([executable, earlier, adapterRow('2.5.0-deadbeef', 'ab'.repeat(32))], 'codex', pins)).toBe('not_pinned')
+  })
+
+  it('still installs the current adapter over the earlier one on Update dependencies', () => {
+    // ensureRuntimes skips an artifact only on an exact matchesPin, which never reads `accepted`.
+    const pin = pinnedVaultRuntimes('codex').find((each) => each.kind === 'adapter')!
+    expect(matchesPin(earlier, pin)).toBe(false)
+    expect(matchesPin(current, pin)).toBe(true)
   })
 })
