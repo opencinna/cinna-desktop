@@ -48,7 +48,7 @@ import type { AgentRootDto, LocalAgentDto } from '../../src/shared/localAgents'
  * Also: U6 an expired session (core revokes this sandbox's desktop client by id, the stored
  * access token is aged so the app's own refresh is refused and clears her tokens) seen after a
  * restart, with Re-authenticate through the same recorded browser; U6b the same state without a
- * restart, `test.fail()` for a known defect; U7 the kept profile rebound to another core account
+ * restart (clearing her tokens makes main derive the accounts again at once); U7 the kept profile rebound to another core account
  * (her address moved by the admin to a second throwaway user, then signed in over
  * `auth.register`), whose held slot reads `unknown` and is named only from what was recorded;
  * U8 an own skill's credential slot held the same way; U9 a vault agent on the fake vault backend
@@ -608,7 +608,7 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
     const p = person!
     const { userId, clientId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Reader', slots: [{ name: SLOT, serviceUri: c.serviceUri }] }])
     await revokeSession(cinna, p, userId, clientId)
-    // Main derives the accounts again at start; in the same app session it does not yet (U6b).
+    // Main derives the accounts again at start; U6b proves it also does so in the same app session.
     await cinna.relaunch()
     await cinna.skipOnboarding()
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
@@ -654,11 +654,9 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
   })
 
   test('U6b session expired in the same app session: once the app has cleared her tokens, the slot is held and the row offers Re-authenticate without a restart', async ({ cinna }) => {
-    // Known defect: clearing the current profile's tokens after a refused refresh does not make main
-    // derive the accounts again, so until a restart her account stays eligible and the composer reads
-    // "Add the credentials for Held API by attaching them or configuring credentials/.env." (the
-    // missing-credential row this feature replaced) instead of the session-expired row.
-    test.fail()
+    // Clearing the current profile's tokens after the refused refresh makes main derive the accounts
+    // again at once (`onCinnaTokensCleared`): before that, her account stayed eligible until a restart
+    // and the composer read "Add the credentials for Held API…" with her secret still delivered.
     test.setTimeout(120_000)
     const c = credential!
     const p = person!
@@ -668,10 +666,16 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
     await expect(page.getByText('Cinna session expired', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Not now', exact: true }).click()
     await newChatWith(cinna, 'Held Reader')
-    // Intended: the same state a restart shows (U6). Observed: main keeps her account eligible, so
-    // the slot reads connected, no row is shown, and her credential stays in the agent folder.
+    // The same state a restart shows (U6), and the credential's name never reaches the renderer.
+    const panel = statusPanel(cinna)
     await expectRows(cinna, [`${FIRST}’s session expired: 1 credential comes from that account.`])
+    await expect(panel.getByRole('button', { name: 'Re-authenticate', exact: true })).toBeVisible()
+    await expect(panel).not.toContainText('needs a credential')
     await expect.poll(() => readCredentials(agent)).toBe('')
+    const setup = await page.evaluate((id) => window.api.serviceCredentials.setupState(id), agent.id)
+    expect(setup.ok && setup.value.slots.map((s) => [s.name, s.state])).toEqual([[SLOT, 'account_unavailable']])
+    expect(await rendererView(cinna, agent.id)).not.toContain(c.name)
+    await expect(page.locator('body')).not.toContainText(c.name)
   })
 
   test('U7 the profile signs back in as a different Cinna account (same email, another account on core): the held slot is not delivered to it or named for it', async ({ cinna }) => {

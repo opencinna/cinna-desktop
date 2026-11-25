@@ -55,6 +55,7 @@ Describes how a Cinna account's OAuth access/refresh tokens are kept valid betwe
 ### When a refresh genuinely fails
 1. A refresh that returns `invalid_grant` / reuse-detected / unauthorized throws `CinnaReauthRequired`
 2. Stored tokens are cleared only if the refresh still belongs to the current credential session; an obsolete refresh leaves replacement credentials intact
+   Clearing notifies `onCinnaTokensCleared` listeners, so the profile's credential account is re-derived at once: its attached credentials are withdrawn and its slots read as held with Re-authenticate, in this app session ([Unavailable accounts](../../agents/service_credentials/README.md#unavailable-accounts))
 3. The user is routed into the in-place re-auth flow — no local data is touched. See [Re-authentication](./reauthentication.md)
 
 ## Business Rules

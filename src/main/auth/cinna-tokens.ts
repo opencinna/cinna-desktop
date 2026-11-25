@@ -138,12 +138,27 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
   return refresh
 }
 
+const clearedListeners = new Set<(userId: string) => void>()
+
+/**
+ * Be told whenever a profile's Cinna tokens are cleared (a refused refresh, a logout), so state
+ * derived from them (the eligible credential accounts) is derived again in this app session rather
+ * than at the next start. Returns the unsubscribe.
+ */
+export function onCinnaTokensCleared(listener: (userId: string) => void): () => void {
+  clearedListeners.add(listener)
+  return () => { clearedListeners.delete(listener) }
+}
+
 /**
  * Clear all Cinna tokens and client ID for a user.
  */
 export function clearCinnaTokens(userId: string): void {
   invalidateCinnaSession(userId)
   userRepo.clearCinnaTokens(userId)
+  for (const listener of [...clearedListeners]) {
+    try { listener(userId) } catch (err) { console.error('a Cinna tokens-cleared listener failed', err) }
+  }
 }
 
 /**

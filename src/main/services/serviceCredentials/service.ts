@@ -747,7 +747,12 @@ function heldAccount(a: Pick<LocalAgentDto, 'path' | 'kind'>, group: string): Un
 function retireAccount(account: Account): void {
   account.abort.abort(); account.epoch++; account.flight = null; account.synthetic = []; account.scheduler.stop()
   accounts.delete(account.key)
-  failFlows(flow => flow.account === account, ACCOUNT_CHANGED)
+  failFlows(flow => flow.account === account, tokensCleared(account.userId) ? REAUTH_REQUIRED : ACCOUNT_CHANGED)
+}
+/** The profile is still a Cinna profile, not signed out, but its tokens are gone (a refused refresh cleared them). */
+function tokensCleared(userId: string): boolean {
+  const u = userRepo.list().find(row => row.id === userId)
+  return u?.type === 'cinna_user' && !signedOut.has(userId) && !(u.cinnaAccessTokenEnc && u.cinnaRefreshTokenEnc)
 }
 /** Whether an agent has an issued key from this account attached that can still come back or rotate. */
 function watchesKeys(account: Account): boolean {
@@ -1141,6 +1146,7 @@ function failFlows(filter: (flow: Flow) => boolean, error: { code: string; messa
   for (const flow of [...flows.values()]) if (flow.dto.state === 'waiting' && filter(flow)) settleFlow(flow, 'failed', error)
 }
 const ACCOUNT_CHANGED = { code: 'account_changed', message: 'The account changed. Start the connection again.' }
+const REAUTH_REQUIRED = { code: 'reauth_required', message: 'Sign in to Cinna again, then connect once more.' }
 function schedulePoll(flow: Flow): void {
   stopFlow(flow)
   flow.timer = setTimeout(() => { flow.timer = null; void pollFlow(flow) }, oauthFlowTiming.pollMs)
@@ -1154,7 +1160,7 @@ async function pollFlow(flow: Flow): Promise<void> {
   if (!suspended) await syncAccount(account, true).catch(() => undefined)
   if (!flowCurrent(flow)) return
   if (!flowAccountLive(flow)) return settleFlow(flow, 'failed', ACCOUNT_CHANGED)
-  if (account.syncError === 'reauth_required') return settleFlow(flow, 'failed', { code: 'reauth_required', message: 'Sign in to Cinna again, then connect once more.' })
+  if (account.syncError === 'reauth_required') return settleFlow(flow, 'failed', REAUTH_REQUIRED)
   const row = repo.list(account.userId).find(r => r.origin === 'cloud' && r.cloud_id === flow.dto.credentialId)
   const m = row ? stored(row) : null
   if (m?.oauthStatus === 'ready' && (flow.start.status !== 'ready' || m.revision !== flow.start.revision)) return finishFlow(flow)

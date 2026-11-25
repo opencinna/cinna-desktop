@@ -1650,6 +1650,15 @@ describe('Google OAuth credentials (core-brokered)', () => {
       }
     })
 
+    it('fails a waiting flow with reauth_required, not account_changed, when its profile’s tokens are cleared', async () => {
+      const a = await setup([gmail('g-new', { oauth_status: 'pending_authorization' })], [])
+      world.oauthCreate.mockResolvedValue(authorized('g-new'))
+      await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
+      Object.assign(world.users.get('account-a'), { cinnaAccessTokenEnc: null, cinnaRefreshTokenEnc: null })
+      world.noTokens.add('account-a'); await service.refreshAccounts()
+      expect(service.oauthFlow(a.id)).toMatchObject({ state: 'failed', error: { code: 'reauth_required' } })
+    })
+
     it('cancel stops polling, attaches nothing and leaves the record on Core', async () => {
       const a = await setup([gmail('g-new', { oauth_status: 'pending_authorization' })], [])
       world.oauthCreate.mockResolvedValue(authorized('g-new'))

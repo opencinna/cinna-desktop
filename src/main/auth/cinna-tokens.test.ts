@@ -13,7 +13,7 @@ vi.mock('../db/users', () => ({ userRepo: {
 } }))
 vi.mock('../security/keystore', () => ({ encryptApiKey: async (value: string) => Buffer.from(value), decryptApiKey: async (value: Buffer) => value.toString() }))
 vi.mock('./cinna-oauth', () => ({ refreshCinnaTokens: refresh, CinnaReauthRequired: class extends Error {} }))
-const { storeCinnaTokens, getCinnaAccessToken, getStoredCinnaSubject } = await import('./cinna-tokens')
+const { storeCinnaTokens, getCinnaAccessToken, getStoredCinnaSubject, onCinnaTokensCleared } = await import('./cinna-tokens')
 const { CinnaReauthRequired } = await import('./cinna-oauth')
 const { CinnaSessionChanged } = await import('./cinna-session')
 
@@ -79,4 +79,35 @@ it('reads the stored subject offline even when the access token is expired', asy
   expect(clear).not.toHaveBeenCalled()
   holder.state = null
   await expect(getStoredCinnaSubject('u')).rejects.toThrow('No Cinna access token')
+})
+
+it('a refused refresh clears the tokens and tells the cleared listeners once, with the profile', async () => {
+  const heard: string[] = []
+  const stop = onCinnaTokensCleared((id) => heard.push(id))
+  try {
+    refresh.mockRejectedValue(new CinnaReauthRequired('Client revoked'))
+    await expect(getCinnaAccessToken('u')).rejects.toBeInstanceOf(CinnaReauthRequired)
+    expect(clear).toHaveBeenCalledWith('u')
+    expect(heard).toEqual(['u'])
+  } finally { stop() }
+})
+
+it('a superseded refresh that is refused clears nothing and tells no one; a throwing listener does not stop the others', async () => {
+  const heard: string[] = []
+  const stops = [onCinnaTokensCleared(() => { throw new Error('boom') }), onCinnaTokensCleared((id) => heard.push(id))]
+  const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    let reject!: (error: Error) => void
+    refresh.mockReturnValueOnce(new Promise((_, no) => { reject = no }))
+    const old = getCinnaAccessToken('u')
+    const rejected = expect(old).rejects.toBeInstanceOf(CinnaSessionChanged)
+    await Promise.resolve()
+    await storeCinnaTokens('u', tokens('new-login'))
+    reject(new CinnaReauthRequired('Revoked old session'))
+    await rejected
+    expect(heard).toEqual([])
+    refresh.mockRejectedValue(new CinnaReauthRequired('Revoked'))
+    await expect(getCinnaAccessToken('u')).rejects.toBeInstanceOf(CinnaReauthRequired)
+    expect(heard).toEqual(['u'])
+  } finally { stops.forEach((stop) => stop()); quiet.mockRestore() }
 })

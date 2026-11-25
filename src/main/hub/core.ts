@@ -12,6 +12,7 @@ import { stopAccountConfigPeriodicSync } from '../services/account-config-sync'
 import { initDatabase } from '../db/client'
 import { getCurrentUserId, initSession } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { onCinnaTokensCleared } from '../auth/cinna-tokens'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { taskRuntimeService } from '../services/taskRuntimeService'
 import { interruptedTurnService } from '../services/interruptedTurnService'
@@ -84,6 +85,9 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   }
   installCommandCredentialPreparation(id => serviceCredentialService.prepare(id))
   serviceCredentialService.installUnlockCheck((userId) => userActivation.isUnlocked(userId))
+  // A refused refresh clears the profile's tokens mid-session: its account stops being eligible now,
+  // so its credentials are withdrawn and its slots read as held, as they would after a restart.
+  onCinnaTokensCleared(() => { void serviceCredentialService.refreshAccounts() })
   taskRuntimeService.recover()
   registerRecoverer('a2a', a2aTurnRecoverer)
   registerRecoverer('managed', managedTurnRecoverer)
