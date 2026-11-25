@@ -26,6 +26,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, type Dirent } from 'node:fs'
 import { delimiter, join, relative, sep } from 'node:path'
 import { runtimeHost } from '../host/runtimeHost'
+import { GH_SHIM_DIR_NAME, githubCredentialHelperFor } from '../shell/ghShim'
 import { contractTreeHash } from '../kit/contractTreeHash'
 import { swapInto } from '../kit/treeSwap'
 import { createLogger } from '../logger/logger'
@@ -101,13 +102,20 @@ export function withSkillRuntime(env: Record<string, string>, dir: string): Reco
  * inherited values are always dropped first.
  *
  * For a kit agent (`githubEndpoint`), `CINNA_GITHUB_URL` (the `/github` base of the same listener) and
- * `CINNA_GITHUB_AUTH` (the same bearer), which Cinna's `gh` wrapper calls. Not `…_TOKEN`: Codex's
- * default shell environment policy drops variables whose names hold KEY, SECRET or TOKEN.
+ * `CINNA_GITHUB_AUTH` (the same bearer), which Cinna's `gh` wrapper calls, plus the G4
+ * `GIT_CONFIG_COUNT/KEY/VALUE` entries that point git's github.com credential helper at the wrapper
+ * (after any entries the env already had). Without the endpoint, any of those entries of ours are
+ * removed, so the child keeps the user's own keychain / GCM login. The bearer's name avoids KEY,
+ * SECRET and TOKEN as a precaution against engines' env filters (Codex's shell environment policy
+ * can exclude such names). The P0 probe pushed through `GIT_CONFIG_KEY_n` under Codex 0.167.0;
+ * whether Codex passes `GIT_CONFIG_KEY_n` through the ACP adapter is still to be confirmed by a
+ * live turn.
  */
 export function engineCredentialEnv(
   base: Record<string, string>,
   prepared: { path?: string; skillRuntime: boolean; tokenEndpoint?: { url: string; token: string }; githubEndpoint?: { url: string; token: string } },
-  runtimeDir: () => string | null = ensureSkillRuntime
+  runtimeDir: () => string | null = ensureSkillRuntime,
+  ghWrapper: () => string | null = ghWrapperPath
 ): Record<string, string> {
   const env = { ...base }
   delete env.CINNA_CREDENTIALS_PATH
@@ -119,5 +127,17 @@ export function engineCredentialEnv(
   if (prepared.tokenEndpoint) { env.CINNA_CREDENTIALS_TOKEN_URL = prepared.tokenEndpoint.url; env.CINNA_CREDENTIALS_TOKEN = prepared.tokenEndpoint.token }
   if (prepared.githubEndpoint) { env.CINNA_GITHUB_URL = prepared.githubEndpoint.url; env.CINNA_GITHUB_AUTH = prepared.githubEndpoint.token }
   const dir = prepared.skillRuntime ? runtimeDir() : null
-  return dir ? withSkillRuntime(env, dir) : env
+  const withRuntime = dir ? withSkillRuntime(env, dir) : env
+  return githubCredentialHelperFor(withRuntime, prepared.githubEndpoint ? ghWrapper() : null)
+}
+
+/**
+ * Cinna's `gh` wrapper when it is on disk (macOS and Linux; `withDeveloperToolShims` writes it
+ * before the engine env reaches here), else null: a helper naming a missing file would break every
+ * github.com remote.
+ */
+export function ghWrapperPath(): string | null {
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return null
+  const path = join(runtimeHost.getPath('userData'), GH_SHIM_DIR_NAME, 'gh')
+  return existsSync(path) ? path : null
 }

@@ -96,7 +96,7 @@ describe('GitHub loopback routes', () => {
   })
 
   it('records what is needed for the agent’s profile, and passes gh_missing to its hook', async () => {
-    const ghMissing = vi.fn()
+    const ghMissing = vi.fn(async () => true)
     t.service.setOnGhMissing(ghMissing)
     expect((await call(port, { path: '/github/needed', headers: auth('folder:b'), body: '{"kind":"sign_in"}' })).body).toEqual({ ok: true })
     expect((await t.service.status('user-b')).needs).toEqual([{ key: 'account', kind: 'sign_in', agentIds: ['folder:b'] }])
@@ -107,8 +107,13 @@ describe('GitHub loopback routes', () => {
     // An install need needs a repo.
     await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"install"}' })
     expect((await t.service.status('user-a')).needs).toHaveLength(1)
-    expect((await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"gh_missing"}' })).body).toEqual({ ok: true })
+    // gh_missing answers whether a managed gh install is running (the wrapper's two sentences).
+    expect((await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"gh_missing"}' })).body).toEqual({ ok: true, installing: true })
     expect(ghMissing).toHaveBeenCalledWith('folder:a')
+    ghMissing.mockResolvedValueOnce(false)
+    expect((await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"gh_missing"}' })).body).toEqual({ ok: true, installing: false })
+    ghMissing.mockRejectedValueOnce(new Error('boom'))
+    expect((await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"gh_missing"}' })).body).toEqual({ ok: true, installing: false })
     expect((await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"admin"}' })).status).toBe(422)
     live.delete('folder:b')
     expect((await call(port, { path: '/github/needed', headers: auth('folder:b'), body: '{"kind":"sign_in"}' })).status).toBe(401)

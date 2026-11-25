@@ -29,6 +29,33 @@ describe('the engine env of a folder agent', () => {
     expect(engineCredentialEnv({ CINNA_CREDENTIALS_PATH: '/stale' }, { skillRuntime: true }, dir)).toEqual({ PYTHONPATH: '/res/skill-runtime' })
   })
 
+  it('a kit agent with the GitHub endpoint gets git pointed at the gh wrapper, after the user entries; stable across turns', () => {
+    const wrapper = () => '/u/gh-shim/gh'
+    const github = { url: 'http://127.0.0.1:9/github', token: 'bearer' }
+    const base = { PATH: '/bin', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.pager', GIT_CONFIG_VALUE_0: 'cat' }
+    const env = engineCredentialEnv(base, { skillRuntime: false, githubEndpoint: github }, dir, wrapper)
+    expect(env).toEqual({
+      ...base,
+      CINNA_GITHUB_URL: github.url,
+      CINNA_GITHUB_AUTH: github.token,
+      GIT_CONFIG_COUNT: '4',
+      GIT_CONFIG_KEY_1: 'credential.https://github.com.helper',
+      GIT_CONFIG_VALUE_1: '',
+      GIT_CONFIG_KEY_2: 'credential.https://github.com.helper',
+      GIT_CONFIG_VALUE_2: "!'/u/gh-shim/gh' auth git-credential",
+      GIT_CONFIG_KEY_3: 'credential.https://github.com.useHttpPath',
+      GIT_CONFIG_VALUE_3: 'true'
+    })
+    // The next turn's env is built from the same base, or from this one: the same result.
+    expect(engineCredentialEnv(env, { skillRuntime: false, githubEndpoint: github }, dir, wrapper)).toEqual(env)
+    // No endpoint (a bare folder): no entries, and ours that an env carried go, the user's stay.
+    expect(engineCredentialEnv(base, { skillRuntime: false }, dir, wrapper)).toEqual(base)
+    expect(engineCredentialEnv(env, { skillRuntime: false }, dir, wrapper)).toEqual(base)
+    // No wrapper on disk: the endpoint, but no helper naming a missing file.
+    expect(engineCredentialEnv({ PATH: '/bin' }, { skillRuntime: false, githubEndpoint: github }, dir, () => null))
+      .toEqual({ PATH: '/bin', CINNA_GITHUB_URL: github.url, CINNA_GITHUB_AUTH: github.token })
+  })
+
   it('reads the runtime from the repo in development', () => {
     expect(skillRuntimeSourceDir()).toBe(join('/repo', 'resources', 'skill-runtime'))
     expect(withSkillRuntime({}, '/x')).toEqual({ PYTHONPATH: '/x' })

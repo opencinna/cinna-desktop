@@ -4,7 +4,8 @@
  * E2E fixture points them at fakes (`CINNA_GITHUB_WEB_URL`, `CINNA_GITHUB_API_URL`).
  *
  * Core module: no Electron. Nothing here logs; a thrown {@link GithubTransientError} means GitHub
- * could not be reached or answered 5xx / unreadable, never a refusal.
+ * could not be reached, did not answer within {@link GITHUB_HTTP_TIMEOUT_MS}, or answered 5xx /
+ * unreadable, never a refusal.
  */
 import { OPENCINNA_APP, type GithubCoverage } from '../../../shared/github'
 
@@ -22,6 +23,12 @@ const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 const TOKEN_SHAPE = /^[\x21\x23-\x5b\x5d-\x7e]{1,512}$/
 const LOGIN_SHAPE = /^[A-Za-z0-9-]{1,39}$/
 const MAX_PAGES = 50
+/**
+ * Every GitHub call gives up after this (the answer is then transient: `unavailable`). The `gh`
+ * wrapper waits 40 s for `/token`, so a hung refresh answers "try again" before curl times out,
+ * rather than reading as a sandbox that blocks the network.
+ */
+export const GITHUB_HTTP_TIMEOUT_MS = 20_000
 
 async function postForm(fetch: GithubFetch, path: string, params: Record<string, string>): Promise<Record<string, unknown>> {
   let response: Response
@@ -29,7 +36,8 @@ async function postForm(fetch: GithubFetch, path: string, params: Record<string,
     response = await fetch(`${githubWebUrl()}${path}`, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(params).toString()
+      body: new URLSearchParams(params).toString(),
+      signal: AbortSignal.timeout(GITHUB_HTTP_TIMEOUT_MS)
     })
   } catch {
     throw new GithubTransientError(null)
@@ -45,7 +53,8 @@ async function getJson(fetch: GithubFetch, url: string, token: string): Promise<
   let response: Response
   try {
     response = await fetch(url, {
-      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Cinna-Desktop' }
+      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Cinna-Desktop' },
+      signal: AbortSignal.timeout(GITHUB_HTTP_TIMEOUT_MS)
     })
   } catch {
     throw new GithubTransientError(null)

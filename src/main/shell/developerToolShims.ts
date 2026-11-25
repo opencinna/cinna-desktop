@@ -207,9 +207,11 @@ const developerToolShims = createDeveloperToolShims({
 
 /**
  * Cinna's `gh` wrapper (`ghShim.ts`): first on `PATH` on macOS and Linux,
- * always, with git's github.com credential helper pointed at it. Applied after
- * the developer-tool shims, so it stays in front of `git-shim/` and
- * `tool-shims/`, which its real-`gh` lookup skips.
+ * always (without the loopback endpoint it runs the real `gh` untouched).
+ * Applied after the developer-tool shims, so it stays in front of `git-shim/`
+ * and `tool-shims/`, which its real-`gh` lookup skips. git's github.com
+ * credential helper is pointed at it only by `engineCredentialEnv`, together
+ * with the endpoint.
  */
 const ghShim = createGhShim({
   platform: process.platform,
@@ -233,9 +235,11 @@ const ghShim = createGhShim({
  * changes it once; otherwise only the user installing a uv of their own
  * changes the result (the `UV_PYTHON_PREFERENCE` it adds goes away).
  *
- * The `gh` wrapper's directory goes first of all, and the env gains the G4
- * `GIT_CONFIG_COUNT/KEY/VALUE` entries after any it already had. A caller that
- * takes only `PATH` from a re-application keeps the entries of the first.
+ * The `gh` wrapper's directory goes first of all. No G4 `GIT_CONFIG_*` entries
+ * are added here, and any of ours already in `env` are removed: a child with no
+ * loopback endpoint (a bare agent, MCP server, Run Script, `/run:` for a
+ * non-kit agent) keeps the user's own keychain / GCM login for github.com.
+ * `engineCredentialEnv` adds them when it sets `CINNA_GITHUB_URL`/`_AUTH`.
  */
 export async function withDeveloperToolShims<T extends Record<string, string | undefined>>(env: T): Promise<T> {
   return withManagedUvFallback(await ghShim.apply(await developerToolShims.apply(env)))

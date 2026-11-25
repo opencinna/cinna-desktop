@@ -107,13 +107,17 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   })
   // Its loopback routes ride the credential token endpoint (same listener, bearer and held rule).
   for (const [path, handle] of Object.entries(githubLoopbackRoutes(githubAuthService))) serviceCredentialService.registerTokenRoute(path, handle)
-  // The managed gh (G5): a completed sign-in, or a gh wrapper call that found no gh, starts its
-  // background install when the user's PATH has no gh of its own. Nothing waits on it.
-  const installGhUnlessPresent = (): void => {
+  // The managed gh (G5): a completed sign-in starts its background install when the user's PATH
+  // has no gh of its own; a gh wrapper call that found no gh starts it outright (the wrapper's PATH
+  // is the authority) and is told whether an install is running, so it says "still installing"
+  // only then. Nothing waits on the install itself.
+  setGithubSignedInHook(() => {
     void which('gh').then((found) => { if (!found) void managedGh.ensureInstalled() })
-  }
-  setGithubSignedInHook(installGhUnlessPresent)
-  setGithubGhMissingHook(installGhUnlessPresent)
+  })
+  setGithubGhMissingHook(async () => {
+    void managedGh.ensureInstalled()
+    return managedGh.installing()
+  })
   taskRuntimeService.recover()
   registerRecoverer('a2a', a2aTurnRecoverer)
   registerRecoverer('managed', managedTurnRecoverer)

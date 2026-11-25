@@ -5,8 +5,9 @@
  * `<userData>/gh-shim/gh` is a POSIX shell script whose directory goes first on
  * the `PATH` of every child `withDeveloperToolShims` builds an environment for
  * (engines, `/run:` and kit commands, schedules, dashboard endpoints, Run
- * Script windows, stdio MCP servers), on macOS and Linux, always. On each call
- * it decides the auth:
+ * Script windows, stdio MCP servers), on macOS and Linux, always. Without the
+ * endpoint it falls through to the real `gh`, so that costs nothing. On each
+ * call it decides the auth:
  *
  * 1. With the loopback endpoint in the env (`CINNA_GITHUB_URL` and
  *    `CINNA_GITHUB_AUTH`, a kit agent's child while a turn, command or run
@@ -19,16 +20,22 @@
  * 3. Neither: it asks the app to show the row (`POST /needed`), prints the
  *    endpoint's sentence and exits 4, gh's own "authentication required" code.
  *
- * An endpoint that cannot be reached at all means a sandbox without network
- * (Codex `workspace-write` blocks loopback too): the wrapper says so and asks
- * for the command to be run again escalated, rather than letting gh report an
- * outage the agent gives up on.
+ * An endpoint that cannot be connected to at all means a sandbox without
+ * network (Codex `workspace-write` blocks loopback too): the wrapper says so
+ * and asks for the command to be run again escalated, rather than letting gh
+ * report an outage the agent gives up on. An endpoint that took the connection
+ * but did not answer in time (curl exit 28 after connecting: a slow GitHub
+ * refresh) is not a sandbox, and says so.
  *
- * git reaches the same wrapper through `gh auth git-credential`: the env gets,
- * through `GIT_CONFIG_COUNT/KEY/VALUE`, the github.com credential helper list
- * reset to empty and then set to the wrapper, plus `useHttpPath` so the
- * request carries `path=owner/repo.git`. That beats a user's osxkeychain and
- * `gh auth setup-git` helpers (P0 check 4).
+ * git reaches the same wrapper through `gh auth git-credential`: a child that
+ * carries the endpoint gets, through `GIT_CONFIG_COUNT/KEY/VALUE`, the
+ * github.com credential helper list reset to empty and then set to the
+ * wrapper, plus `useHttpPath` so the request carries `path=owner/repo.git`.
+ * That beats a user's osxkeychain and `gh auth setup-git` helpers (P0 check 4).
+ * Only such a child: `engineCredentialEnv` adds the entries together with the
+ * endpoint and strips them without it, and {@link createGhShim}'s `apply`
+ * strips them too, so a bare agent, MCP server, Run Script or `/run:` keeps
+ * the user's own keychain / GCM login for github.com.
  *
  * The real `gh` is the first `gh` on the caller's `PATH` past Cinna's own
  * directories, else the managed gh (`managedGh.ts`) once it has landed. The
@@ -54,11 +61,18 @@ export const GH_CONFIG_DIR_NAME = 'gh-config'
 export const GITHUB_HELPER_KEY = 'credential.https://github.com.helper'
 export const GITHUB_USE_HTTP_PATH_KEY = 'credential.https://github.com.useHttpPath'
 
-/** What the wrapper prints when the loopback endpoint cannot be reached (exit 4). */
+/** What the wrapper prints when the loopback endpoint cannot be connected to (exit 4). */
 export const GH_NETWORK_MESSAGE =
   'This GitHub command needs network access, which this sandbox blocks. Run the same command again with escalated permissions. It is not an internet outage.'
-/** What the wrapper prints when a token is there but no `gh` yet (exit 1). */
+/** What the wrapper prints when the endpoint took the connection but did not answer in time (exit 1). */
+export const GH_SLOW_MESSAGE = 'Cinna is taking too long to answer for GitHub. Try again in a moment.'
+/** What the wrapper prints when a token is there but no `gh` yet and the managed install is running (exit 1). */
 export const GH_INSTALLING_MESSAGE = 'Cinna is still installing gh, try again in a moment.'
+/** What the wrapper prints when a token is there, no `gh`, and no managed install is running (exit 1). */
+export const GH_NOT_INSTALLED_MESSAGE =
+  "gh isn't installed and Cinna couldn't install it. Ask the user to install the GitHub CLI from https://cli.github.com, then run this command again."
+/** curl's `--max-time` for `POST /token`: above the app's 20 s GitHub call timeout, so a slow refresh answers `unavailable` first. */
+export const GH_TOKEN_MAX_TIME_S = 40
 
 type Env = Record<string, string | undefined>
 
@@ -90,7 +104,7 @@ if [ -z "$cinna_gh" ] && [ -x "$cinna_managed" ]; then cinna_gh=$cinna_managed; 
 cinna_say() { printf '%s\n' "$1" >&2; }
 
 cinna_network() {
-  cinna_say '__NETWORK__'
+  cinna_say __NETWORK__
   exit 4
 }
 
@@ -108,15 +122,22 @@ cinna_endpoint() {
   command -v curl >/dev/null 2>&1
 }
 
-# POST $2 to the endpoint's $1 within $3 seconds. Sets cinna_status (000: nothing answered) and
-# cinna_body. The bearer reaches curl on stdin, never on its command line.
+# POST $2 to the endpoint's $1 within $3 seconds. Sets cinna_status (000: nothing answered),
+# cinna_body, and cinna_slow when curl connected but timed out (exit 28 with a connect time).
+# The bearer reaches curl on stdin, never on its command line.
 cinna_post() {
   cinna_out=$(printf 'header = "Authorization: Bearer %s"\n' "$CINNA_GITHUB_AUTH" |
     curl -sS --noproxy '*' --max-time "$3" --config - -X POST -H 'Content-Type: application/json' \
-      --data-binary "$2" -w '\n%{http_code}' "$CINNA_GITHUB_URL$1" 2>/dev/null)
-  cinna_status=@{cinna_out##*"$cinna_nl"}
+      --data-binary "$2" -w '\n%{time_connect} %{http_code}' "$CINNA_GITHUB_URL$1" 2>/dev/null)
+  cinna_rc=$?
+  cinna_tail=@{cinna_out##*"$cinna_nl"}
   cinna_body=@{cinna_out%"$cinna_nl"*}
+  cinna_status=@{cinna_tail##* }
+  cinna_slow=
   case "$cinna_status" in [1-5][0-9][0-9]) ;; *) cinna_status=000 ;; esac
+  if [ "$cinna_status" = 000 ] && [ "$cinna_rc" = 28 ]; then
+    case "@{cinna_tail% *}" in *[1-9]*) cinna_slow=1 ;; esac
+  fi
 }
 
 # A string field of the answer (its values hold no quote, backslash or newline).
@@ -194,14 +215,18 @@ cinna_repo_from_origin() {
   esac
 }
 
-# Ask for a token for repo $1 (or none). Unreachable: the sandbox sentence.
+# Ask for a token for repo $1 (or none). Connected but no answer in time: try again (exit 1).
+# Not connected at all: the sandbox sentence.
 cinna_ask() {
-  if [ -n "$1" ]; then cinna_post /token "{\"repo\":\"$1\"}" 30; else cinna_post /token '{}' 30; fi
-  [ "$cinna_status" = 000 ] && cinna_network
+  if [ -n "$1" ]; then cinna_post /token "{\"repo\":\"$1\"}" __TOKEN_MAX_TIME__; else cinna_post /token '{}' __TOKEN_MAX_TIME__; fi
+  if [ "$cinna_status" = 000 ]; then
+    if [ -n "$cinna_slow" ]; then cinna_say __SLOW__; exit 1; fi
+    cinna_network
+  fi
   return 0
 }
 
-# Tell the app what is needed ($1 kind, $2 repo or nothing). The answer does not matter.
+# Tell the app what is needed ($1 kind, $2 repo or nothing). Only gh_missing reads the answer.
 cinna_need() {
   if [ -n "$2" ]; then cinna_post /needed "{\"kind\":\"$1\",\"repo\":\"$2\"}" 10; else cinna_post /needed "{\"kind\":\"$1\"}" 10; fi
 }
@@ -280,8 +305,10 @@ cinna_ask "$cinna_repo"
 cinna_token=$(cinna_field token)
 if [ -n "$cinna_token" ]; then
   if [ -z "$cinna_gh" ]; then
+    # The app answers whether a managed gh install is running (or was just started).
     cinna_need gh_missing ''
-    cinna_say '__INSTALLING__'
+    case "$cinna_body" in *'"installing":true'*) cinna_say __INSTALLING__; exit 1 ;; esac
+    cinna_say __NO_GH__
     exit 1
   fi
   cinna_name=$(cinna_field name)
@@ -333,8 +360,11 @@ export function ghShimScript(options: { configDir: string; managedGh: string; ow
   return SCRIPT_BODY.replace('__CONFIG__', () => shellQuote(options.configDir))
     .replace('__MANAGED__', () => shellQuote(options.managedGh))
     .replace('__SKIP__', () => skip)
-    .replace('__NETWORK__', () => GH_NETWORK_MESSAGE)
-    .replace('__INSTALLING__', () => GH_INSTALLING_MESSAGE)
+    .replace('__NETWORK__', () => shellQuote(GH_NETWORK_MESSAGE))
+    .replace('__SLOW__', () => shellQuote(GH_SLOW_MESSAGE))
+    .replace('__INSTALLING__', () => shellQuote(GH_INSTALLING_MESSAGE))
+    .replace('__NO_GH__', () => shellQuote(GH_NOT_INSTALLED_MESSAGE))
+    .replaceAll('__TOKEN_MAX_TIME__', () => String(GH_TOKEN_MAX_TIME_S))
     .replaceAll('@{', '${')
 }
 
@@ -363,6 +393,59 @@ export function withGithubCredentialHelper<T extends Env>(env: T, wrapper: strin
   })
   next.GIT_CONFIG_COUNT = String(count + entries.length)
   return next as T
+}
+
+/** A helper value this module wrote: `!'<…>/gh-shim/gh' auth git-credential`, whatever the userData path. */
+function isOurHelper(value: string | undefined): boolean {
+  return value !== undefined && value.startsWith("!'") && value.endsWith(`/${GH_SHIM_DIR_NAME}/gh' auth git-credential`)
+}
+
+/**
+ * `env` without the three entries {@link withGithubCredentialHelper} appended (the reset, our
+ * helper, `useHttpPath`), the remaining entries renumbered from 0 so `GIT_CONFIG_COUNT` still
+ * matches the user's own; `GIT_CONFIG_COUNT` itself goes when nothing is left. The same object
+ * when there is nothing of ours. A child without the loopback endpoint must keep the user's own
+ * github.com helpers (osxkeychain, GCM, `gh auth setup-git`).
+ */
+export function withoutGithubCredentialHelper<T extends Env>(env: T): T {
+  const raw = env.GIT_CONFIG_COUNT?.trim()
+  const count = raw !== undefined && /^\d{1,4}$/.test(raw) ? Number(raw) : 0
+  const entries: Array<[string | undefined, string | undefined]> = []
+  for (let i = 0; i < count; i++) entries.push([env[`GIT_CONFIG_KEY_${i}`], env[`GIT_CONFIG_VALUE_${i}`]])
+  const kept: Array<[string | undefined, string | undefined]> = []
+  let removed = false
+  for (let i = 0; i < entries.length; i++) {
+    const [k0, v0] = entries[i], [k1, v1] = entries[i + 1] ?? [], [k2, v2] = entries[i + 2] ?? []
+    if (k0 === GITHUB_HELPER_KEY && v0 === '' && k1 === GITHUB_HELPER_KEY && isOurHelper(v1) && k2 === GITHUB_USE_HTTP_PATH_KEY && v2 === 'true') {
+      i += 2
+      removed = true
+      continue
+    }
+    kept.push(entries[i])
+  }
+  if (!removed) return env
+  const next: Env = { ...env }
+  for (let i = 0; i < count; i++) {
+    delete next[`GIT_CONFIG_KEY_${i}`]
+    delete next[`GIT_CONFIG_VALUE_${i}`]
+  }
+  kept.forEach(([key, value], i) => {
+    if (key !== undefined) next[`GIT_CONFIG_KEY_${i}`] = key
+    if (value !== undefined) next[`GIT_CONFIG_VALUE_${i}`] = value
+  })
+  if (kept.length > 0) next.GIT_CONFIG_COUNT = String(kept.length)
+  else delete next.GIT_CONFIG_COUNT
+  return next as T
+}
+
+/**
+ * The env of a child that carries the loopback endpoint gets the github.com helper entries,
+ * any other env loses ours: what `engineCredentialEnv` applies last. Idempotent, and the same
+ * input always gives the same output (a pool launch key built from it stays stable).
+ */
+export function githubCredentialHelperFor<T extends Env>(env: T, wrapper: string | null): T {
+  const stripped = withoutGithubCredentialHelper(env)
+  return wrapper && stripped.CINNA_GITHUB_URL && stripped.CINNA_GITHUB_AUTH ? withGithubCredentialHelper(stripped, wrapper) : stripped
 }
 
 export interface GhShimDeps {
@@ -401,23 +484,24 @@ export function createGhShim(deps: GhShimDeps) {
 
   return {
     /**
-     * `env` with the wrapper's directory first on `PATH` and git's github.com
-     * credential helper pointed at it, on macOS and Linux. Idempotent. Never
-     * throws: a wrapper that could not be written leaves `env` unchanged (a
-     * helper pointing at a missing file would break every github.com remote).
+     * `env` with the wrapper's directory first on `PATH`, on macOS and Linux,
+     * and without any github.com helper entries of ours (only
+     * `engineCredentialEnv` adds them, with the endpoint). Idempotent. Never
+     * throws: a wrapper that could not be written leaves `PATH` unchanged.
      */
     async apply<T extends Env>(env: T): Promise<T> {
       if (deps.platform !== 'darwin' && deps.platform !== 'linux') return env
+      const stripped = withoutGithubCredentialHelper(env)
       try {
         const run = queue.then(publish)
         queue = run.catch(() => undefined)
-        const wrapper = await run
+        await run
         const dir = deps.shimDir()
-        const rest = (env.PATH ?? '').split(delimiter).filter((entry) => entry !== '' && entry !== dir)
-        return withGithubCredentialHelper({ ...env, PATH: [dir, ...rest].join(delimiter) }, wrapper)
+        const rest = (stripped.PATH ?? '').split(delimiter).filter((entry) => entry !== '' && entry !== dir)
+        return { ...stripped, PATH: [dir, ...rest].join(delimiter) }
       } catch (error) {
         logger.warn('could not write the gh wrapper', { error: String(error) })
-        return env
+        return stripped
       }
     }
   }

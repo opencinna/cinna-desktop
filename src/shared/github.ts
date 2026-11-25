@@ -49,6 +49,11 @@ export interface GithubStatusDto {
   account: { login: string; state: GithubAccountState; coverage: GithubCoverage[]; coverageFetchedAt: number | null } | null
   device: GithubDeviceFlowDto | null
   needs: GithubNeedDto[]
+  /**
+   * Need keys the user dismissed (in memory, per profile): a key that left `needs` and is listed
+   * here was dismissed, not resolved. Recording the need again takes it off; sign-out empties it.
+   */
+  dismissed: string[]
 }
 
 /** What every `github:*` IPC answers: a refusal is data, since a thrown error's code never reaches the renderer. */

@@ -44,13 +44,16 @@ export function githubLoopbackRoutes(service: GithubAuthService): Record<string,
       const { grant } = result
       return ok({ token: grant.token, expires_at: grant.expiresAt === null ? null : Math.floor(grant.expiresAt / 1000), login: grant.login, name: plainText(grant.name) || grant.login, email: grant.email })
     },
-    /** `{ kind, repo? }`: nothing could authenticate (not even the user's own gh login). */
+    /**
+     * `{ kind, repo? }`: nothing could authenticate (not even the user's own gh login). `gh_missing`
+     * (a token but no gh) answers `{ ok, installing }`: whether a managed gh install is running.
+     */
     '/github/needed': async (agentId, body) => {
       const kind = body.kind
       if (typeof kind !== 'string' || !NEED_KINDS.has(kind)) {
         return { status: 422, body: { detail: { code: 'invalid_request', message: 'Expected {"kind": "sign_in" | "reconnect" | "install" | "gh_missing", "repo"?: "owner/repo"}.' } } }
       }
-      if (kind === 'gh_missing') { service.ghMissing(agentId); return ok({ ok: true }) }
+      if (kind === 'gh_missing') return ok({ ok: true, installing: await service.ghMissing(agentId) })
       const userId = service.profileForAgent(agentId)
       if (userId) await service.recordNeed(userId, kind as 'sign_in' | 'reconnect' | 'install', body.repo, agentId)
       return ok({ ok: true })

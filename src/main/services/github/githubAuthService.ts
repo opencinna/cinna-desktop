@@ -112,7 +112,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
   const profiles = new Map<string, Profile>()
   let access: GithubProfileAccess = { agentProfile: () => null, available: () => true }
   let onSignedIn: (userId: string) => void = () => {}
-  let onGhMissing: (agentId: string) => void = () => {}
+  let onGhMissing: (agentId: string) => Promise<boolean> = async () => false
 
   function profile(userId: string): Profile {
     let p = profiles.get(userId)
@@ -149,14 +149,20 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     }
   }
 
-  /** Seal and write `account` for the profile as of `gen`. Throws when storage is not secure or the profile moved on. */
+  /**
+   * Seal and write `account` for the profile as of `gen`. Throws when storage is not secure or the
+   * profile moved on. The profile object is taken before the await and compared after it: a profile
+   * removed meanwhile (its entry deleted, its gen bumped) is never re-created or written back.
+   */
   async function persist(userId: string, account: Account, gen: number): Promise<void> {
     if (!deps.keystore.secure()) throw new Error('Secure storage is unavailable. Unlock the system keychain and sign in to GitHub again.')
+    const p = profiles.get(userId)
+    const moved = (): boolean => !p || profiles.get(userId) !== p || p.gen !== gen
+    if (moved()) throw new Error('The profile changed while GitHub was signing in.')
     const sealed = await deps.keystore.encrypt(JSON.stringify(account))
-    const p = profile(userId)
-    if (p.gen !== gen) throw new Error('The profile changed while GitHub was signing in.')
+    if (moved()) throw new Error('The profile changed while GitHub was signing in.')
     deps.store.write(userId, sealed)
-    p.account = account
+    p!.account = account
   }
 
   function grantOf(a: Account & { accessToken: string }): GithubTokenGrant {
@@ -355,12 +361,13 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
   }
 
   async function status(userId: string): Promise<GithubStatusDto> {
-    if (!access.available(userId)) return { account: null, device: null, needs: [] }
+    if (!access.available(userId)) return { account: null, device: null, needs: [], dismissed: [] }
     const account = await load(userId), p = profile(userId)
     return {
       account: account ? { login: account.login, state: account.state, coverage: structuredClone(p.coverage?.installs ?? []), coverageFetchedAt: p.coverage?.fetchedAt ?? null } : null,
       device: p.device ? { ...p.device.dto } : null,
-      needs: needs.list(userId)
+      needs: needs.list(userId),
+      dismissed: needs.dismissedKeys(userId)
     }
   }
 
@@ -369,10 +376,17 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     installProfileAccess(next: GithubProfileAccess): void { access = next },
     /** Called after a sign-in completed (the managed gh install hooks here). */
     setOnSignedIn(fn: (userId: string) => void): void { onSignedIn = fn },
-    /** Called when the wrapper found no `gh` at all (the managed gh install hooks here). */
-    setOnGhMissing(fn: (agentId: string) => void): void { onGhMissing = fn },
-    ghMissing(agentId: string): void {
-      try { onGhMissing(agentId) } catch (error) { logger.warn('A gh-missing hook failed', { error: error instanceof Error ? error.message : String(error) }) }
+    /**
+     * Called when the wrapper found no `gh` at all (the managed gh install hooks here). Answers
+     * whether a managed gh install is running now, so the wrapper can tell "still installing" from
+     * "could not install".
+     */
+    setOnGhMissing(fn: (agentId: string) => Promise<boolean>): void { onGhMissing = fn },
+    async ghMissing(agentId: string): Promise<boolean> {
+      try { return (await onGhMissing(agentId)) === true } catch (error) {
+        logger.warn('A gh-missing hook failed', { error: error instanceof Error ? error.message : String(error) })
+        return false
+      }
     },
     /** The profile an agent's loopback request works for: null when none can serve it. */
     profileForAgent(agentId: string): string | null {
@@ -435,6 +449,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
       }
       if (changed) publish(userId)
     },
+    /** Hide a need's row; its key is listed in `dismissed` until the need is recorded again or sign-out. */
     dismiss(userId: string, key: string): void { if (needs.dismiss(userId, key)) publish(userId) },
 
     /** Forget the sign-in on this computer (no revoke: that needs the app's secret). */
@@ -467,5 +482,5 @@ export const githubAuthService = createGithubAuthService({
 
 /** Hook for the managed gh: a sign-in completed. */
 export function setGithubSignedInHook(fn: (userId: string) => void): void { githubAuthService.setOnSignedIn(fn) }
-/** Hook for the managed gh: the wrapper found no gh. */
-export function setGithubGhMissingHook(fn: (agentId: string) => void): void { githubAuthService.setOnGhMissing(fn) }
+/** Hook for the managed gh: the wrapper found no gh. Answers whether a managed gh install is running. */
+export function setGithubGhMissingHook(fn: (agentId: string) => Promise<boolean>): void { githubAuthService.setOnGhMissing(fn) }
