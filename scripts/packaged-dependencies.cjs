@@ -240,6 +240,13 @@ function vaultHelperGuestProblems(helper, pin) {
   return problems
 }
 
+// Whether afterPack runs for a `dir`-only build. electron-builder 26 hands afterPack an empty
+// list for `--mac dir` (its DIR_TARGET never reaches createTargets' mapper); a dmg or zip build
+// always lists its targets, and a missing list is never taken for dir-only.
+function isDirOnly(targets) {
+  return Array.isArray(targets) && targets.every((target) => target.name === 'dir')
+}
+
 function verifyVaultHelper({ appPath, arch, dirOnly, projectDir = join(__dirname, '..') }, run = runTool) {
   const helper = join(appPath, 'Contents', 'Library', 'Helpers', 'VaultHelper.app')
   const targetArch = typeof arch === 'number' ? require('builder-util').Arch[arch] : arch
@@ -381,7 +388,7 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch, targets })
       appPath: join(appOutDir, `${productFilename}.app`),
       arch,
       projectDir: packager.info.projectDir,
-      dirOnly: Array.isArray(targets) && targets.length > 0 && targets.every((target) => target.name === 'dir')
+      dirOnly: isDirOnly(targets)
     })
     const targetArch = typeof arch === 'number' ? require('builder-util').Arch[arch] : arch
     if (targetArch === 'arm64') verifyVaultAdapterTars(packager.getResourcesDir(appOutDir), packager.info.projectDir)
@@ -392,4 +399,4 @@ function afterPack({ packager, appOutDir, electronPlatformName, arch, targets })
   verifyAppContents(packager.getResourcesDir(appOutDir))
 }
 
-module.exports = { verifyVaultAdapterTar, verifyVaultAdapterTars, pinnedAdapterTarSha256, verifyAppContents, verifyExtraCaPreload, runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, verifyVaultHelper, vaultHelperProblems, vaultHelperGuestProblems, beforePack, afterPack }
+module.exports = { verifyVaultAdapterTar, verifyVaultAdapterTars, pinnedAdapterTarSha256, verifyAppContents, verifyExtraCaPreload, runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, verifySpeechHelper, verifyVaultHelper, isDirOnly, vaultHelperProblems, vaultHelperGuestProblems, beforePack, afterPack }

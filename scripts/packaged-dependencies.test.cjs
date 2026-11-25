@@ -4,7 +4,7 @@ const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 const { test } = require('node:test')
 const { spawnSync } = require('node:child_process')
-const { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack, verifyVaultHelper } = require('./packaged-dependencies.cjs')
+const { runtimePackages, canvasTargets, prepareCanvasPayload, validateCanvasPayload, beforePack, afterPack, verifyVaultHelper, isDirOnly } = require('./packaged-dependencies.cjs')
 const { checkDeadline, checkEnvironment, executableArch } = require('./check-packaged-main.cjs')
 const codexPatch = require('../src/main/agents/drivers/acp/codexAdapterPatch.json')
 const claudePatch = require('../src/main/agents/drivers/acp/claudeAdapterPatch.json')
@@ -448,4 +448,11 @@ test('afterPack requires the pinned Codex adapter tar beside the Claude one', as
   // The real source names both pins.
   assert.match(pinnedAdapterTarSha256(join(__dirname, '..'), 'codex'), /^[0-9a-f]{64}$/)
   assert.notEqual(pinnedAdapterTarSha256(join(__dirname, '..'), 'codex'), pinnedAdapterTarSha256(join(__dirname, '..'), 'claude'))
+})
+
+test('isDirOnly: --mac dir\'s empty target list is dir-only; a dmg/zip list or a missing list is not', () => {
+  assert.equal(isDirOnly([]), true)
+  assert.equal(isDirOnly([{ name: 'dir' }]), true)
+  assert.equal(isDirOnly([{ name: 'dmg' }, { name: 'zip' }]), false)
+  assert.equal(isDirOnly(undefined), false)
 })
