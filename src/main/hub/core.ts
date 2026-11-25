@@ -51,6 +51,9 @@ import { prewarm, prewarmState, uvPrewarm } from '../services/localAgents/uvPrew
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { agentRepo } from '../db/agents'
 import { vaultService } from '../vault/vaultService'
+import { githubAuthService } from '../services/github/githubAuthService'
+import { githubLoopbackRoutes } from '../services/github/githubLoopback'
+import { userRepo } from '../db/users'
 
 /**
  * Whether this computer has local agents to pre-warm uv and Python for: an
@@ -88,6 +91,20 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   // A refused refresh clears the profile's tokens mid-session: its account stops being eligible now,
   // so its credentials are withdrawn and its slots read as held, as they would after a restart.
   onCinnaTokensCleared(() => { void serviceCredentialService.refreshAccounts() })
+  // GitHub (OpenCinna) sign-in: folder agents are shared by every profile, so an agent's loopback
+  // request works for the profile active now. A profile that is not activated, gone, or password
+  // protected and not unlocked this session serves no token (the eligible-account rule).
+  githubAuthService.installProfileAccess({
+    agentProfile: () => (userActivation.isActivated() ? getProfileScopeUserId() : null),
+    available: (userId) => {
+      const user = userRepo.get(userId)
+      if (!user) return false
+      if (userActivation.isActivated() && userId === getProfileScopeUserId()) return true
+      return !user.passwordHash || userActivation.isUnlocked(userId)
+    }
+  })
+  // Its loopback routes ride the credential token endpoint (same listener, bearer and held rule).
+  for (const [path, handle] of Object.entries(githubLoopbackRoutes(githubAuthService))) serviceCredentialService.registerTokenRoute(path, handle)
   taskRuntimeService.recover()
   registerRecoverer('a2a', a2aTurnRecoverer)
   registerRecoverer('managed', managedTurnRecoverer)

@@ -17,6 +17,7 @@ import { AuthError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { desktopFeatures } from '../host/desktopFeatures'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
+import { githubAuthService } from './github/githubAuthService'
 
 const logger = createLogger('auth')
 
@@ -557,6 +558,8 @@ export const authService = {
     // instead of holding by accident of how ids are minted. The case where it
     // does matter is `registerCinna`'s rebind, which keeps the id.
     taskSyncService.resetCursors(input.userId)
+    // Its GitHub sign-in row went with `deleteWithCascade`; drop what memory holds for it.
+    githubAuthService.profileRemoved(input.userId)
     // The deleted profile's account leaves the eligible credential set.
     void serviceCredentialService.refreshAccounts()
 

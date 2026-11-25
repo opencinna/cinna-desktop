@@ -17,7 +17,7 @@ import { createLocalScheduleScheduler } from '../localScheduleScheduler'
 import { rememberCredentialSecrets } from '../../security/serviceCredentialRedaction'
 import { checkCredentialPaths, collectOrphanBareCredentials, compareGeneration, renderFiles, writeCredentials } from './files'
 import { serviceCredentialCloud } from './cloud'
-import { createCredentialTokenServer, type CredentialTokenAnswer, type CredentialTokenRequest } from './tokenServer'
+import { createCredentialTokenServer, type CredentialTokenAnswer, type CredentialTokenRequest, type TokenServerRoute } from './tokenServer'
 import type { CinnaSendResult } from '../cinna-http'
 import { localBundle, validateLocal } from './transforms'
 import { autoMatch, isDeadKey, slotCandidates, type SlotSpec } from './slotMatch'
@@ -1373,6 +1373,23 @@ async function tokenEndpointFor(a: LocalAgentDto): Promise<{ url: string; token:
   }
 }
 
+/**
+ * The GitHub endpoint for a kit agent (every one, Google record or not): the listener's `/github`
+ * base and the agent's bearer, or undefined when the listener cannot start.
+ */
+async function githubEndpointFor(a: LocalAgentDto): Promise<{ url: string; token: string } | undefined> {
+  if (a.skills === undefined) return undefined
+  try {
+    const origin = await tokenServer.start()
+    const token = tokenServer.bearer(a.id)
+    rememberCredentialSecrets({ token })
+    return { url: `${origin}/github`, token }
+  } catch (error) {
+    logger.warn('The credential token endpoint could not start', { agentId: a.id, error: error instanceof Error ? error.message : String(error) })
+    return undefined
+  }
+}
+
 export const serviceCredentialService = {
   /**
    * What the scanner judges a folder's slots by: every available attachment with its state, and each
@@ -1684,12 +1701,13 @@ export const serviceCredentialService = {
   /**
    * A turn's or command's credentials: the files written (or removed), and whether the folder carries
    * skills (only a kit agent's DTO has `skills`), whose scripts get the skill runtime on `PYTHONPATH`.
+   * A kit agent also gets the GitHub endpoint (`githubEndpoint`) on the same listener and bearer.
    */
   async prepare(id: string) {
     // A vault agent's credentials go into the vault (`secrets.put`), never into a file here.
     refuseVaultAgent(id, 'Credential files')
-    const a = agent(id), prepared = await materialize(a, true), tokenEndpoint = await tokenEndpointFor(a)
-    return { ...prepared, skillRuntime: a.skills !== undefined, ...(tokenEndpoint ? { tokenEndpoint } : {}) }
+    const a = agent(id), prepared = await materialize(a, true), tokenEndpoint = await tokenEndpointFor(a), githubEndpoint = await githubEndpointFor(a)
+    return { ...prepared, skillRuntime: a.skills !== undefined, ...(tokenEndpoint ? { tokenEndpoint } : {}), ...(githubEndpoint ? { githubEndpoint } : {}) }
   },
   /**
    * Agent Vault: the credential attachments of a folder agent as its desktop state holds them, captured
@@ -1785,6 +1803,8 @@ export const serviceCredentialService = {
     if (!flow || flow.dto.id !== flowId) return
     stopFlow(flow); flows.delete(id); changed()
   },
+  /** Another core service's route on the token endpoint (same bearer, held rule and checks), wired by the hub. */
+  registerTokenRoute(path: string, handle: TokenServerRoute): void { tokenServer.route(path, handle) },
   /** Shutdown: the token endpoint stops listening and forgets every bearer. */
   closeTokenServer(): Promise<void> { return tokenServer.close() },
   /** Supplies the session unlock state; installed by the activation owner. */

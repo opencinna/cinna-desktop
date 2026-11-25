@@ -1850,6 +1850,31 @@ except CredentialRefreshError as e:
       expect(engineCredentialEnv({}, { skillRuntime: false, tokenEndpoint: endpoint })).toEqual({ CINNA_CREDENTIALS_TOKEN_URL: endpoint.url, CINNA_CREDENTIALS_TOKEN: endpoint.token })
     })
 
+    it('gives every kit agent the GitHub endpoint on the same listener and bearer, a bare one none, and serves registered routes only while held', async () => {
+      // A kit agent's DTO carries `skills` (none yet); a bare folder's does not.
+      const kit = Object.assign(addAgent('kit'), { skills: [] }), bare = addAgent('bare')
+      const p = await prepare(kit.id)
+      // No Google record: no Google token endpoint, but the GitHub one all the same.
+      expect(p.tokenEndpoint).toBeUndefined()
+      expect(p.githubEndpoint?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/github$/)
+      expect((await prepare(bare.id)).githubEndpoint).toBeUndefined()
+      const github = p.githubEndpoint!
+      expect(engineCredentialEnv({ CINNA_GITHUB_URL: 'stale', CINNA_GITHUB_AUTH: 'stale' }, { skillRuntime: false })).toEqual({})
+      expect(engineCredentialEnv({}, { skillRuntime: false, githubEndpoint: github })).toEqual({ CINNA_GITHUB_URL: github.url, CINNA_GITHUB_AUTH: github.token })
+      expect(redactCredentialText(`auth ${github.token}`)).toBe('auth ***REDACTED***')
+      const seen: [string, unknown][] = []
+      service.registerTokenRoute('/github/token', async (agentId, body) => { seen.push([agentId, body]); return { status: 200, body: { needed: 'sign_in', message: 'x' } } })
+      const call = () => fetch(`${github.url}/token`, { method: 'POST', headers: { authorization: `Bearer ${github.token}`, 'content-type': 'application/json' }, body: '{"repo":"a/b"}' })
+      expect((await call()).status).toBe(401) // no turn holds the agent
+      const turn = turnLock.acquireShared(kit.id, 'running-turn')
+      try {
+        const res = await call()
+        expect(res.status).toBe(200)
+        expect(res.headers.get('cache-control')).toBe('no-store')
+        expect(seen).toEqual([[kit.id, { repo: 'a/b' }]])
+      } finally { turn.release() }
+    })
+
     it('refuses a wrong bearer and an ended turn with 401, and an unattached or non-Google record with 404', async () => {
       world.metadata = [gmail(), gmail('g-2'), plain()]
       const { a, endpoint } = await ready(world.metadata, ['g-1', 'plain'])

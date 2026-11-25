@@ -1,0 +1,265 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { API, WEB, connected, makeService } from './testSupport/fakeGithub'
+import { MIN_TOKEN_TTL_MS } from './githubAuthService'
+import { clearCredentialRedaction, redactCredentialText } from '../../security/serviceCredentialRedaction'
+
+const U = 'user-1'
+const DEVICE = { device_code: 'dc_secret_device_code_0001', user_code: 'ABCD-1234', verification_uri: `${WEB}/login/device`, expires_in: 900, interval: 5 }
+const TOKENS = { access_token: 'ghu_access_NEW_1111111111', expires_in: 28800, refresh_token: 'ghr_refresh_NEW_111111111', refresh_token_expires_in: 15897600, token_type: 'bearer', scope: '' }
+const USER = { login: 'alice', id: 42, name: 'Alice\n"Doe"\\' }
+
+beforeEach(() => {
+  process.env.CINNA_GITHUB_WEB_URL = WEB
+  process.env.CINNA_GITHUB_API_URL = API
+})
+afterEach(() => {
+  delete process.env.CINNA_GITHUB_WEB_URL
+  delete process.env.CINNA_GITHUB_API_URL
+  clearCredentialRedaction()
+})
+
+function install(id: number, login: string, type: 'User' | 'Organization', selection: 'all' | 'selected', ownerId = id * 10) {
+  return { id, account: { login, type, id: ownerId }, repository_selection: selection }
+}
+
+describe('device flow', () => {
+  it('polls at the interval, widens it on slow_down, then persists the account before publishing it', async () => {
+    const t = makeService()
+    const signedIn = vi.fn()
+    t.service.setOnSignedIn(signedIn)
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: { error: 'authorization_pending' } }, { json: { error: 'slow_down' } }, { json: { error: 'authorization_pending' } }, { json: TOKENS })
+    t.github.on('/user', { json: USER })
+    t.github.on('/user/installations?per_page=100', { json: { total_count: 0, installations: [] } })
+
+    const dto = await t.service.startDeviceFlow(U)
+    expect(dto).toEqual({ userCode: 'ABCD-1234', verificationUri: `${WEB}/login/device`, expiresAt: expect.any(Number), state: 'pending' })
+    // A second start while it runs answers the same flow.
+    expect((await t.service.startDeviceFlow(U)).userCode).toBe('ABCD-1234')
+    expect(t.github.count('/login/device/code')).toBe(1)
+
+    await vi.waitFor(() => expect(signedIn).toHaveBeenCalledWith(U))
+    expect(t.waits).toEqual([5000, 5000, 10000, 10000])
+    const poll = t.github.requests.find(r => r.url.endsWith('/login/oauth/access_token'))!
+    expect(Object.fromEntries(poll.form!)).toEqual({ client_id: 'Iv23liFC50gymAL3DTF1', device_code: DEVICE.device_code, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' })
+    const stored = t.storage.record(U)
+    expect(stored).toMatchObject({ accessToken: TOKENS.access_token, refreshToken: TOKENS.refresh_token, login: 'alice', id: 42, name: 'AliceDoe', email: '42+alice@users.noreply.github.com', state: 'connected' })
+    // The start published before anything was stored; every publish after it sees the stored account.
+    expect(t.published[0]).toEqual({ userId: U, stored: false })
+    expect(t.published.slice(1).every(p => p.stored)).toBe(true)
+    expect(t.published.length).toBeGreaterThan(1)
+    const status = await t.service.status(U)
+    expect(status).toEqual({ account: { login: 'alice', state: 'connected', coverage: [], coverageFetchedAt: expect.any(Number) }, device: null, needs: [] })
+    expect(JSON.stringify(status)).not.toMatch(/ghu_|ghr_|noreply/)
+    // Nothing secret reaches the log, and the redaction registry knows every secret.
+    for (const secret of [TOKENS.access_token, TOKENS.refresh_token, DEVICE.device_code, stored.email]) expect(t.log.text()).not.toContain(secret)
+    for (const secret of [TOKENS.access_token, TOKENS.refresh_token, DEVICE.device_code]) expect(redactCredentialText(`x ${secret}`)).toBe('x ***REDACTED***')
+  })
+
+  it.each([
+    ['expired_token', 'expired'],
+    ['access_denied', 'denied'],
+    ['unsupported_grant_type', 'error']
+  ])('ends the flow on %s as %s, storing nothing', async (code, state) => {
+    const t = makeService()
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: { error: 'authorization_pending' } }, { json: { error: code } })
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(async () => expect((await t.service.status(U)).device?.state).toBe(state))
+    expect(t.storage.rows.size).toBe(0)
+    expect((await t.service.status(U)).account).toBeNull()
+    // A new start begins a new flow.
+    await t.service.startDeviceFlow(U)
+    expect(t.github.count('/login/device/code')).toBe(2)
+  })
+
+  it('stops polling on cancel', async () => {
+    const t = makeService()
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: { error: 'authorization_pending' } })
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(() => expect(t.github.count('/login/oauth/access_token')).toBeGreaterThan(2))
+    t.service.cancelDeviceFlow(U)
+    const polls = t.github.count('/login/oauth/access_token')
+    await new Promise(r => setTimeout(r, 20))
+    expect(t.github.count('/login/oauth/access_token')).toBeLessThanOrEqual(polls + 1)
+    expect((await t.service.status(U)).device).toBeNull()
+  })
+
+  it('refuses to start for a profile that cannot serve', async () => {
+    const t = makeService({ access: { agentProfile: () => U, available: () => false } })
+    await expect(t.service.startDeviceFlow(U)).rejects.toThrow(/locked/)
+    expect(t.github.requests).toHaveLength(0)
+  })
+})
+
+describe('token and refresh', () => {
+  it('hands out a token with ten minutes or more left without refreshing, and never refreshes one without expiry', async () => {
+    const t = makeService()
+    t.storage.seed(U, connected({ expiresAt: Date.now() + MIN_TOKEN_TTL_MS + 60_000 }))
+    expect(await t.service.token(U)).toEqual({ kind: 'token', grant: { token: 'ghu_access_OLD_0000000000', expiresAt: expect.any(Number), login: 'alice', name: 'Alice "A" Doe', email: '42+alice@users.noreply.github.com' } })
+    t.storage.seed('user-2', connected({ expiresAt: null, refreshToken: null, refreshExpiresAt: null }))
+    expect((await t.service.token('user-2')).kind).toBe('token')
+    expect(t.github.requests).toHaveLength(0)
+  })
+
+  it('refreshes single-flight below ten minutes and persists the rotated pair before answering anyone', async () => {
+    const t = makeService()
+    t.storage.seed(U, connected({ expiresAt: Date.now() + MIN_TOKEN_TTL_MS - 1000 }))
+    t.github.on('/login/oauth/access_token', { json: TOKENS })
+    // Read the stored record first, then hold the sealing of the refreshed pair.
+    await t.service.status(U)
+    const release = t.storage.hold()
+    let answered = 0
+    const first = t.service.token(U).then(r => { answered++; return r })
+    const second = t.service.token(U).then(r => { answered++; return r })
+    await vi.waitFor(() => expect(t.github.count('/login/oauth/access_token')).toBe(1))
+    await new Promise(r => setTimeout(r, 20))
+    expect(answered).toBe(0)
+    expect(t.storage.record(U).accessToken).toBe('ghu_access_OLD_0000000000')
+    release()
+    const [a, b] = await Promise.all([first, second])
+    expect(t.storage.record(U)).toMatchObject({ accessToken: TOKENS.access_token, refreshToken: TOKENS.refresh_token, state: 'connected' })
+    expect(a).toEqual(b)
+    expect(a).toMatchObject({ kind: 'token', grant: { token: TOKENS.access_token } })
+    expect(t.github.count('/login/oauth/access_token')).toBe(1)
+    const req = t.github.requests[0]
+    expect(Object.fromEntries(req.form!)).toEqual({ client_id: 'Iv23liFC50gymAL3DTF1', grant_type: 'refresh_token', refresh_token: 'ghr_refresh_OLD_000000000' })
+    expect(req.form!.has('client_secret')).toBe(false)
+    // Fresh now: the next call does not refresh.
+    await t.service.token(U)
+    expect(t.github.count('/login/oauth/access_token')).toBe(1)
+    for (const secret of ['ghu_access_OLD_0000000000', 'ghr_refresh_OLD_000000000', TOKENS.access_token, TOKENS.refresh_token]) expect(t.log.text()).not.toContain(secret)
+  })
+
+  it.each(['incorrect_client_credentials', 'bad_refresh_token'])('turns %s into Reconnect: expired, tokens dropped, a reconnect need', async (code) => {
+    const t = makeService()
+    t.storage.seed(U, connected({ expiresAt: Date.now() + 1000 }))
+    t.github.on('/login/oauth/access_token', { json: { error: code, error_description: 'The refresh token passed is incorrect or expired.' } })
+    expect(await t.service.token(U, 'folder:a')).toEqual({ kind: 'needed', need: 'reconnect' })
+    expect(t.storage.record(U)).toMatchObject({ accessToken: null, refreshToken: null, state: 'expired', login: 'alice' })
+    const status = await t.service.status(U)
+    expect(status.account).toMatchObject({ login: 'alice', state: 'expired' })
+    expect(status.needs).toEqual([{ key: 'account', kind: 'reconnect', agentIds: ['folder:a'] }])
+    expect(t.published.length).toBeGreaterThan(0)
+    // Later calls answer reconnect without asking GitHub again.
+    expect(await t.service.token(U)).toEqual({ kind: 'needed', need: 'reconnect' })
+    expect(t.github.count('/login/oauth/access_token')).toBe(1)
+  })
+
+  it('answers unavailable, state unchanged, when GitHub cannot be reached or answers 5xx', async () => {
+    const t = makeService()
+    t.storage.seed(U, connected({ expiresAt: Date.now() + 1000 }))
+    t.github.on('/login/oauth/access_token', new Error('ECONNRESET'), { status: 502, json: {} })
+    expect(await t.service.token(U)).toEqual({ kind: 'unavailable' })
+    expect(await t.service.token(U)).toEqual({ kind: 'unavailable' })
+    expect(t.storage.record(U)).toMatchObject({ accessToken: 'ghu_access_OLD_0000000000', state: 'connected' })
+    expect((await t.service.status(U)).needs).toEqual([])
+  })
+
+  it('answers sign_in for no record and for a profile that cannot serve', async () => {
+    let available = true
+    const t = makeService({ access: { agentProfile: () => U, available: () => available } })
+    expect(await t.service.token(U)).toEqual({ kind: 'needed', need: 'sign_in' })
+    t.storage.seed(U, connected())
+    available = false
+    expect(await t.service.token(U)).toEqual({ kind: 'needed', need: 'sign_in' })
+    expect((await t.service.status(U)).account).toBeNull()
+  })
+
+  it('signs out locally: record, coverage and needs gone, no revoke call', async () => {
+    const t = makeService()
+    t.storage.seed(U, connected())
+    await t.service.recordNeed(U, 'install', 'acme/shop', 'folder:a')
+    t.service.signOut(U)
+    expect(t.storage.rows.has(U)).toBe(false)
+    expect(await t.service.status(U)).toEqual({ account: null, device: null, needs: [] })
+    expect(t.github.requests.filter(r => r.method !== 'GET')).toHaveLength(0)
+  })
+})
+
+describe('coverage', () => {
+  function withInstallations(t: ReturnType<typeof makeService>) {
+    t.storage.seed(U, connected())
+    t.github.on('/user/installations?per_page=100', { json: { installations: [install(1, 'alice', 'User', 'all')] }, headers: { link: `<${API}/user/installations?per_page=100&page=2>; rel="next", <${API}/user/installations?per_page=100&page=2>; rel="last"` } })
+    t.github.on('/user/installations?per_page=100&page=2', { json: { installations: [install(2, 'acme', 'Organization', 'selected', 900), install(3, 'bob', 'User', 'selected', 30)] } })
+    t.github.on('/user/installations/2/repositories?per_page=100', { json: { repositories: [{ full_name: 'acme/shop' }] }, headers: { link: `<${API}/user/installations/2/repositories?per_page=100&page=2>; rel="next"` } })
+    t.github.on('/user/installations/2/repositories?per_page=100&page=2', { json: { repositories: [{ full_name: 'acme/Docs' }] } })
+    t.github.on('/user/installations/3/repositories?per_page=100', { json: { repositories: [{ full_name: 'bob/site' }] } })
+  }
+
+  it('reads every page and answers covered, repo_not_selected (with the configure page) and not_installed', async () => {
+    const t = makeService()
+    withInstallations(t)
+    expect(await t.service.coverageFor(U, 'ACME/shop')).toEqual({ answer: 'covered', installUrl: expect.any(String) })
+    expect((await t.service.coverageFor(U, 'acme/docs'))?.answer).toBe('covered')
+    expect((await t.service.coverageFor(U, 'alice/anything'))?.answer).toBe('covered')
+    expect(await t.service.coverageFor(U, 'acme/secret')).toEqual({ answer: 'repo_not_selected', installUrl: 'https://github.com/organizations/acme/settings/installations/2' })
+    expect(await t.service.coverageFor(U, 'bob/blog')).toEqual({ answer: 'repo_not_selected', installUrl: 'https://github.com/settings/installations/3' })
+    expect(await t.service.coverageFor(U, 'carol/x')).toEqual({ answer: 'not_installed', installUrl: 'https://github.com/apps/opencinna/installations/new' })
+    const status = await t.service.status(U)
+    expect(status.account!.coverage).toEqual([
+      { installationId: 1, owner: 'alice', ownerType: 'User', ownerId: 10, selection: 'all', repos: [] },
+      { installationId: 2, owner: 'acme', ownerType: 'Organization', ownerId: 900, selection: 'selected', repos: ['acme/shop', 'acme/Docs'] },
+      { installationId: 3, owner: 'bob', ownerType: 'User', ownerId: 30, selection: 'selected', repos: ['bob/site'] }
+    ])
+    expect(t.github.requests.every(r => r.auth === 'Bearer ghu_access_OLD_0000000000')).toBe(true)
+  })
+
+  it('refreshes for an uncovered repo at most once a minute', async () => {
+    let clock = 1_000_000_000_000
+    const t = makeService({ now: () => clock })
+    withInstallations(t)
+    t.storage.seed(U, connected({ expiresAt: null }))
+    await t.service.coverageFor(U, 'carol/x')
+    await t.service.coverageFor(U, 'carol/x')
+    await t.service.coverageFor(U, 'acme/shop')
+    expect(t.github.count('/user/installations?per_page=100&page=2')).toBe(1)
+    clock += 61_000
+    await t.service.coverageFor(U, 'carol/x')
+    expect(t.github.count('/user/installations?per_page=100&page=2')).toBe(2)
+  })
+})
+
+describe('needs', () => {
+  it('dedupes per profile and per owner, merges repos and agents, and self-clears', async () => {
+    const t = makeService()
+    // Signed out: an install report becomes the account need.
+    await t.service.recordNeed(U, 'install', 'acme/shop', 'folder:a')
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:b')
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:b')
+    expect((await t.service.status(U)).needs).toEqual([{ key: 'account', kind: 'sign_in', agentIds: ['folder:a', 'folder:b'] }])
+
+    t.storage.seed('user-2', connected())
+    t.github.on('/user/installations?per_page=100', { json: { installations: [install(2, 'acme', 'Organization', 'selected', 900)] } })
+    t.github.on('/user/installations/2/repositories?per_page=100', { json: { repositories: [{ full_name: 'acme/other' }] } }, { json: { repositories: [{ full_name: 'acme/shop' }, { full_name: 'acme/docs' }] } })
+    await t.service.checkAgain('user-2')
+    await t.service.recordNeed('user-2', 'install', 'acme/shop.git', 'folder:a')
+    await t.service.recordNeed('user-2', 'install', 'Acme/docs', 'folder:b')
+    await t.service.recordNeed('user-2', 'install', 'acme/shop', 'folder:a')
+    await t.service.recordNeed('user-2', 'install', 'not a repo', 'folder:a')
+    // Signed in: a stale sign-in report records nothing.
+    await t.service.recordNeed('user-2', 'sign_in', undefined, 'folder:a')
+    expect((await t.service.status('user-2')).needs).toEqual([
+      { key: 'install:acme', kind: 'install', owner: 'acme', repos: ['acme/shop', 'Acme/docs'], installUrl: 'https://github.com/organizations/acme/settings/installations/2', agentIds: ['folder:a', 'folder:b'] }
+    ])
+    // Check again finds both repositories covered now: the need clears itself.
+    await t.service.checkAgain('user-2')
+    expect((await t.service.status('user-2')).needs).toEqual([])
+
+    t.service.dismiss(U, 'account')
+    expect((await t.service.status(U)).needs).toEqual([])
+  })
+
+  it('a completed sign-in clears the account need', async () => {
+    const t = makeService()
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:a')
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: TOKENS })
+    t.github.on('/user', { json: USER })
+    t.github.on('/user/installations?per_page=100', { json: { installations: [] } })
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(async () => expect((await t.service.status(U)).account?.state).toBe('connected'))
+    expect((await t.service.status(U)).needs).toEqual([])
+  })
+})

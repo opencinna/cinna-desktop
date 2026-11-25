@@ -66,7 +66,7 @@ const logger = createLogger('local-agent-command')
  * `PYTHONPATH` — the same env its engine gets, so a kit command or scheduled run that calls a
  * skill script finds `core.cinna_api`.
  */
-let prepareCredentials: (agentId: string) => Promise<{ path?: string; skillRuntime?: boolean; tokenEndpoint?: { url: string; token: string } }> = async () => ({})
+let prepareCredentials: (agentId: string) => Promise<{ path?: string; skillRuntime?: boolean; tokenEndpoint?: { url: string; token: string }; githubEndpoint?: { url: string; token: string } }> = async () => ({})
 export function installCommandCredentialPreparation(prepare: typeof prepareCredentials): void { prepareCredentials = prepare }
 
 /**
@@ -300,7 +300,7 @@ function execute(
 export async function agentCommandEnv(agentId: string): Promise<NodeJS.ProcessEnv> {
   const env = await withDeveloperToolShims(shellEnvForChild(await getShellEnv()))
   const prepared = await prepareCredentials(agentId)
-  return engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true, tokenEndpoint: prepared.tokenEndpoint })
+  return engineCredentialEnv(env, { path: prepared.path, skillRuntime: prepared.skillRuntime === true, tokenEndpoint: prepared.tokenEndpoint, githubEndpoint: prepared.githubEndpoint })
 }
 
 /** {@link execute} for another runner in core (dashboard endpoints); outcomes are unredacted. */

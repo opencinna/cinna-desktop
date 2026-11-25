@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { getDb } from './client'
-import { serviceCredentials } from './schema'
+import { serviceCredentials, appSettings } from './schema'
+import { GITHUB_ACCOUNT_KEY_PREFIX } from './githubAccounts'
 import {
   users,
   chats,
@@ -191,6 +192,8 @@ export const userRepo = {
       tx.delete(managedOverrides).where(eq(managedOverrides.userId, id)).run()
       // Dismissed Inbox cards: keyed by profile, no FK.
       tx.delete(inboxDismissals).where(eq(inboxDismissals.userId, id)).run()
+      // The profile's OpenCinna GitHub sign-in (an `app_settings` row, no FK).
+      tx.delete(appSettings).where(eq(appSettings.key, `${GITHUB_ACCOUNT_KEY_PREFIX}${id}`)).run()
       tx.delete(users).where(eq(users.id, id)).run()
     })
   },

@@ -99,18 +99,25 @@ export function withSkillRuntime(env: Record<string, string>, dir: string): Reco
  * With a Google record attached (`tokenEndpoint`), `CINNA_CREDENTIALS_TOKEN_URL` (the base the skill
  * runtime appends `/{id}/access-token` to) and `CINNA_CREDENTIALS_TOKEN` (the agent's bearer for it);
  * inherited values are always dropped first.
+ *
+ * For a kit agent (`githubEndpoint`), `CINNA_GITHUB_URL` (the `/github` base of the same listener) and
+ * `CINNA_GITHUB_AUTH` (the same bearer), which Cinna's `gh` wrapper calls. Not `…_TOKEN`: Codex's
+ * default shell environment policy drops variables whose names hold KEY, SECRET or TOKEN.
  */
 export function engineCredentialEnv(
   base: Record<string, string>,
-  prepared: { path?: string; skillRuntime: boolean; tokenEndpoint?: { url: string; token: string } },
+  prepared: { path?: string; skillRuntime: boolean; tokenEndpoint?: { url: string; token: string }; githubEndpoint?: { url: string; token: string } },
   runtimeDir: () => string | null = ensureSkillRuntime
 ): Record<string, string> {
   const env = { ...base }
   delete env.CINNA_CREDENTIALS_PATH
   delete env.CINNA_CREDENTIALS_TOKEN_URL
   delete env.CINNA_CREDENTIALS_TOKEN
+  delete env.CINNA_GITHUB_URL
+  delete env.CINNA_GITHUB_AUTH
   if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
   if (prepared.tokenEndpoint) { env.CINNA_CREDENTIALS_TOKEN_URL = prepared.tokenEndpoint.url; env.CINNA_CREDENTIALS_TOKEN = prepared.tokenEndpoint.token }
+  if (prepared.githubEndpoint) { env.CINNA_GITHUB_URL = prepared.githubEndpoint.url; env.CINNA_GITHUB_AUTH = prepared.githubEndpoint.token }
   const dir = prepared.skillRuntime ? runtimeDir() : null
   return dir ? withSkillRuntime(env, dir) : env
 }

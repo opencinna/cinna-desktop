@@ -5,7 +5,9 @@
  *
  * Its own listener on 127.0.0.1, started on first need and kept for the app session, so the
  * `CINNA_CREDENTIALS_TOKEN_URL` an engine was launched with stays valid while the engine is pooled.
- * One route, `POST /credentials/{id}/access-token`; everything else is 404. The Host header must
+ * Its own route, `POST /credentials/{id}/access-token`, plus the exact paths other core services
+ * register through {@link CredentialTokenServer.route} (the hub wires them, so this module imports
+ * none of them); everything else is 404. The Host header must
  * name this listener and any request with an Origin header is refused: browsers have no reason
  * to call it. The bearer is per agent, random, minted once per app session (an engine process
  * is pooled across turns and its env is part of its identity, so a per-turn bearer would respawn
@@ -20,6 +22,11 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 export interface CredentialTokenRequest { agentId: string; credentialId: string; minTtl: number; knownExpiresAt: number | null }
 /** What to answer: the status and JSON body as they go out, and Core's `Retry-After` when it sent one. */
 export interface CredentialTokenAnswer { status: number; body: unknown; retryAfter?: string | null }
+/**
+ * A registered route: the agent the bearer belongs to (held now) and the request's JSON object
+ * (`{}` for an empty body). Same checks as the token route before it is called.
+ */
+export type TokenServerRoute = (agentId: string, body: Record<string, unknown>) => Promise<{ status: number; body: unknown }>
 export interface CredentialTokenHandler {
   /** Whether the agent may get a token right now (a turn, command or scheduled run holds it). */
   live(agentId: string): boolean
@@ -66,9 +73,17 @@ export function parseTokenBody(text: string): { minTtl: number; knownExpiresAt: 
   return { minTtl: Math.max(0, Math.min(Math.trunc(minTtl), MAX_MIN_TTL)), knownExpiresAt: known === null ? null : Math.trunc(known) }
 }
 
+/** A JSON object body (`{}` when empty), or null. */
+function parseObject(text: string): Record<string, unknown> | null {
+  let value: unknown
+  try { value = text.trim() === '' ? {} : JSON.parse(text) } catch { return null }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
 export function createCredentialTokenServer(handler: CredentialTokenHandler, onListenerError: (error: unknown) => void = () => {}) {
   /** Per agent, for the app session. Never written anywhere but the engine's env. */
   const bearers = new Map<string, Buffer>()
+  const routes = new Map<string, TokenServerRoute>()
   let listener: Server | undefined, starting: Promise<string> | undefined, origin = '', port = 0
 
   /** The agent whose bearer this is, compared in constant time per agent. */
@@ -88,8 +103,9 @@ export function createCredentialTokenServer(handler: CredentialTokenHandler, onL
       refuse(refusal(403, 'forbidden', 'Forbidden origin or host.'))
       return
     }
-    const match = request.method === 'POST' ? ROUTE.exec(request.url ?? '') : null
-    if (!match) { refuse(refusal(404, 'not_found', 'Not found.')); return }
+    const extra = request.method === 'POST' ? routes.get(request.url ?? '') : undefined
+    const match = request.method === 'POST' && !extra ? ROUTE.exec(request.url ?? '') : null
+    if (!match && !extra) { refuse(refusal(404, 'not_found', 'Not found.')); return }
     const agentId = agentOf(request.headers.authorization)
     if (!agentId || !handler.live(agentId)) {
       refuse(refusal(401, 'unauthorized', 'This token is not valid now.'))
@@ -97,12 +113,23 @@ export function createCredentialTokenServer(handler: CredentialTokenHandler, onL
     }
     const text = await readBody(request)
     if (text === null) { refuse(refusal(413, 'invalid_request', 'Request body too large.')); return }
+    if (extra) {
+      const json = parseObject(text)
+      if (!json) { send(response, refusal(422, 'invalid_request', 'Expected a JSON object.')); return }
+      send(response, await extra(agentId, json))
+      return
+    }
     const body = parseTokenBody(text)
     if (!body) { send(response, refusal(422, 'invalid_request', 'Expected {"min_ttl": <seconds>, "known_expires_at": <epoch seconds | null>}.')); return }
-    send(response, await handler.issue({ agentId, credentialId: match[1], ...body }))
+    send(response, await handler.issue({ agentId, credentialId: match![1], ...body }))
   }
 
   return {
+    /** Answer `POST <path>` (exact, no query) with `handle`. A path registered again replaces the handler. */
+    route(path: string, handle: TokenServerRoute): void {
+      if (!/^\/[A-Za-z0-9/_-]+$/.test(path) || ROUTE.test(path)) throw new Error(`Invalid token server route: ${path}`)
+      routes.set(path, handle)
+    },
     /** The agent's bearer, minted on first use and kept for the app session. */
     bearer(agentId: string): string {
       let bearer = bearers.get(agentId)

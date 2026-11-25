@@ -115,6 +115,15 @@ describe('deleteWithCascade', () => {
     expect(row).toEqual({ user_id: KEEPER })
   })
 
+  it('takes the profile’s GitHub sign-in with it, and leaves another profile’s alone', async () => {
+    const { githubAccountRepo } = await import('./githubAccounts')
+    githubAccountRepo.write(USER, 'sealed-a')
+    githubAccountRepo.write(KEEPER, 'sealed-b')
+    userRepo.deleteWithCascade(USER)
+    expect(githubAccountRepo.read(USER)).toBeNull()
+    expect(githubAccountRepo.read(KEEPER)).toBe('sealed-b')
+  })
+
   it('takes the profile’s dismissed Inbox cards with it, and leaves another profile’s alone', async () => {
     const { inboxDismissalRepo } = await import('./inboxDismissals')
     inboxDismissalRepo.put(USER, 'skill_disconnected', 'a')
