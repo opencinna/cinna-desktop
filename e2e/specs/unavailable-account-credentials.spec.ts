@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, answerAgentsFolder, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
-import { liveCinnaConfig, preflight, signIn, type LiveCinnaConfig } from '../fixtures/liveCinna'
+import { approveDesktopAuth, liveCinnaConfig, preflight, signIn, type LiveCinnaConfig } from '../fixtures/liveCinna'
 import { mintDesktopTokens, type SharingPerson, type TeamFixtureBase } from '../fixtures/liveTeamSharing'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
 import type { AgentRootDto, LocalAgentDto } from '../../src/shared/localAgents'
@@ -35,10 +35,14 @@ import type { AgentRootDto, LocalAgentDto } from '../../src/shared/localAgents'
  * Each test: a sandbox profile linked to Alicia with desktop tokens minted through
  * core's real desktop OAuth (`mintDesktopTokens`), kit agents whose manifest
  * declares a slot that credential fills, the credential attached and delivered while
- * she is eligible, then she becomes unavailable (logged out, locked, or signed out
- * through the menu, which deletes the profile) and the agent is looked at from the
- * guest profile. A logout clears her credential cache, so a held slot is matched only
- * by what main recorded for it while she was eligible.
+ * she is eligible, then she becomes unavailable and the agent is looked at from the
+ * guest profile: signed out through the menu's Sign Out with "Delete data from this
+ * device" off (the profile stays, its tokens are cleared), locked, or signed out with
+ * the switch on (the profile is deleted). A sign-out clears her credential cache, so a
+ * held slot is matched only by what main recorded for it while she was eligible.
+ * Switching back to the kept profile opens "Sign in to Cinna"; its Sign in is the real
+ * desktop OAuth, with `shell.openExternal` recorded and the browser's approve click
+ * done over core's consent API as her (`approveDesktopAuth`).
  *
  * Not proven here: Re-authenticate (the current profile's expired session) and a
  * profile rebound to another account (`unknown`), the skill-slot side of held slots,
@@ -154,12 +158,55 @@ async function arrange(cinna: CinnaApp, fake: ScriptAcpEngine, agents: { name: s
   return { userId, agents: made }
 }
 
-/** Log Alicia out (no menu item does this; the IPC is the app's own `auth:logout`) and hydrate the guest. */
-async function logOut(cinna: CinnaApp): Promise<void> {
-  await cinna.page.evaluate(() => window.api.auth.logout())
-  await cinna.page.reload()
-  await cinna.page.getByRole('button', { name: 'Chats', exact: true }).waitFor()
-  expect((await cinna.page.evaluate(() => window.api.auth.getCurrent()))?.id).toBe('__default__')
+const currentId = async (cinna: CinnaApp): Promise<string | undefined> => (await cinna.page.evaluate(() => window.api.auth.getCurrent()))?.id
+
+/**
+ * The menu's Sign Out (the title button is the profile's full name, then the dialog's own `Sign
+ * Out`), with "Delete data from this device" as `deleteData` leaves it: off keeps the profile and
+ * clears its tokens (`auth:logout { userId }`), on deletes the profile. Guest is current after it.
+ */
+async function signOutThroughMenu(cinna: CinnaApp, deleteData: boolean): Promise<void> {
+  const page = cinna.page
+  const name = person!.name
+  await page.reload()
+  await page.getByTitle(name, { exact: true }).click()
+  await page.getByRole('button', { name: 'Sign Out', exact: true }).click()
+  await expect(page.getByText(`Sign Out — ${name}`, { exact: true })).toBeVisible()
+  const toggle = page.getByRole('switch', { name: 'Delete data from this device', exact: true })
+  await expect(toggle).toHaveAttribute('aria-checked', 'true')
+  if (!deleteData) {
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+  }
+  await page.getByRole('button', { name: 'Sign Out', exact: true }).click()
+  await expect(page.getByText(`Sign Out — ${name}`, { exact: true })).toHaveCount(0)
+  await expect.poll(() => currentId(cinna)).toBe('__default__')
+}
+
+/** Sign Out with the switch off: the profile stays, signed out, with no tokens. */
+async function signOutKeepingData(cinna: CinnaApp, userId: string): Promise<void> {
+  await signOutThroughMenu(cinna, false)
+  const users = await cinna.page.evaluate(() => window.api.auth.listUsers())
+  expect(users.find((u) => u.id === userId)).toMatchObject({ type: 'cinna_user', hasCinnaTokens: false })
+}
+
+/**
+ * Stand in for the browser of the app's next desktop OAuth: `shell.openExternal` records the
+ * authorize URL instead of opening it. Install after the last relaunch (a relaunch drops it).
+ */
+async function recordBrowser(cinna: CinnaApp): Promise<void> {
+  await cinna.electronApp.evaluate(({ shell }) => {
+    const globals = globalThis as unknown as { __authorizeUrl?: string }
+    globals.__authorizeUrl = undefined
+    shell.openExternal = async (url: string): Promise<void> => { globals.__authorizeUrl = url }
+  })
+}
+
+/** What the user does in that browser: approve the authorization as `who` (core's real consent over the API). */
+async function approveInBrowser(cinna: CinnaApp, who: { email: string; password: string }): Promise<void> {
+  const url = (): Promise<string> => cinna.electronApp.evaluate(() => (globalThis as unknown as { __authorizeUrl?: string }).__authorizeUrl ?? '')
+  await expect.poll(url, { timeout: 30_000, message: 'the app never asked to open an authorization URL' }).not.toBe('')
+  await approveDesktopAuth({ ...(config as LiveCinnaConfig), email: who.email, password: who.password }, await url())
 }
 
 async function newChatWith(cinna: CinnaApp, agentName: string): Promise<void> {
@@ -235,11 +282,11 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
     expect({ del: del.status, after: after.status }).toEqual({ del: 200, after: 404 })
   })
 
-  test('U1 logged out: every surface names Alicia instead of a missing credential, and Switch carries the draft back to her for a turn that gets the credential', async ({ cinna }) => {
+  test('U1 signed out keeping data: every surface names Alicia instead of a missing credential, and Switch carries the draft back to her, through Sign in to Cinna, for a turn that gets the credential', async ({ cinna }) => {
     test.setTimeout(180_000)
     const c = credential!
     const { userId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Reader', slots: [{ name: SLOT, serviceUri: c.serviceUri }] }])
-    await logOut(cinna)
+    await signOutKeepingData(cinna, userId)
 
     await test.step('main holds the slot by what it recorded: her cache is gone and nothing is delivered', async () => {
       const cache = await cinna.page.evaluate((id) => window.api.serviceCredentials.list(id, 'http://localhost:8000'), userId)
@@ -281,18 +328,38 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
       await expect(page.locator('body')).not.toContainText(c.name)
     })
 
-    await test.step('Switch to Alicia with a typed message: her new-chat screen keeps the message and the agent, the row is gone', async () => {
+    await test.step('Switch to Alicia with a typed message: her signed-out profile opens "Sign in to Cinna" over the kept message and agent', async () => {
       await newChatWith(cinna, 'Held Reader')
       const page = cinna.page
       const input = page.getByRole('combobox', { name: 'Type a message...', exact: true })
       await input.fill(DRAFT)
       await statusPanel(cinna).getByRole('button', { name: `Switch to ${FIRST}`, exact: true }).click()
       await expect(page.getByTitle(person!.name, { exact: true })).toBeVisible()
-      expect((await page.evaluate(() => window.api.auth.getCurrent()))?.id).toBe(userId)
+      await expect.poll(() => currentId(cinna)).toBe(userId)
+      await expect(page.getByText('Sign in to Cinna', { exact: true })).toBeVisible()
+      await expect(page.getByText('Cinna session expired', { exact: true })).toHaveCount(0)
+      await expect(page.getByText(/is signed out on this device\./)).toHaveText(
+        `${person!.name} on localhost:8000 is signed out on this device. Sign in again to use this account's agents and credentials.`
+      )
       await expect(page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveValue(DRAFT)
       await expect(page.getByRole('button', { name: 'Agent "Held Reader" attached as a participant' })).toBeVisible()
-      await expect(page.getByText(`${FIRST} is signed out`)).toHaveCount(0)
-      await expect.poll(() => readCredentials(agent)).toContain(c.secret)
+      // Her tokens are gone: nothing is delivered until she signs in.
+      expect(readCredentials(agent)).toBe('')
+    })
+
+    await test.step('Sign in (her browser approves as her): the prompt closes, the row is gone, the credential is delivered', async () => {
+      const page = cinna.page
+      await recordBrowser(cinna)
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+      await approveInBrowser(cinna, person!)
+      await expect(page.getByText('Sign in to Cinna', { exact: true })).toHaveCount(0)
+      const users = await page.evaluate(() => window.api.auth.listUsers())
+      expect(users.find((u) => u.id === userId)).toMatchObject({ hasCinnaTokens: true })
+      await expect.poll(() => currentId(cinna)).toBe(userId)
+      await expect(page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveValue(DRAFT)
+      await expect(statusPanel(cinna).getByText(`${FIRST} is signed out`)).toHaveCount(0)
+      await expect(statusPanel(cinna).getByText(`${FIRST}’s session expired`)).toHaveCount(0)
+      await expect.poll(() => readCredentials(agent), { timeout: 30_000 }).toContain(c.secret)
     })
 
     await test.step('the next turn runs with the credential in the agent folder', async () => {
@@ -348,8 +415,8 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
   test('U3 Finish setup on a held slot reads "From Alicia", and what is typed under "Use another credential instead" is never saved once folded', async ({ cinna }) => {
     test.setTimeout(180_000)
     const c = credential!
-    const { agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Mixed', slots: [{ name: SLOT, serviceUri: c.serviceUri }, { name: 'Other API', serviceUri: `${c.serviceUri}-other` }] }])
-    await logOut(cinna)
+    const { userId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Mixed', slots: [{ name: SLOT, serviceUri: c.serviceUri }, { name: 'Other API', serviceUri: `${c.serviceUri}-other` }] }])
+    await signOutKeepingData(cinna, userId)
     await newChatWith(cinna, 'Held Mixed')
     const page = cinna.page
     const panel = statusPanel(cinna)
@@ -398,13 +465,8 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
     const c = credential!
     const { agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Reader', slots: [{ name: SLOT, serviceUri: c.serviceUri }] }])
     const page = cinna.page
-    await page.reload()
-    await page.getByTitle(person!.name, { exact: true }).click()
-    await page.getByRole('button', { name: 'Sign Out', exact: true }).click()
-    await expect(page.getByText(`Sign Out — ${person!.name}`)).toBeVisible()
-    await page.getByRole('button', { name: 'Sign Out', exact: true }).click()
-    await expect(page.getByText(`Sign Out — ${person!.name}`)).toHaveCount(0)
-    expect((await page.evaluate(() => window.api.auth.getCurrent()))?.id).toBe('__default__')
+    // The switch left on (its default): the profile is deleted.
+    await signOutThroughMenu(cinna, true)
     expect((await page.evaluate(() => window.api.auth.listUsers())).some((u) => u.username === person!.email)).toBe(false)
 
     await newChatWith(cinna, 'Held Reader')
@@ -429,7 +491,7 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
     aiCredentialId = String(made.body.id)
     try {
       // Her Core credential too: one account, so one row that names both.
-      const { agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Runner', slots: [{ name: SLOT, serviceUri: credential!.serviceUri }] }])
+      const { userId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Runner', slots: [{ name: SLOT, serviceUri: credential!.serviceUri }] }])
       const managedId = `managed:${aiCredentialId}`
       await expect.poll(async () => (await cinna.page.evaluate(() => window.api.providers.list())).some((row) => row.id === managedId), { timeout: 30_000 }).toBe(true)
       const got = await cinna.page.evaluate((id) => window.api.localAgents.get(id), agent.id)
@@ -438,7 +500,7 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
         agentId, update: { field: 'runtime', value: { engine: 'opencode', credential, modelId: null, complexity: null } }, expectedStamp: stamp
       }), { agentId: agent.id, stamp: got.value.stamps['cinna-agent.json']!, credential: managedId })
       expect(updated.ok, JSON.stringify(updated)).toBe(true)
-      await logOut(cinna)
+      await signOutKeepingData(cinna, userId)
       await cinna.page.evaluate(() => window.api.localAgents.rescan())
 
       const accounts = await cinna.page.evaluate((id) => window.api.serviceCredentials.unavailableAccounts(id), agent.id)
