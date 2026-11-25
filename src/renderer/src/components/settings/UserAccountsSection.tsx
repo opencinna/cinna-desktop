@@ -5,6 +5,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 import { PasswordModal } from './PasswordModal'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
+import { GithubAccountSection } from './GithubAccountSection'
 
 const inputClass =
   'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
@@ -335,6 +336,11 @@ export function UserAccountsSection(): React.JSX.Element {
           isCurrentUser={user.id === currentUser?.id}
         />
       ))}
+
+      {/* The current profile's GitHub sign-in (G6: tokens are per profile, signed in where its accounts live). */}
+      <div className="pt-5">
+        <GithubAccountSection />
+      </div>
     </div>
   )
 }

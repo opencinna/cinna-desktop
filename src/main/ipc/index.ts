@@ -47,6 +47,7 @@ import { registerAddonHandlers } from './addons.ipc'
 import { registerSkillPublishHandlers } from './skillPublish.ipc'
 import { registerBrandThemeHandlers } from './brandTheme.ipc'
 import { registerVaultHandlers } from './vault.ipc'
+import { registerGithubHandlers } from './github.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -101,6 +102,8 @@ export function registerAllIpcHandlers(): void {
   registerServiceCredentialHandlers()
   // Agent Vault: availability, state, unlock/lock and the gated settings.
   registerVaultHandlers()
+  // GitHub (OpenCinna) sign-in for the active profile, and the composer's GitHub rows.
+  registerGithubHandlers()
   registerAgentFileHandlers()
   // Artifacts: publish a file or folder from an agent's folder to cinna-core, and share it.
   registerArtifactHandlers()

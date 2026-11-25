@@ -106,6 +106,7 @@ import type { FinderQuickActionResult, FinderQuickActionStatus } from '../shared
 import { NOTIFICATION_OPEN_CHAT_CHANNEL, type NotificationOpenChat } from '../shared/desktopNotifications'
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
 import type { CinnaCliUpdate } from '../shared/cinnaCli'
+import { GITHUB_CHANGED, type GithubDeviceFlowDto, type GithubResult, type GithubStatusDto, type GithubUrlTarget } from '../shared/github'
 import {
   VAULT_MOVE_PROGRESS_CHANNEL,
   VAULT_CHAT_FILES_SWEPT_CHANNEL,
@@ -2092,6 +2093,30 @@ const api = {
       const listener = (_event: IpcRendererEvent, state: LocalDevState): void => handler(state)
       ipcRenderer.on(LOCAL_DEV_STATE_CHANNEL, listener)
       return () => ipcRenderer.off(LOCAL_DEV_STATE_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * GitHub (the OpenCinna app) for the **active profile**, which main resolves itself. Every verb
+   * answers a {@link GithubResult}: a refusal is data. No token ever crosses here.
+   */
+  github: {
+    status: (): Promise<GithubResult<GithubStatusDto>> => ipcRenderer.invoke('github:status'),
+    /** Starts (or rejoins) the device flow; main opens github.com/login/device. */
+    signIn: (): Promise<GithubResult<GithubDeviceFlowDto>> => ipcRenderer.invoke('github:sign-in'),
+    cancelSignIn: (): Promise<GithubResult<null>> => ipcRenderer.invoke('github:cancel-sign-in'),
+    signOut: (): Promise<GithubResult<null>> => ipcRenderer.invoke('github:sign-out'),
+    /** Reads the installations again (at most once per 10 s per profile reaches GitHub). */
+    checkAgain: (): Promise<GithubResult<GithubStatusDto>> => ipcRenderer.invoke('github:check-again'),
+    dismiss: (key: string): Promise<GithubResult<null>> => ipcRenderer.invoke('github:dismiss', key),
+    /** Opens the install or configure page main stored for that need. */
+    openInstall: (key: string): Promise<GithubResult<null>> => ipcRenderer.invoke('github:open-install', key),
+    openUrl: (target: GithubUrlTarget): Promise<GithubResult<null>> => ipcRenderer.invoke('github:open-url', target),
+    /** Fires on any change to a profile's GitHub state. Returns an unsubscribe. */
+    onChanged: (handler: (payload: { userId: string }) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: { userId: string }): void => handler(payload)
+      ipcRenderer.on(GITHUB_CHANGED, listener)
+      return () => ipcRenderer.off(GITHUB_CHANGED, listener)
     }
   },
 

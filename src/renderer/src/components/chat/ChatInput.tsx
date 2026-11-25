@@ -68,6 +68,7 @@ import { useActiveSessionNotices, useComposerNotices, useComposerReadiness } fro
 import { useVaultAvailability, useVaultStatus, useVaultTouch } from '../../hooks/useVault'
 import { vaultOtherChatNotice } from './VaultOtherChatNotice'
 import { ComposerNoticePanel, useNoticePanelPresence } from './ComposerNoticePanel'
+import { useGithubNotices } from './composerGithubNotices'
 import { useSkillLinkNotice } from './SkillLinkNotice'
 import { useGuidedBuildNotice } from './GuidedBuildNotice'
 import { skillLinkChatKey, useSkillLinkOfferStore } from '../../stores/skillLinkOffer.store'
@@ -1267,11 +1268,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const skillLinkNotice = useSkillLinkNotice(skillLinkKey, directTarget, { onNewAgent: openNewAgentWithSkill })
   // A blank agent's guided first build, offered on the new-chat screen: the first row.
   const guidedBuildNotice = useGuidedBuildNotice(chatId === null ? guidedBuildAgentId : null)
+  // The agent's gh or git found nothing to authenticate with: Sign in to GitHub, Allow access, then
+  // Continue, which sends its fixed message on the composer's own send (a refused agent sends nothing).
+  const githubNotices = useGithubNotices(chatId, directTarget?.id ?? null,
+    (text) => (blocksSendRef.current ? false : composer.submit(text)))
   const notices = [
     ...(guidedBuildNotice ? [guidedBuildNotice] : []),
     ...(skillLinkNotice ? [skillLinkNotice] : []),
     // Unlocking or logging in would not let this chat send: the row that does is the only one.
-    ...(vaultOtherChat ? [vaultOtherChat] : readinessNotices),
+    ...(vaultOtherChat ? [vaultOtherChat] : [...readinessNotices, ...githubNotices]),
     ...sessionNotices
   ]
   // An open chat whose prompt cache has gone cold over a large context. In the

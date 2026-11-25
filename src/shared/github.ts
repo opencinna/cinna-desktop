@@ -50,3 +50,13 @@ export interface GithubStatusDto {
   device: GithubDeviceFlowDto | null
   needs: GithubNeedDto[]
 }
+
+/** What every `github:*` IPC answers: a refusal is data, since a thrown error's code never reaches the renderer. */
+export type GithubResult<T> = { ok: true; value: T } | { ok: false; error: string }
+
+/** The two fixed github.com pages the renderer may ask main to open (never an arbitrary URL). */
+export const GITHUB_URLS = {
+  manage: OPENCINNA_INSTALL_URL,
+  applications: 'https://github.com/settings/applications'
+} as const
+export type GithubUrlTarget = keyof typeof GITHUB_URLS
