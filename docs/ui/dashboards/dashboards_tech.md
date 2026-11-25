@@ -100,7 +100,7 @@ A tile's state is `ok`, `agent_missing` (no agent with that manifest id, or two)
 
 ### The turn lock
 
-Dashboard runs take the agent's lock **shared**, with owner `'dashboard'`, through `turnLock.tryAcquireSharedYielding(agentId, owner, onPreempt)`:
+Dashboard runs take the agent's lock **shared**, with owner `'dashboard'`, through `turnLock.tryAcquireSharedYielding(agentId, owner, onPreempt, origin)` (the `origin` is `{userId: activatedProfileUserId(), chatless: 'command'}`, recorded so a refresh's or endpoint's `gh` is served for that profile and a GitHub need it hits becomes an Inbox card; see [GitHub Repos (tech)](../../agents/github_repos/github_repos_tech.md#which-profile-a-request-is-served-for)):
 
 - **Refused, never thrown (`null`), while an exclusive holder exists or an exclusive acquisition is queued** for the agent. The reason: with reader preference a steady stream of tile refreshes would keep an editor save or a credential write out for as long as a dashboard stayed open. Turns and `/run:` commands keep `withSharedLock`.
 - **Taken only once a runner slot is free**, so a queued run never holds a save out while it waits.

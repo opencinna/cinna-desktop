@@ -30,7 +30,8 @@ Behaviour and rules: [GitHub Repos](github_repos.md).
 ### Renderer
 
 - `src/renderer/src/hooks/useGithub.ts` — `useGithubStatus` (invalidated on `github:changed`), `useGithubSignIn` (phases: idle, starting, pending, expired, denied, error; copies the code through main's clipboard on start), `useGithubSignOut`, `openGithubUrl`, `useGithubCheckOnFocus`
-- `src/renderer/src/components/chat/composerGithubNotices.tsx` — `useGithubNotices`, `githubNeedNotice`, `githubResolvedNotice`, `GITHUB_CONTINUE_MESSAGE`; wired in `ChatInput.tsx` after the readiness notices
+- `src/renderer/src/components/chat/composerGithubNotices.tsx` — `useGithubNotices` (a chat: every need of its agent; the new-chat screen, which is the agent's page: only the needs a run of that agent with no chat hit, no Continue), `githubNeedNotice`, `githubResolvedNotice`, `useGithubAllowAccess`, `GITHUB_CONTINUE_MESSAGE`; wired in `ChatInput.tsx` after the readiness notices
+- `src/renderer/src/components/inbox/InboxGithubCard.tsx` — `GithubNeedCard`, `GITHUB_INBOX_TEXT`: the Inbox card (`snapshot.github`) with the row's action and Dismiss (`github:dismiss`); `InboxView.tsx` renders it, `useInboxList` re-reads on `github:changed`
 - `src/renderer/src/stores/githubNotice.store.ts` — per chat, in memory: the keys shown and the chats whose need cleared
 - `src/renderer/src/components/settings/GithubAccountSection.tsx` — the Settings section; `UserAccountsSection.tsx` renders it under a Profiles section; `SettingsLayout.tsx` `SettingsCard` gained `flush`
 
@@ -58,11 +59,22 @@ All answer `GithubResult<T>` (`{ok, value}` or `{ok:false, error}`), never throw
 - refresh — a dead refresh token (`bad_refresh_token`, `incorrect_client_credentials`, expired locally, none stored) → `expire` (tokens dropped, state `expired`, a `reconnect` need, coverage dropped); any other refusal or network error → `unavailable`. A refresh that returns no new refresh token keeps the old one. A profile that moved on (sign-out, removal: its `gen` bumped) during the call gets nothing written back
 - `startDeviceFlow`, `cancelDeviceFlow` — one flow per profile; polling honours `slow_down`, ends on `expired_token`, `access_denied`, the code's own expiry or another error; completion reads `/user`, persists, clears the account need, publishes, reads coverage, then runs the signed-in hook
 - `coverageFor(userId, repo)` — cached; refreshes when never read, and at most once per `COVERAGE_MISS_REFRESH_MS` (60 s) while the repo is not covered; null when unreadable
-- `checkAgain`, `recordNeed` (the profile's own state decides sign-in vs reconnect), `dismiss`, `signOut`, `profileRemoved`, `profileForAgent`, `ghMissing`, `installProfileAccess`
+- `checkAgain`, `recordNeed` (the profile's own state decides sign-in vs reconnect; `chatless` lists the agent in `chatlessAgentIds`), `dismiss`, `signOut`, `profileRemoved`, `holderOf` (the holder's profile and `chatless`, null when that profile cannot serve), `chatlessNeeds` (the Inbox's needs), `ghMissing`, `installProfileAccess`
 - Every GitHub call times out after `GITHUB_HTTP_TIMEOUT_MS` (20 s), shorter than the wrapper's 40 s wait on `/github/token`, so a hung refresh answers "try again" before curl gives up and reads as a blocked sandbox
-- `core.ts` supplies profile access: an agent's profile is the active one; available means the profile exists and is either the active one or passwordless/unlocked. It also hooks the managed gh: a completed sign-in runs `which('gh')` and installs only if none; a wrapper `gh_missing` report starts the install and answers whether one is running
+- `core.ts` supplies profile access: `agentHolder` is `githubHolderOf(turnLock.latestOrigin(agentId), active profile)` (`githubLoopback.ts`): the profile recorded with the newest hold on the agent that recorded an origin, else the active one; available means the profile exists and is either the active one or passwordless/unlocked. It also hooks the managed gh: a completed sign-in runs `which('gh')` and installs only if none; a wrapper `gh_missing` report starts the install and answers whether one is running
 
-`githubNeeds.ts`: one account need (key `account`), one install need per owner (key `install:<owner lowercased>`, repositories merged), `agentIds` per need, `dismissedKeys`; only keys of those two shapes are remembered as dismissed.
+`githubNeeds.ts`: one account need (key `account`), one install need per owner (key `install:<owner lowercased>`, repositories merged), `agentIds` per need and `chatlessAgentIds` (listed only when non-empty), `dismissedKeys`; only keys of those two shapes are remembered as dismissed.
+
+### Which profile a request is served for
+
+`turnLock` holds carry an optional `HoldOrigin` `{ userId?, chatless?: 'command' | 'schedule' }`, recorded at acquisition. `turnLock.sharedOrigins(agentId)` lists every shared hold's origin (null for none), oldest first; `githubHolderOf` resolves each to its `userId` or, without one, `activatedProfileUserId()` (`auth/activatedProfile.ts`, the active profile once activated, else null). More than one distinct profile → `{ conflict: true }`: `/github/token` answers `{unavailable: true, message: GITHUB_MESSAGES.otherProfile}` and `/github/needed` records nothing. Otherwise that profile, with the newest hold's `chatless`. Who records what:
+- a chat's model turn — `acpDriver` passes `{ userId: runScope.profileUserId }` to `withLock` (the run's profile, not `chats.user_id`: a folder agent's chat is owned by the default profile and shared across profiles)
+- a chat's `/run:` — `resolveCommandRunner(…, profileUserId)` → `runForTurn` → `run(…, { userId })`
+- a scheduled command — `runScheduled(…, profileUserId)` records `{ userId, chatless: 'schedule' }` (`localScheduleService` passes `scope.profileUserId`)
+- a status refresh (`statusRefresh.ts`), a dashboard's refresh command and a dashboard endpoint (`endpointRunner`) — `{ userId: activatedProfileUserId(), chatless: 'command' }` at start
+- not recorded: Finish setup's `credentials-env` hold; it works for the active profile
+
+`inboxService.list` adds `github: GithubNeedInboxItem[]` (`{ kind: 'github_need', need, agents: [{ id, name }] }`) from `githubAuthService.chatlessNeeds(profile)`, names from the agent rows.
 
 `githubCoverage.ts:installUrlFor`: `repo_not_selected` → the installation's configure page (organizations/<owner>/settings/installations/<id>, or settings/installations/<id>); otherwise the app's install page, with `permissions?target_id=<owner id>` when known.
 
@@ -75,7 +87,7 @@ Registered on the credential token listener (`127.0.0.1`, ephemeral port, same b
   - `{needed: "sign_in" | "reconnect", message}`
   - `{needed: "install", message, repo}` — the token is withheld when the cache says the repo is not covered
   - `{unavailable: true, message}` — transient
-- `POST /github/needed` `{kind: "sign_in" | "reconnect" | "install" | "gh_missing", repo?}` → `{ok: true}`; `gh_missing` → `{ok: true, installing: boolean}`; any other kind → 422 `{detail: {code: "invalid_request", message}}`
+- `POST /github/needed` `{kind: "sign_in" | "reconnect" | "install" | "gh_missing", repo?}` → `{ok: true}`, recorded under the same holder profile as `/github/token`, with `chatless` from the hold; `gh_missing` → `{ok: true, installing: boolean}`; any other kind → 422 `{detail: {code: "invalid_request", message}}`
 
 Sentences (`GITHUB_MESSAGES`): "GitHub isn't connected. Ask the user to click Sign in to GitHub under the message box, then run this command again." / "The GitHub sign-in has expired. Ask the user to click Reconnect GitHub under the message box, then run this command again." / "Cinna's GitHub app can't reach <repo> yet. Ask the user to click Allow access under the message box, then run this command again." / "GitHub could not be reached to refresh the sign-in. Try again in a moment."
 
