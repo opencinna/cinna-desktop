@@ -10,7 +10,7 @@
  * call it decides the auth:
  *
  * 1. With the loopback endpoint in the env (`CINNA_GITHUB_URL` and
- *    `CINNA_GITHUB_AUTH`, a kit agent's child while a turn, command or run
+ *    `CINNA_GITHUB_BEARER`, a kit agent's child while a turn, command or run
  *    holds it), it asks `POST /github/token` for the repo when it can tell which one,
  *    and runs the real `gh` with the OpenCinna token in `GH_TOKEN` and an empty
  *    `GH_CONFIG_DIR`, so neither the user's login nor their gh config mixes in.
@@ -59,6 +59,19 @@ const logger = createLogger('gh-shim')
 export const GH_SHIM_DIR_NAME = 'gh-shim'
 /** Under userData: the empty `GH_CONFIG_DIR` a token-served `gh` runs with. */
 export const GH_CONFIG_DIR_NAME = 'gh-config'
+
+/** The loopback endpoint's `/github` base, in a kit agent's child env. */
+export const GH_ENDPOINT_URL_ENV = 'CINNA_GITHUB_URL'
+/**
+ * The agent's bearer for that endpoint. Its name must not read as a secret to an engine's own
+ * env filter, or the wrapper never sees it and every gh and git call falls back to the user's
+ * login: no AUTH, KEY, TOKEN, SECRET, PASS(WORD), PWD, JWT, CREDENTIAL(S) or COOKIE word.
+ * `CINNA_GITHUB_AUTH` was stripped by Claude Code's `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` (API
+ * Token mode), whose name classifier matches `_AUTH` (2.1.318). Codex, OpenCode and
+ * Antigravity passed every such name to their shell tools when probed on 25 Nov 2026. The
+ * contract checks Claude (`claude.launch.subprocess-env-scrub-gh`).
+ */
+export const GH_ENDPOINT_BEARER_ENV = 'CINNA_GITHUB_BEARER'
 
 export const GITHUB_HELPER_KEY = 'credential.https://github.com.helper'
 export const GITHUB_USE_HTTP_PATH_KEY = 'credential.https://github.com.useHttpPath'
@@ -132,8 +145,8 @@ cinna_untouched() {
 
 # A kit agent's child, with curl to call the endpoint.
 cinna_endpoint() {
-  [ -n "$CINNA_GITHUB_URL" ] && [ -n "$CINNA_GITHUB_AUTH" ] || return 1
-  case "$CINNA_GITHUB_AUTH" in *'"'*|*'\'*|*"$cinna_nl"*) return 1 ;; esac
+  [ -n "$CINNA_GITHUB_URL" ] && [ -n "$CINNA_GITHUB_BEARER" ] || return 1
+  case "$CINNA_GITHUB_BEARER" in *'"'*|*'\'*|*"$cinna_nl"*) return 1 ;; esac
   command -v curl >/dev/null 2>&1
 }
 
@@ -143,7 +156,7 @@ cinna_endpoint() {
 # the connect gives, or 28 before connecting). Neither: the answer broke off (52, 56, ...).
 # The bearer reaches curl on stdin, never on its command line.
 cinna_post() {
-  cinna_out=$(printf 'header = "Authorization: Bearer %s"\n' "$CINNA_GITHUB_AUTH" |
+  cinna_out=$(printf 'header = "Authorization: Bearer %s"\n' "$CINNA_GITHUB_BEARER" |
     curl -sS --noproxy '*' --max-time "$3" --config - -X POST -H 'Content-Type: application/json' \
       --data-binary "$2" -w '\n%{time_connect} %{http_code}' "$CINNA_GITHUB_URL$1" 2>/dev/null)
   cinna_rc=$?
@@ -577,7 +590,7 @@ export function withoutGithubCredentialHelper<T extends Env>(env: T): T {
  */
 export function githubCredentialHelperFor<T extends Env>(env: T, wrapper: string | null): T {
   const stripped = withoutGithubCredentialHelper(env)
-  return wrapper && stripped.CINNA_GITHUB_URL && stripped.CINNA_GITHUB_AUTH ? withGithubCredentialHelper(stripped, wrapper) : stripped
+  return wrapper && stripped[GH_ENDPOINT_URL_ENV] && stripped[GH_ENDPOINT_BEARER_ENV] ? withGithubCredentialHelper(stripped, wrapper) : stripped
 }
 
 export interface GhShimDeps {

@@ -14,7 +14,7 @@ Behaviour and rules: [GitHub Repos](github_repos.md).
 - `src/main/services/github/githubLoopback.ts` — `githubLoopbackRoutes(service, options?)`: `/github/token` and `/github/needed`, the sentences in `GITHUB_MESSAGES`, `GITHUB_COVERAGE_DEADLINE_MS` (12 s) and `GITHUB_TOKEN_ROUTE_BUDGET_MS` (35 s); `options` (`coverageDeadlineMs`, `routeBudgetMs`, `now`) exist for tests
 - `src/main/services/serviceCredentials/tokenServer.ts` — the listener; `route(path, handle)` registers exact extra paths
 - `src/main/services/serviceCredentials/service.ts` — `githubEndpointFor` (kit agents only), `registerTokenRoute`
-- `src/main/services/skillRuntime.ts` — `engineCredentialEnv` (sets or strips `CINNA_GITHUB_URL`, `CINNA_GITHUB_AUTH` and the git helper entries), `ghWrapperPath`
+- `src/main/services/skillRuntime.ts` — `engineCredentialEnv` (sets or strips `CINNA_GITHUB_URL`, `CINNA_GITHUB_BEARER` and the git helper entries), `ghWrapperPath`
 - `src/main/shell/ghShim.ts` — the wrapper script, the `GIT_CONFIG_*` helpers (`withGithubCredentialHelper`, `withoutGithubCredentialHelper`, `githubCredentialHelperFor`), `createGhShim`
 - `src/main/shell/developerToolShims.ts` — `withDeveloperToolShims` applies the gh wrapper last, so its directory is first on `PATH`
 - `src/main/shell/managedGh.ts` — the managed gh (`ensureInstalled`, `installing`, `binaryLocation`)
@@ -81,7 +81,7 @@ All answer `GithubResult<T>` (`{ok, value}` or `{ok:false, error}`), never throw
 
 ## The loopback routes
 
-Registered on the credential token listener (`127.0.0.1`, ephemeral port, same bearer per agent, same held-while-a-turn-runs rule, Host/Origin/size checks as the Google route; body must be a JSON object, else 422). `CINNA_GITHUB_URL` is the listener origin plus `/github`; `CINNA_GITHUB_AUTH` the agent's bearer (named to avoid KEY, SECRET and TOKEN, which engines' env filters may exclude). Every kit agent gets them, with or without a Google record. Every string value in an answer is free of `"`, `\` and newlines, since the wrapper reads them with sed.
+Registered on the credential token listener (`127.0.0.1`, ephemeral port, same bearer per agent, same held-while-a-turn-runs rule, Host/Origin/size checks as the Google route; body must be a JSON object, else 422). `CINNA_GITHUB_URL` is the listener origin plus `/github`; `CINNA_GITHUB_BEARER` the agent's bearer (named to avoid every secret-like word — AUTH, KEY, SECRET, TOKEN, PASS, CREDENTIALS… — because Claude Code's `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, set in API Token mode, strips such names from the agent's Bash; the earlier `CINNA_GITHUB_AUTH` was stripped, checked by `claude.launch.subprocess-env-scrub-gh`). Every kit agent gets them, with or without a Google record. Every string value in an answer is free of `"`, `\` and newlines, since the wrapper reads them with sed.
 
 - `POST /github/token` `{repo?: "owner/repo", via?: "gh" | "git" | "write"}` (`via` absent or anything else = `git`, failing closed; the wrapper always sends it: `git` from `auth git-credential`, `write` for a gh command on its write list, `gh` otherwise) →
   - `{token, expires_at (epoch seconds or null), login, name, email}`

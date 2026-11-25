@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -32,6 +33,8 @@ import { withCatchUp } from '../../../../services/threadContextService'
 import { buildAcpPrompt } from '../../../../services/acpAttachments'
 import type { AcpConnection } from '../types'
 import { placeTurnContext } from '../acpDriver'
+import { createGhShim } from '../../../../shell/ghShim'
+import { engineCredentialEnv } from '../../../../services/skillRuntime'
 
 /**
  * The Claude Code interface contract, checked against the **real** CLI.
@@ -702,7 +705,7 @@ async function wrapperScenario(binary: string, trap: EgressTrap): Promise<void> 
 /* -------------------------------------------------------------- scenario F */
 
 /** What one API-mode session observed. Kept out of the snapshot, like scenarios C and D. */
-type ScrubProbe = 'auto' | 'printenv' | 'bash' | 'write' | 'mcp'
+type ScrubProbe = 'auto' | 'printenv' | 'bash' | 'write' | 'mcp' | 'gh'
 
 interface ScrubRun {
   error: unknown
@@ -727,6 +730,8 @@ interface ScrubRun {
   /** The contents of the files the Bash and Write probes made in the session cwd, or null. */
   bashFile: string | null
   writeFile: string | null
+  /** The kit agent's GitHub endpoint: what the gh wrapper and git's credential helper asked it, `<path> <body>`. */
+  github: { wrapper: string; requests: string[] }
 }
 
 const SCRUB_BASH_TEXT = 'CONTRACT_SCRUB_BASH_4c1'
@@ -735,6 +740,18 @@ const SCRUB_PRINTENV_END = 'CONTRACT_SCRUB_PRINTENV_DONE'
 const SCRUB_MCP_SERVER = 'scrubprobe'
 const SCRUB_MCP_TOOL = 'env_probe'
 const SCRUB_MCP_END = 'CONTRACT_SCRUB_MCP_DONE'
+const SCRUB_GH_SENTENCE = 'CONTRACT_GH_SIGN_IN_7d3'
+const SCRUB_GH_END = 'CONTRACT_SCRUB_GH_DONE'
+/**
+ * What a kit agent's Bash runs first on a GitHub task: which `gh`, `gh auth status`, git's
+ * github.com helper, and a credential request as `git clone https://github.com/…` makes one.
+ */
+const SCRUB_GH_COMMAND = [
+  'command -v gh', 'gh auth status; echo "GH_EXIT=$?"',
+  'git config --get-all credential.https://github.com.helper',
+  "printf 'protocol=https\\nhost=github.com\\npath=contract/probe.git\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill",
+  `echo ${SCRUB_GH_END}`
+].join('; ')
 
 /**
  * A stdio MCP server with no dependencies: newline-delimited JSON-RPC, one tool
@@ -786,22 +803,42 @@ process.stdin.on('data', (chunk) => {
  */
 async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): Promise<ScrubRun> {
   const observed: ScrubRun = { error: null, scrubbed: false, setModes: {},
-    asks: { auto: 0, printenv: 0, bash: 0, write: 0, mcp: 0 }, results: { auto: '', printenv: '', bash: '', write: '', mcp: '' },
-    keyInPrintenv: false, keyInMcp: false, mcpParent: null, bashFile: null, writeFile: null }
+    asks: { auto: 0, printenv: 0, bash: 0, write: 0, mcp: 0, gh: 0 }, results: { auto: '', printenv: '', bash: '', write: '', mcp: '', gh: '' },
+    keyInPrintenv: false, keyInMcp: false, mcpParent: null, bashFile: null, writeFile: null, github: { wrapper: '', requests: [] } }
   let provider: FakeAnthropic | undefined
   let connection: AdapterConnection | undefined
   let script: ClaudeProviderReply[] = []
   let asks = 0
   provider = await startFakeAnthropic((turn) => turn.kind === 'title' ? TITLE_REPLY : (script.shift() ?? { kind: 'text', text: 'OK' }))
   const scratch = makeClaudeScratch(`cinna-contract-claude-scrub-${scrub ? 'on' : 'off'}-`, { providerPort: provider.port, trapPort: trap.port })
+  // A kit agent's GitHub endpoint: every token request answers "sign in", as with no GitHub sign-in.
+  const githubEndpoint = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
+    req.on('end', () => {
+      observed.github.requests.push(`${req.url ?? ''} ${body}`)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(req.url?.endsWith('/token') ? JSON.stringify({ needed: 'sign_in', message: SCRUB_GH_SENTENCE }) : '{}')
+    })
+  })
   try {
+    await new Promise<void>((resolve) => githubEndpoint.listen(0, '127.0.0.1', resolve))
+    const githubPort = (githubEndpoint.address() as { port: number }).port
     const dummyKey = scratch.env.ANTHROPIC_API_KEY
     const built = buildClaudeEnv({ shellEnv: scratch.env, appVersion: 'contract', processEnv: {},
       apiKey: { apiKey: dummyKey, baseUrl: scratch.env.ANTHROPIC_BASE_URL } })
     if (!scrub) delete built[SUBPROCESS_SCRUB_ENV]
     observed.scrubbed = built[SUBPROCESS_SCRUB_ENV] === '1'
+    // Then what a kit agent's launch adds, by the production code: Cinna's gh wrapper first on
+    // PATH (`withDeveloperToolShims`), and the endpoint plus git's helper (`engineCredentialEnv`).
+    const userData = join(scratch.home, 'userData')
+    const shimmed = await createGhShim({ platform: process.platform, shimDir: () => join(userData, 'gh-shim'),
+      configDir: () => join(userData, 'gh-config'), managedGh: () => join(userData, 'no-managed-gh', 'gh'), otherOwnDirs: () => [] }).apply(built)
+    observed.github.wrapper = join(userData, 'gh-shim', 'gh')
+    const kitEnv = engineCredentialEnv(shimmed, { skillRuntime: false,
+      githubEndpoint: { url: `http://127.0.0.1:${githubPort}/github`, token: 'contract-github-bearer' } }, () => null, () => observed.github.wrapper)
     const harnessOnly = ['CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ENABLE_TOOL_SEARCH', 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION']
-    const env = { ...built, ...Object.fromEntries(harnessOnly.map((key) => [key, scratch.env[key]])), CLAUDE_CODE_EXECUTABLE: binary }
+    const env = { ...kitEnv, ...Object.fromEntries(harnessOnly.map((key) => [key, scratch.env[key]])), CLAUDE_CODE_EXECUTABLE: binary }
     connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env,
       answer: (request) => {
         if (request.method !== 'session/request_permission') return undefined
@@ -847,6 +884,7 @@ async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): 
     await probe('mcp', { kind: 'tool', name: `mcp__${SCRUB_MCP_SERVER}__${SCRUB_MCP_TOOL}`, input: {} }, 'Call the environment probe.')
     observed.keyInMcp = observed.results.mcp.includes(dummyKey)
     observed.mcpParent = /^PARENT=(.*)$/m.exec(observed.results.mcp)?.[1] ?? null
+    await probe('gh', { kind: 'tool', name: 'Bash', input: { command: SCRUB_GH_COMMAND, description: 'Check GitHub access' } }, 'Check GitHub access.')
     return observed
   } catch (error) {
     observed.error ??= error instanceof Error ? error.message : String(error)
@@ -854,6 +892,7 @@ async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): 
   } finally {
     await connection?.close()
     await provider?.close()
+    await new Promise<void>((resolve) => githubEndpoint.close(() => resolve()))
     scratch.dispose()
   }
 }
@@ -1078,6 +1117,25 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
     expect(on?.bashFile, `Bash result: ${on?.results.bash}`).toBe(`${SCRUB_BASH_TEXT}\n`)
     expect(on?.results.bash).toContain(SCRUB_BASH_TEXT)
     expect(on?.writeFile, `Write result: ${on?.results.write}`).toBe(`${SCRUB_WRITE_TEXT}\n`)
+  })
+
+  it(entry('claude.launch.subprocess-env-scrub-gh'), () => {
+    for (const [name, run] of Object.entries(seen.scrub)) {
+      const result = run?.results.gh ?? ''
+      const label = `${name === 'on' ? 'under the scrub' : 'without the scrub'}: ${result}`
+      expect(result, label).toContain(SCRUB_GH_END)
+      // The agent's `gh` is Cinna's wrapper, and git's github.com helper is the wrapper too.
+      expect(result.split('\n')[0], label).toBe(run?.github.wrapper)
+      expect(result, label).toContain(`!'${run?.github.wrapper}' auth git-credential`)
+      // Both reached the endpoint with the bearer: the wrapper asked for a token for gh and for git,
+      // and with none it printed the endpoint's sentence and exited 4 — not the real gh's own answer.
+      const asked = run?.github.requests ?? []
+      expect(asked.some((line) => line.startsWith('/github/token ') && line.includes('"via":"gh"')), `${label}\nendpoint: ${JSON.stringify(asked)}`).toBe(true)
+      expect(asked.some((line) => line.startsWith('/github/token ') && line.includes('"repo":"contract/probe"') && line.includes('"via":"git"')), `${label}\nendpoint: ${JSON.stringify(asked)}`).toBe(true)
+      expect(asked.some((line) => line.startsWith('/github/needed ') && line.includes('"kind":"sign_in"')), JSON.stringify(asked)).toBe(true)
+      expect(result, label).toContain(SCRUB_GH_SENTENCE)
+      expect(result, label).toContain('GH_EXIT=4')
+    }
   })
 
   /* auth */

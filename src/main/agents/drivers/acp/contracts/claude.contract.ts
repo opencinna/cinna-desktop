@@ -87,6 +87,13 @@ export const CLAUDE_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'the live flow runs on the subscription, where the variable is not set' }
   },
   {
+    id: 'claude.launch.subprocess-env-scrub-gh', area: 'launch & env', surface: 'env var', name: 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (gh wrapper endpoint)',
+    expectation: 'On a kit agent’s launch environment (API mode’s `buildClaudeEnv`, Cinna’s `gh` wrapper first on `PATH`, `engineCredentialEnv` with a GitHub endpoint), with the scrub and without it, a native Bash command’s `gh` is the wrapper, git’s github.com credential helper is the wrapper, and both reach the endpoint with its bearer: `gh auth status` and a `git credential fill` for a github.com repo each ask `/github/token`, and with no sign-in the wrapper prints the endpoint’s sentence and exits 4. The scrub removes every variable whose name has a secret-like word (2.1.318: TOKEN, KEY, AUTH, CREDENTIALS, PASS, … as `_`-separated words), so the bearer’s name must have none; `CINNA_GITHUB_AUTH` was stripped and the real `gh` answered “not logged in”. Found 25 Nov 2026 on 2.1.318.',
+    owners: ['src/main/shell/ghShim.ts#GH_ENDPOINT_BEARER_ENV', 'src/main/services/skillRuntime.ts#engineCredentialEnv', 'src/main/agents/drivers/acp/claudeEnv.ts#SUBPROCESS_SCRUB_ENV'],
+    feature: 'In API Token mode a Claude kit agent cannot use GitHub through Cinna: `gh` reports the user not logged in, `git clone`/`push` of a github.com repo fails on “could not read Username”, and the sign-in row never appears.',
+    flow: { steps: ['none'], note: 'the live flow runs on the subscription, where the variable is not set, and runs no gh command' }
+  },
+  {
     id: 'claude.permission.write-outside-cwd', area: 'permissions & questions', surface: 'ACP method', name: 'sibling write / session/request_permission',
     expectation: 'A sibling-directory Write in default mode raises an edit permission and allow_once writes the file. In isolated fake-provider auto mode, no ACP ask is raised and the unavailable classifier refuses the write; authenticated classifier decisions are not established.',
     owners: ['src/main/agents/drivers/acp/acpLaunchers.ts#modeId'],

@@ -200,7 +200,7 @@ function baseEnv(options: RunOptions): Record<string, string> {
     FAKE_GH_LOGIN: options.ownLogin ? '1' : '0',
     GITHUB_TOKEN: 'shell-token',
     GH_HOST: 'example.com',
-    ...(options.endpoint ? { CINNA_GITHUB_URL: options.endpoint, CINNA_GITHUB_AUTH: BEARER } : {}),
+    ...(options.endpoint ? { CINNA_GITHUB_URL: options.endpoint, CINNA_GITHUB_BEARER: BEARER } : {}),
     ...options.extraEnv
   }
 }
@@ -312,13 +312,13 @@ describe('the wrapper and git wiring in the env', () => {
   })
 
   it('githubCredentialHelperFor: the entries only with the endpoint and a wrapper, stable when applied again', () => {
-    const endpoint = { CINNA_GITHUB_URL: 'http://127.0.0.1:1/github', CINNA_GITHUB_AUTH: 'b' }
+    const endpoint = { CINNA_GITHUB_URL: 'http://127.0.0.1:1/github', CINNA_GITHUB_BEARER: 'b' }
     const kit = githubCredentialHelperFor<Env>({ ...endpoint, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.pager', GIT_CONFIG_VALUE_0: 'cat' }, fx.wrapper)
     expect(kit.GIT_CONFIG_COUNT).toBe('4')
     expect(kit.GIT_CONFIG_VALUE_2).toContain('/gh-shim/gh')
     expect(githubCredentialHelperFor(kit, fx.wrapper)).toEqual(kit)
     // The endpoint gone (or no wrapper): ours are stripped, the user's stay.
-    const { CINNA_GITHUB_URL: _u, CINNA_GITHUB_AUTH: _a, ...bare } = kit
+    const { CINNA_GITHUB_URL: _u, CINNA_GITHUB_BEARER: _a, ...bare } = kit
     expect(githubCredentialHelperFor(bare, fx.wrapper)).toEqual({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.pager', GIT_CONFIG_VALUE_0: 'cat' })
     expect(githubCredentialHelperFor(kit, null).GIT_CONFIG_COUNT).toBe('1')
   })
@@ -329,7 +329,7 @@ describe('the wrapper and git wiring in the env', () => {
   })
 
   it.each(['x', '-1', '2x', '1.5', '99999'])('a count that is not a number (%j): the user entries untouched, nothing added', (count) => {
-    const user = { GIT_CONFIG_COUNT: count, GIT_CONFIG_KEY_0: 'user.name', GIT_CONFIG_VALUE_0: 'U', CINNA_GITHUB_URL: 'http://127.0.0.1:1/github', CINNA_GITHUB_AUTH: 'b' }
+    const user = { GIT_CONFIG_COUNT: count, GIT_CONFIG_KEY_0: 'user.name', GIT_CONFIG_VALUE_0: 'U', CINNA_GITHUB_URL: 'http://127.0.0.1:1/github', CINNA_GITHUB_BEARER: 'b' }
     expect(withGithubCredentialHelper<Env>(user, '/w/gh')).toBe(user)
     expect(withoutGithubCredentialHelper<Env>(user)).toBe(user)
     expect(githubCredentialHelperFor<Env>(user, '/w/gh')).toBe(user)
@@ -354,7 +354,7 @@ describe.skipIf(!hasCurl)('the gh wrapper', () => {
     expect(out.stdout).not.toContain(TOKEN)
     const dump = readFileSync(fx.envDump, 'utf8').split('\n')
     expect(dump.filter((line) => line.includes(TOKEN))).toEqual([`GH_TOKEN=${TOKEN}`])
-    expect(dump.filter((line) => line.includes(BEARER))).toEqual([`CINNA_GITHUB_AUTH=${BEARER}`])
+    expect(dump.filter((line) => line.includes(BEARER))).toEqual([`CINNA_GITHUB_BEARER=${BEARER}`])
   })
 
   it('needed, and the user own gh login answers: the real gh untouched', async () => {
@@ -762,7 +762,7 @@ describe.skipIf(!hasCurl || !hasGit)('git credential fill through the envs Cinna
   it('an env that had our entries and lost its endpoint: they go, and the user store login fills', async () => {
     const loop = await startLoopback(tokenAnswer)
     const kit = githubCredentialHelperFor<Env>(await shimFor(fx.userData).apply<Env>(baseEnv({ endpoint: loop.url })), fx.wrapper)
-    const { CINNA_GITHUB_URL: _u, CINNA_GITHUB_AUTH: _a, ...rest } = kit
+    const { CINNA_GITHUB_URL: _u, CINNA_GITHUB_BEARER: _a, ...rest } = kit
     const out = await fillStored(githubCredentialHelperFor(rest, fx.wrapper))
     expect(out.stdout).toContain('password=stored-pw\n')
     expect(loop.requests).toEqual([])

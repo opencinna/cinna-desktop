@@ -239,7 +239,7 @@ const ghShim = createGhShim({
  * are added here, and any of ours already in `env` are removed: a child with no
  * loopback endpoint (a bare agent, MCP server, Run Script, `/run:` for a
  * non-kit agent) keeps the user's own keychain / GCM login for github.com.
- * `engineCredentialEnv` adds them when it sets `CINNA_GITHUB_URL`/`_AUTH`.
+ * `engineCredentialEnv` adds them when it sets `CINNA_GITHUB_URL`/`_BEARER`.
  */
 export async function withDeveloperToolShims<T extends Record<string, string | undefined>>(env: T): Promise<T> {
   return withManagedUvFallback(await ghShim.apply(await developerToolShims.apply(env)))

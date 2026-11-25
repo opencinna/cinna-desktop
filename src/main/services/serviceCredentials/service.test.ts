@@ -1859,8 +1859,8 @@ except CredentialRefreshError as e:
       expect(p.githubEndpoint?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/github$/)
       expect((await prepare(bare.id)).githubEndpoint).toBeUndefined()
       const github = p.githubEndpoint!
-      expect(engineCredentialEnv({ CINNA_GITHUB_URL: 'stale', CINNA_GITHUB_AUTH: 'stale' }, { skillRuntime: false })).toEqual({})
-      expect(engineCredentialEnv({}, { skillRuntime: false, githubEndpoint: github })).toEqual({ CINNA_GITHUB_URL: github.url, CINNA_GITHUB_AUTH: github.token })
+      expect(engineCredentialEnv({ CINNA_GITHUB_URL: 'stale', CINNA_GITHUB_BEARER: 'stale', CINNA_GITHUB_AUTH: 'stale' }, { skillRuntime: false })).toEqual({})
+      expect(engineCredentialEnv({}, { skillRuntime: false, githubEndpoint: github })).toEqual({ CINNA_GITHUB_URL: github.url, CINNA_GITHUB_BEARER: github.token })
       expect(redactCredentialText(`auth ${github.token}`)).toBe('auth ***REDACTED***')
       const seen: [string, unknown][] = []
       service.registerTokenRoute('/github/token', async (agentId, body) => { seen.push([agentId, body]); return { status: 200, body: { needed: 'sign_in', message: 'x' } } })

@@ -37,7 +37,7 @@ describe('the engine env of a folder agent', () => {
     expect(env).toEqual({
       ...base,
       CINNA_GITHUB_URL: github.url,
-      CINNA_GITHUB_AUTH: github.token,
+      CINNA_GITHUB_BEARER: github.token,
       GIT_CONFIG_COUNT: '4',
       GIT_CONFIG_KEY_1: 'credential.https://github.com.helper',
       GIT_CONFIG_VALUE_1: '',
@@ -53,7 +53,18 @@ describe('the engine env of a folder agent', () => {
     expect(engineCredentialEnv(env, { skillRuntime: false }, dir, wrapper)).toEqual(base)
     // No wrapper on disk: the endpoint, but no helper naming a missing file.
     expect(engineCredentialEnv({ PATH: '/bin' }, { skillRuntime: false, githubEndpoint: github }, dir, () => null))
-      .toEqual({ PATH: '/bin', CINNA_GITHUB_URL: github.url, CINNA_GITHUB_AUTH: github.token })
+      .toEqual({ PATH: '/bin', CINNA_GITHUB_URL: github.url, CINNA_GITHUB_BEARER: github.token })
+  })
+
+  it('names the GitHub bearer so no engine env filter reads it as a secret, and drops the old name', () => {
+    const github = { url: 'http://127.0.0.1:9/github', token: 'bearer' }
+    const env = engineCredentialEnv({ CINNA_GITHUB_AUTH: 'inherited' }, { skillRuntime: false, githubEndpoint: github }, dir, () => null)
+    expect(env).toEqual({ CINNA_GITHUB_URL: github.url, CINNA_GITHUB_BEARER: github.token })
+    // Claude Code's subprocess scrub strips any name with one of these words (2.1.318: `_AUTH` took
+    // CINNA_GITHUB_AUTH out of the agent's Bash); the contract checks the real binary.
+    for (const name of Object.keys(env)) {
+      expect(name).not.toMatch(/(^|_)(TOKENS?|SECRETS?|PASSWORDS?|PASSWD|PASSPHRASE|KEYS?|AUTH|COOKIE|PAT|DSN|CREDENTIALS?|CREDS|APIKEY|PWD|PASS|JWT)(?=$|[_0-9])/i)
+    }
   })
 
   it('reads the runtime from the repo in development', () => {

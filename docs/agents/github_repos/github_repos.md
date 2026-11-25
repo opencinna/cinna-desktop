@@ -54,7 +54,7 @@ A folder agent can run `gh` and `git` against the user's GitHub repositories wit
 ## Architecture Overview
 
 ```
-Agent turn -> engine child (PATH: gh-shim first; CINNA_GITHUB_URL/AUTH; GIT_CONFIG_* helper)
+Agent turn -> engine child (PATH: gh-shim first; CINNA_GITHUB_URL/BEARER; GIT_CONFIG_* helper)
   gh / git -> gh-shim/gh -> POST loopback /github/token -> githubAuthService (refresh, coverage)
         token  -> real or managed gh with GH_TOKEN / git on stdout
         needed -> user's own gh login, else POST /github/needed -> needs registry -> github:changed

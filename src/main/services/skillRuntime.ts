@@ -26,7 +26,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, type Dirent } from 'node:fs'
 import { delimiter, join, relative, sep } from 'node:path'
 import { runtimeHost } from '../host/runtimeHost'
-import { GH_SHIM_DIR_NAME, githubCredentialHelperFor } from '../shell/ghShim'
+import { GH_ENDPOINT_BEARER_ENV, GH_ENDPOINT_URL_ENV, GH_SHIM_DIR_NAME, githubCredentialHelperFor } from '../shell/ghShim'
 import { contractTreeHash } from '../kit/contractTreeHash'
 import { swapInto } from '../kit/treeSwap'
 import { createLogger } from '../logger/logger'
@@ -102,12 +102,14 @@ export function withSkillRuntime(env: Record<string, string>, dir: string): Reco
  * inherited values are always dropped first.
  *
  * For a kit agent (`githubEndpoint`), `CINNA_GITHUB_URL` (the `/github` base of the same listener) and
- * `CINNA_GITHUB_AUTH` (the same bearer), which Cinna's `gh` wrapper calls, plus the G4
+ * `CINNA_GITHUB_BEARER` (the same bearer), which Cinna's `gh` wrapper calls, plus the G4
  * `GIT_CONFIG_COUNT/KEY/VALUE` entries that point git's github.com credential helper at the wrapper
  * (after any entries the env already had). Without the endpoint, any of those entries of ours are
- * removed, so the child keeps the user's own keychain / GCM login. The bearer's name avoids KEY,
- * SECRET and TOKEN as a precaution against engines' env filters (Codex's shell environment policy
- * can exclude such names). The P0 probe pushed through `GIT_CONFIG_KEY_n` under Codex 0.167.0;
+ * removed, so the child keeps the user's own keychain / GCM login. The bearer's name must not read
+ * as a secret to an engine's env filter ({@link GH_ENDPOINT_BEARER_ENV}): the earlier
+ * `CINNA_GITHUB_AUTH` was stripped from Claude's Bash under `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`
+ * (API Token mode), so gh and git fell back to the user's own login. An inherited value under
+ * that old name is still dropped. The P0 probe pushed through `GIT_CONFIG_KEY_n` under Codex 0.167.0;
  * whether Codex passes `GIT_CONFIG_KEY_n` through the ACP adapter is still to be confirmed by a
  * live turn.
  */
@@ -121,11 +123,12 @@ export function engineCredentialEnv(
   delete env.CINNA_CREDENTIALS_PATH
   delete env.CINNA_CREDENTIALS_TOKEN_URL
   delete env.CINNA_CREDENTIALS_TOKEN
-  delete env.CINNA_GITHUB_URL
+  delete env[GH_ENDPOINT_URL_ENV]
+  delete env[GH_ENDPOINT_BEARER_ENV]
   delete env.CINNA_GITHUB_AUTH
   if (prepared.path) env.CINNA_CREDENTIALS_PATH = prepared.path
   if (prepared.tokenEndpoint) { env.CINNA_CREDENTIALS_TOKEN_URL = prepared.tokenEndpoint.url; env.CINNA_CREDENTIALS_TOKEN = prepared.tokenEndpoint.token }
-  if (prepared.githubEndpoint) { env.CINNA_GITHUB_URL = prepared.githubEndpoint.url; env.CINNA_GITHUB_AUTH = prepared.githubEndpoint.token }
+  if (prepared.githubEndpoint) { env[GH_ENDPOINT_URL_ENV] = prepared.githubEndpoint.url; env[GH_ENDPOINT_BEARER_ENV] = prepared.githubEndpoint.token }
   const dir = prepared.skillRuntime ? runtimeDir() : null
   const withRuntime = dir ? withSkillRuntime(env, dir) : env
   return githubCredentialHelperFor(withRuntime, prepared.githubEndpoint ? ghWrapper() : null)
