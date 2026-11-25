@@ -9,7 +9,7 @@ vi.mock('../host/runtimeHost', () => ({ runtimeHost: {
   get isPackaged() { return host.isPackaged }, get resourcesPath() { return host.resourcesPath },
   getAppPath: () => host.appPath, getPath: () => host.userData
 } }))
-import { engineCredentialEnv, ensureSkillRuntime, skillRuntimeCopiesDir, skillRuntimeSourceDir, withSkillRuntime } from './skillRuntime'
+import { engineCredentialEnv, ensureSkillRuntime, prepareGithubGitConfig, skillRuntimeCopiesDir, skillRuntimeSourceDir, withSkillRuntime } from './skillRuntime'
 
 const repoRoot = process.cwd()
 const SHIM = join(repoRoot, 'resources', 'skill-runtime')
@@ -65,6 +65,43 @@ describe('the engine env of a folder agent', () => {
     for (const name of Object.keys(env)) {
       expect(name).not.toMatch(/(^|_)(TOKENS?|SECRETS?|PASSWORDS?|PASSWD|PASSPHRASE|KEYS?|AUTH|COOKIE|PAT|DSN|CREDENTIALS?|CREDS|APIKEY|PWD|PASS|JWT)(?=$|[_0-9])/i)
     }
+  })
+
+  it('a kit agent held for a signed-in profile gets that profile’s identity config as GIT_CONFIG_GLOBAL; never over the user’s own', () => {
+    const ours = '/u/Application Support/Cinna/github-identity/p1.gitconfig'
+    const seen: string[] = []
+    const gitConfig = (userId: string) => { seen.push(userId); return ours }
+    const github = { url: 'http://127.0.0.1:9/github', token: 'bearer', identityProfile: 'p1' }
+    const env = engineCredentialEnv({ HOME: '/home/me' }, { skillRuntime: false, githubEndpoint: github }, dir, () => null, gitConfig)
+    expect(env).toEqual({ HOME: '/home/me', CINNA_GITHUB_URL: github.url, CINNA_GITHUB_BEARER: github.token, GIT_CONFIG_GLOBAL: ours })
+    // Named by profile only (the file is written at prepare from main's own HOME), and stable across turns.
+    expect(seen).toEqual(['p1'])
+    expect(engineCredentialEnv(env, { skillRuntime: false, githubEndpoint: github }, dir, () => null, gitConfig)).toEqual(env)
+    // The user's own GIT_CONFIG_GLOBAL is left alone.
+    expect(engineCredentialEnv({ GIT_CONFIG_GLOBAL: '/home/me/.mine' }, { skillRuntime: false, githubEndpoint: github }, dir, () => null, gitConfig).GIT_CONFIG_GLOBAL).toBe('/home/me/.mine')
+    // No profile (nothing holds it, or a conflict), or no endpoint at all: ours goes.
+    const { identityProfile: _p, ...noProfile } = github
+    expect(engineCredentialEnv(env, { skillRuntime: false, githubEndpoint: noProfile }, dir, () => null, gitConfig).GIT_CONFIG_GLOBAL).toBeUndefined()
+    expect(engineCredentialEnv(env, { skillRuntime: false }, dir, () => null, gitConfig)).toEqual({ HOME: '/home/me' })
+    // The file could not be written: no variable naming it.
+    expect(engineCredentialEnv({}, { skillRuntime: false, githubEndpoint: github }, dir, () => null, () => null).GIT_CONFIG_GLOBAL).toBeUndefined()
+    // Not a secret-looking name: Claude's subprocess scrub keeps it.
+    expect('GIT_CONFIG_GLOBAL').not.toMatch(/(^|_)(TOKENS?|SECRETS?|PASSWORDS?|KEYS?|AUTH|CREDENTIALS?|PASS|PWD|JWT)(?=$|[_0-9])/i)
+  })
+
+  it('the identity config is written once per profile from main’s own HOME, the same whatever a launch env carries', () => {
+    host.userData = mkdtempSync(join(tmpdir(), 'skill-runtime-identity-'))
+    try {
+      const path = prepareGithubGitConfig('p1', { HOME: '/home/me' })!
+      const content = readFileSync(path, 'utf8')
+      const github = { url: 'http://127.0.0.1:9/github', token: 'bearer', identityProfile: 'p1' }
+      // Claude's narrowed env has no XDG_CONFIG_HOME; a kit command's or Codex's does.
+      const claude = engineCredentialEnv({ HOME: '/home/me' }, { skillRuntime: false, githubEndpoint: github }, dir, () => null)
+      const codex = engineCredentialEnv({ HOME: '/home/me', XDG_CONFIG_HOME: '/home/me/xdg' }, { skillRuntime: false, githubEndpoint: github }, dir, () => null)
+      expect([claude.GIT_CONFIG_GLOBAL, codex.GIT_CONFIG_GLOBAL]).toEqual([path, path])
+      expect(readFileSync(path, 'utf8')).toBe(content)
+      expect(content).toContain(join('/home/me', '.config', 'git', 'config'))
+    } finally { rmSync(host.userData, { recursive: true, force: true }) }
   })
 
   it('reads the runtime from the repo in development', () => {

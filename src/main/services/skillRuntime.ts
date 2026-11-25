@@ -27,6 +27,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { delimiter, join, relative, sep } from 'node:path'
 import { runtimeHost } from '../host/runtimeHost'
 import { GH_ENDPOINT_BEARER_ENV, GH_ENDPOINT_URL_ENV, GH_SHIM_DIR_NAME, githubCredentialHelperFor } from '../shell/ghShim'
+import { ensureGithubGitConfig, GITHUB_IDENTITY_DIR_NAME, githubGitConfigPath, withGithubGitConfig } from '../shell/githubGitConfig'
 import { contractTreeHash } from '../kit/contractTreeHash'
 import { swapInto } from '../kit/treeSwap'
 import { createLogger } from '../logger/logger'
@@ -112,12 +113,19 @@ export function withSkillRuntime(env: Record<string, string>, dir: string): Reco
  * that old name is still dropped. The P0 probe pushed through `GIT_CONFIG_KEY_n` under Codex 0.167.0;
  * whether Codex passes `GIT_CONFIG_KEY_n` through the ACP adapter is still to be confirmed by a
  * live turn.
+ *
+ * With the endpoint's `identityProfile` (the profile the agent is held for when prepared),
+ * `GIT_CONFIG_GLOBAL` names that profile's `<userData>/github-identity/<profile>.gitconfig`, which
+ * gives git the OpenCinna noreply identity where it has none of its own (`githubGitConfig.ts`),
+ * when that file exists (the prepare wrote it, {@link prepareGithubGitConfig}). Never over a
+ * `GIT_CONFIG_GLOBAL` the user set; ours goes without the endpoint.
  */
 export function engineCredentialEnv(
   base: Record<string, string>,
-  prepared: { path?: string; skillRuntime: boolean; tokenEndpoint?: { url: string; token: string }; githubEndpoint?: { url: string; token: string } },
+  prepared: { path?: string; skillRuntime: boolean; tokenEndpoint?: { url: string; token: string }; githubEndpoint?: GithubEndpoint },
   runtimeDir: () => string | null = ensureSkillRuntime,
-  ghWrapper: () => string | null = ghWrapperPath
+  ghWrapper: () => string | null = ghWrapperPath,
+  gitConfig: (userId: string) => string | null = githubGitConfigFor
 ): Record<string, string> {
   const env = { ...base }
   delete env.CINNA_CREDENTIALS_PATH
@@ -131,7 +139,37 @@ export function engineCredentialEnv(
   if (prepared.githubEndpoint) { env[GH_ENDPOINT_URL_ENV] = prepared.githubEndpoint.url; env[GH_ENDPOINT_BEARER_ENV] = prepared.githubEndpoint.token }
   const dir = prepared.skillRuntime ? runtimeDir() : null
   const withRuntime = dir ? withSkillRuntime(env, dir) : env
-  return githubCredentialHelperFor(withRuntime, prepared.githubEndpoint ? ghWrapper() : null)
+  const profile = prepared.githubEndpoint?.identityProfile
+  const withIdentity = withGithubGitConfig(withRuntime, profile ? gitConfig(profile) : null)
+  return githubCredentialHelperFor(withIdentity, prepared.githubEndpoint ? ghWrapper() : null)
+}
+
+/**
+ * A kit agent's GitHub endpoint: the loopback `/github` base, the agent's bearer, and the profile
+ * whose commit identity its git gets (absent: none).
+ */
+export interface GithubEndpoint { url: string; token: string; identityProfile?: string }
+
+/** `<userData>/github-identity/`. */
+export function githubIdentityDir(): string {
+  return join(runtimeHost.getPath('userData'), GITHUB_IDENTITY_DIR_NAME)
+}
+
+/** The profile's identity `.gitconfig` when it is on disk (macOS and Linux), else null. */
+export function githubGitConfigFor(userId: string): string | null {
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return null
+  const path = githubGitConfigPath(githubIdentityDir(), userId)
+  return existsSync(path) ? path : null
+}
+
+/**
+ * Write the profile's identity `.gitconfig` managed block for main's own HOME and XDG_CONFIG_HOME
+ * (`home`: the login shell's env), the same for every engine and launch whatever each narrows its
+ * env to. Called by a kit agent's prepare before {@link engineCredentialEnv}; nothing on Windows.
+ */
+export function prepareGithubGitConfig(userId: string, home: { HOME?: string; XDG_CONFIG_HOME?: string }): string | null {
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return null
+  return ensureGithubGitConfig(githubIdentityDir(), userId, home)
 }
 
 /**

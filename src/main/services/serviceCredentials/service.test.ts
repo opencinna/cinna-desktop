@@ -1862,6 +1862,14 @@ except CredentialRefreshError as e:
       expect(engineCredentialEnv({ CINNA_GITHUB_URL: 'stale', CINNA_GITHUB_BEARER: 'stale', CINNA_GITHUB_AUTH: 'stale' }, { skillRuntime: false })).toEqual({})
       expect(engineCredentialEnv({}, { skillRuntime: false, githubEndpoint: github })).toEqual({ CINNA_GITHUB_URL: github.url, CINNA_GITHUB_BEARER: github.token })
       expect(redactCredentialText(`auth ${github.token}`)).toBe('auth ***REDACTED***')
+      // The commit identity's profile, from the hub's resolver, rides the endpoint; a failing one gives none.
+      const asked: string[] = []
+      service.installGithubIdentityProfile(async (agentId) => { asked.push(agentId); return 'profile-1' })
+      expect((await prepare(kit.id)).githubEndpoint).toEqual({ ...github, identityProfile: 'profile-1' })
+      expect(asked).toEqual([kit.id])
+      service.installGithubIdentityProfile(async () => { throw new Error('boom') })
+      expect((await prepare(kit.id)).githubEndpoint).toEqual(github)
+      service.installGithubIdentityProfile(async () => null)
       const seen: [string, unknown][] = []
       service.registerTokenRoute('/github/token', async (agentId, body) => { seen.push([agentId, body]); return { status: 200, body: { needed: 'sign_in', message: 'x' } } })
       const call = () => fetch(`${github.url}/token`, { method: 'POST', headers: { authorization: `Bearer ${github.token}`, 'content-type': 'application/json' }, body: '{"repo":"a/b"}' })

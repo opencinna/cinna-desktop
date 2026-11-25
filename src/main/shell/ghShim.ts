@@ -52,6 +52,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
 import { createLogger } from '../logger/logger'
 import { shellQuote } from './managedGit'
+import { GITHUB_IDENTITY_DIR_NAME, withoutGithubGitConfig } from './githubGitConfig'
 
 const logger = createLogger('gh-shim')
 
@@ -452,9 +453,11 @@ if [ -n "$cinna_token" ]; then
   cinna_rc=$?
   unset GH_TOKEN
   if [ "$cinna_rc" = 0 ] && [ -n "$cinna_name" ] && [ -n "$cinna_email" ]; then
-    # Commits are the user's (G7): the noreply identity, only where git has none.
+    # Commits are the user's (G7): the noreply identity kept in the clone, only where the user's
+    # own git config has none. Asked without Cinna's identity config (GIT_CONFIG_GLOBAL under
+    # github-identity/), which already answers the noreply for a github.com clone.
     cinna_dir=$(cinna_clone_dir "$@")
-    if [ -n "$cinna_dir" ] && [ -d "$cinna_dir" ] && [ -z "$(git -C "$cinna_dir" config user.email 2>/dev/null </dev/null)" ]; then
+    if [ -n "$cinna_dir" ] && [ -d "$cinna_dir" ] && [ -z "$(case "$GIT_CONFIG_GLOBAL" in (*/__IDENTITY_DIR__/*.gitconfig) unset GIT_CONFIG_GLOBAL ;; esac; git -C "$cinna_dir" config user.email 2>/dev/null </dev/null)" ]; then
       git -C "$cinna_dir" config user.name "$cinna_name" >/dev/null 2>&1 </dev/null
       git -C "$cinna_dir" config user.email "$cinna_email" >/dev/null 2>&1 </dev/null
     fi
@@ -494,6 +497,7 @@ export function ghShimScript(options: { configDir: string; managedGh: string; ow
     .replace('__INSTALLING__', () => shellQuote(GH_INSTALLING_MESSAGE))
     .replace('__NO_GH__', () => shellQuote(GH_NOT_INSTALLED_MESSAGE))
     .replaceAll('__TOKEN_MAX_TIME__', () => String(GH_TOKEN_MAX_TIME_S))
+    .replace('__IDENTITY_DIR__', () => GITHUB_IDENTITY_DIR_NAME)
     .replaceAll('@{', '${')
 }
 
@@ -630,13 +634,13 @@ export function createGhShim(deps: GhShimDeps) {
   return {
     /**
      * `env` with the wrapper's directory first on `PATH`, on macOS and Linux,
-     * and without any github.com helper entries of ours (only
+     * and without any github.com helper entries or identity `GIT_CONFIG_GLOBAL` of ours (only
      * `engineCredentialEnv` adds them, with the endpoint). Idempotent. Never
      * throws: a wrapper that could not be written leaves `PATH` unchanged.
      */
     async apply<T extends Env>(env: T): Promise<T> {
       if (deps.platform !== 'darwin' && deps.platform !== 'linux') return env
-      const stripped = withoutGithubCredentialHelper(env)
+      const stripped = withoutGithubGitConfig(withoutGithubCredentialHelper(env))
       try {
         const run = queue.then(publish)
         queue = run.catch(() => undefined)

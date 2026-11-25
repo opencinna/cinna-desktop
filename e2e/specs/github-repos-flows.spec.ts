@@ -2,7 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import {
-  GH_CHECK, RECONNECT_SENTENCE, RESOLVED_TITLE, SERVED, SIGN_IN_ROW_TITLE, SIGN_IN_SENTENCE, TOKEN, USER_CODES,
+  GH_CHECK, LOGIN, RECONNECT_SENTENCE, RESOLVED_TITLE, SERVED, SIGN_IN_ROW_TITLE, SIGN_IN_SENTENCE, TOKEN, USER_CODES,
   accountState, arrange, codeSentence, commandOutput, deviceCodesRequested, github, installSentence, openedUrls, panel,
   rerunInChat, resolvedPanel, runFromCommands, served, signInOverIpc, useFakeGithub
 } from '../fixtures/fakeGithub'
@@ -47,6 +47,10 @@ function gitPush(repo: string): string {
     '[ "$code" = 0 ] || exit 0',
     `git ${net} clone -q https://github.com/${repo}.git back 2>&1`,
     'echo "cloned: $(git -C back log -1 --format=%s 2>&1)"',
+    // A commit with no identity of its own (none in the sandbox HOME): Cinna's identity config
+    // (GIT_CONFIG_GLOBAL) gives the signed-in account's noreply, and it is pushed as that.
+    `git -C back commit -q --allow-empty -m "committed by the agent" 2>&1 && git -C back ${net} push -q origin HEAD:main 2>&1`,
+    'echo "pushed as: $(git -C back log -1 --format=\'%an <%ae> / <%ce>\' 2>&1)"',
     ''
   ].join('\n')
 }
@@ -62,9 +66,11 @@ function installUserHelper(cinna: CinnaApp): string {
 
 /** git's own line once the helper answered nothing (`GIT_TERMINAL_PROMPT=0`). */
 const noUsername = (repo: string): string => `fatal: could not read Username for 'https://github.com/${repo}.git': terminal prompts disabled`
-const PUSHED = 'To https://github.com/acme/shop.git\n * [new branch]      main -> main\ngit exit: 0\ncloned: pushed by the agent'
+/** The fake account's noreply commit identity (`/api/user`: id 4242, LOGIN, name Octo E2E). */
+const NOREPLY = `4242+${LOGIN}@users.noreply.github.com`
+const PUSHED = `To https://github.com/acme/shop.git\n * [new branch]      main -> main\ngit exit: 0\ncloned: pushed by the agent\npushed as: Octo E2E <${NOREPLY}> / <${NOREPLY}>`
 
-test('git push and clone over https: refused with the sign-in sentence, then served by the OpenCinna token through the credential helper', async ({ cinna }) => {
+test('git push and clone over https: refused with the sign-in sentence, then served by the OpenCinna token through the credential helper, committing as the noreply identity', async ({ cinna }) => {
   test.setTimeout(120_000)
   github.installs = [{ id: 77, owner: 'acme', ownerId: 9001, type: 'Organization', repos: 'all' }]
   remote.createBare('acme/shop')
@@ -83,7 +89,7 @@ test('git push and clone over https: refused with the sign-in sentence, then ser
     await expect(resolvedPanel(cinna).getByTitle(RESOLVED_TITLE)).toHaveText('GitHub is connected.')
     await rerunInChat(cinna, 'git-push')
     await expect(commandOutput(cinna, 1)).toHaveText(PUSHED)
-    expect(remote.subjects('acme/shop', 'main')).toBe('pushed by the agent')
+    expect(remote.subjects('acme/shop', 'main')).toBe('committed by the agent\npushed by the agent')
     expect(remote.requests.filter((r) => r.authorized).map((r) => `${r.method} ${r.path}`)).toEqual(expect.arrayContaining([
       'POST /acme/shop.git/git-receive-pack',
       'POST /acme/shop.git/git-upload-pack'

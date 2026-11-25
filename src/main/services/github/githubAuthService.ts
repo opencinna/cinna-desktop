@@ -46,6 +46,8 @@ interface StoredAccount extends TokenPair {
 /** An expired record keeps who it was (for display) but no tokens. */
 type Account = Omit<StoredAccount, 'accessToken'> & { accessToken: string | null }
 
+/** The commit identity of a signed-in account: its GitHub name and `<id>+<login>@users.noreply.github.com`. */
+export interface GithubIdentity { name: string; email: string }
 export interface GithubTokenGrant { token: string; /** Epoch ms, or null for a token without expiry. */ expiresAt: number | null; login: string; name: string; email: string }
 export type GithubTokenResult =
   | { kind: 'token'; grant: GithubTokenGrant }
@@ -136,6 +138,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
   let access: GithubProfileAccess = { agentHolder: () => null, available: () => true }
   let onSignedIn: (userId: string) => void = () => {}
   let onGhMissing: (agentId: string) => Promise<boolean> = async () => false
+  let onIdentity: (userId: string, identity: GithubIdentity | null) => void = () => {}
 
   function profile(userId: string): Profile {
     let p = profiles.get(userId)
@@ -143,6 +146,11 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     return p
   }
   function publish(userId: string): void { deps.publish(userId) }
+  /** The commit identity of what the profile holds now (expired included: still the user's account), to the hook. */
+  function identityChanged(userId: string, account: Account | null): void {
+    try { onIdentity(userId, account ? { name: account.name, email: account.email } : null) }
+    catch (error) { logger.warn('A GitHub identity hook failed', { error: error instanceof Error ? error.message : String(error) }) }
+  }
 
   async function load(userId: string): Promise<Account | null> {
     const p = profile(userId)
@@ -162,7 +170,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     try {
       const account = await loading
       if (account) remember(account)
-      if (p.gen === gen) p.account = account
+      if (p.gen === gen) { p.account = account; identityChanged(userId, account) }
       return p.gen === gen ? account : null
     } catch {
       // Not cached: a keystore that comes back later reads it then.
@@ -186,6 +194,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     if (moved()) throw new Error('The profile changed while GitHub was signing in.')
     deps.store.write(userId, sealed)
     p!.account = account
+    identityChanged(userId, account)
   }
 
   function clearCoverage(p: Profile): void {
@@ -417,6 +426,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     p.refreshing = undefined
     p.lastMissRefresh = -Infinity
     needs.clear(userId)
+    identityChanged(userId, null)
   }
 
   async function status(userId: string): Promise<GithubStatusDto> {
@@ -441,6 +451,26 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
      * "could not install".
      */
     setOnGhMissing(fn: (agentId: string) => Promise<boolean>): void { onGhMissing = fn },
+    /**
+     * Called with the profile's commit identity whenever what it holds is read, stored or forgotten
+     * (sign-in, account change, expiry, sign-out, profile removal): null when signed out. The
+     * GitHub git identity file (`githubGitConfig.ts`) hooks here.
+     */
+    setOnIdentity(fn: (userId: string, identity: GithubIdentity | null) => void): void { onIdentity = fn },
+    /**
+     * Read the profile's account (once; cached after) and hand its identity to the hook again: what
+     * a kit agent's prepare calls, so the file is right before the turn's git runs. Nothing for a
+     * profile that cannot serve, or an account that could not be read (the file is left as it is).
+     */
+    async syncIdentity(userId: string): Promise<void> {
+      if (!access.available(userId)) return
+      const account = await load(userId), p = profiles.get(userId)
+      if (p && p.account !== undefined) identityChanged(userId, account)
+    },
+    /** Startup: each listed profile with no stored sign-in hands the hook null (a leftover identity file goes). */
+    clearStaleIdentities(userIds: string[]): void {
+      for (const userId of userIds) if (!deps.store.read(userId)) identityChanged(userId, null)
+    },
     async ghMissing(agentId: string): Promise<boolean> {
       try { return (await onGhMissing(agentId)) === true } catch (error) {
         logger.warn('A gh-missing hook failed', { error: error instanceof Error ? error.message : String(error) })

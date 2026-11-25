@@ -57,6 +57,8 @@ const accounts = new Map<string, Account>()
 /** Profiles signed out in this app session stay ineligible until activated again. */
 const signedOut = new Set<string>()
 let unlocked: (userId: string) => boolean = () => false
+/** The profile whose GitHub commit identity an agent's git gets, installed by the hub (null: none). */
+let githubIdentityProfile: (agentId: string) => Promise<string | null> = async () => null
 /**
  * The account key each Cinna profile's stored token derived to at the last refresh (null: none),
  * eligible or not, so an unavailable account can be told from one whose identity is gone.
@@ -1375,15 +1377,18 @@ async function tokenEndpointFor(a: LocalAgentDto): Promise<{ url: string; token:
 
 /**
  * The GitHub endpoint for a kit agent (every one, Google record or not): the listener's `/github`
- * base and the agent's bearer, or undefined when the listener cannot start.
+ * base and the agent's bearer, or undefined when the listener cannot start. `identityProfile`: the
+ * profile the agent is held for now, whose noreply commit identity its git gets
+ * (`githubGitConfig.ts`).
  */
-async function githubEndpointFor(a: LocalAgentDto): Promise<{ url: string; token: string } | undefined> {
+async function githubEndpointFor(a: LocalAgentDto): Promise<{ url: string; token: string; identityProfile?: string } | undefined> {
   if (a.skills === undefined) return undefined
   try {
     const origin = await tokenServer.start()
     const token = tokenServer.bearer(a.id)
     rememberCredentialSecrets({ token })
-    return { url: `${origin}/github`, token }
+    const identityProfile = await githubIdentityProfile(a.id).catch(() => null)
+    return { url: `${origin}/github`, token, ...(identityProfile ? { identityProfile } : {}) }
   } catch (error) {
     logger.warn('The credential token endpoint could not start', { agentId: a.id, error: error instanceof Error ? error.message : String(error) })
     return undefined
@@ -1809,6 +1814,8 @@ export const serviceCredentialService = {
   closeTokenServer(): Promise<void> { return tokenServer.close() },
   /** Supplies the session unlock state; installed by the activation owner. */
   installUnlockCheck(fn: (userId: string) => boolean): void { unlocked = fn },
+  /** Which profile's GitHub commit identity a kit agent's git gets (and bring its file up to date); installed by the hub. */
+  installGithubIdentityProfile(fn: (agentId: string) => Promise<string | null>): void { githubIdentityProfile = fn },
   /** Recompute eligible accounts after unlock, lock, logout, deletion or renewal. */
   refreshAccounts,
   /** Shutdown: invalidates every awaited request and stops all account timers. */

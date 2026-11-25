@@ -66,7 +66,7 @@ const logger = createLogger('local-agent-command')
  * `PYTHONPATH` — the same env its engine gets, so a kit command or scheduled run that calls a
  * skill script finds `core.cinna_api`.
  */
-let prepareCredentials: (agentId: string) => Promise<{ path?: string; skillRuntime?: boolean; tokenEndpoint?: { url: string; token: string }; githubEndpoint?: { url: string; token: string } }> = async () => ({})
+let prepareCredentials: (agentId: string) => Promise<{ path?: string; skillRuntime?: boolean; tokenEndpoint?: { url: string; token: string }; githubEndpoint?: { url: string; token: string; identityProfile?: string } }> = async () => ({})
 export function installCommandCredentialPreparation(prepare: typeof prepareCredentials): void { prepareCredentials = prepare }
 
 /**

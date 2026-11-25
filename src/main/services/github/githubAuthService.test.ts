@@ -606,3 +606,59 @@ describe('profile removal', () => {
     expect(t.storage.rows.has(U)).toBe(false)
   })
 })
+
+describe('the commit identity hook (the git identity file)', () => {
+  it('a completed sign-in hands the hook the noreply identity before anyone is told', async () => {
+    const t = makeService()
+    const seen: Array<[string, unknown, number]> = []
+    t.service.setOnIdentity((userId, identity) => seen.push([userId, identity, t.published.length]))
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: TOKENS })
+    t.github.on('/user', { json: USER })
+    t.github.on('/user/installations?per_page=100', { json: { total_count: 0, installations: [] } })
+    const signedIn = vi.fn()
+    t.service.setOnSignedIn(signedIn)
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(() => expect(signedIn).toHaveBeenCalled())
+    const stored = seen.find(([, identity]) => identity !== null)!
+    expect(stored[0]).toBe(U)
+    expect(stored[1]).toEqual({ name: 'AliceDoe', email: '42+alice@users.noreply.github.com' })
+    // Written before the sign-in was published as stored (the composer's Continue comes after).
+    expect(t.published.slice(0, stored[2]).every(p => !p.stored)).toBe(true)
+  })
+
+  it('syncIdentity reads a stored sign-in (expired included); sign-out and removal hand it null', async () => {
+    let available = true
+    const t = makeService({ access: { agentHolder: () => null, available: () => available } })
+    const hook = vi.fn()
+    t.service.setOnIdentity(hook)
+    t.storage.seed(U, connected({ state: 'expired', accessToken: null }))
+    await t.service.syncIdentity(U)
+    expect(hook).toHaveBeenLastCalledWith(U, { name: 'Alice "A" Doe', email: '42+alice@users.noreply.github.com' })
+    hook.mockClear()
+    await t.service.syncIdentity(U)
+    expect(hook).toHaveBeenCalledTimes(1)
+    t.service.signOut(U)
+    expect(hook).toHaveBeenLastCalledWith(U, null)
+    await t.service.syncIdentity(U)
+    expect(hook).toHaveBeenLastCalledWith(U, null)
+    t.storage.seed('user-2', connected())
+    available = false
+    hook.mockClear()
+    await t.service.syncIdentity('user-2')
+    expect(hook).not.toHaveBeenCalled()
+    available = true
+    await t.service.syncIdentity('user-2')
+    t.service.profileRemoved('user-2')
+    expect(hook).toHaveBeenLastCalledWith('user-2', null)
+  })
+
+  it('at startup, a profile with no stored sign-in gets null; one with a sign-in is left for its first read', () => {
+    const t = makeService()
+    const hook = vi.fn()
+    t.service.setOnIdentity(hook)
+    t.storage.seed(U, connected())
+    t.service.clearStaleIdentities([U, 'user-2'])
+    expect(hook.mock.calls).toEqual([['user-2', null]])
+  })
+})

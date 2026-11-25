@@ -72,7 +72,7 @@ echo "GH_HOST=\${GH_HOST:-unset}"
 env > "$FAKE_GH_ENV_DUMP"
 if [ "$1 $2" = "auth token" ]; then [ "$FAKE_GH_LOGIN" = 1 ] && exit 0; exit 1; fi
 if [ "$1 $2" = "auth git-credential" ]; then echo "fake-credential $3"; cat; exit 0; fi
-if [ "$1 $2" = "repo clone" ]; then git init -q "\${4:-shop}" || exit 9; exit "\${FAKE_GH_CLONE_EXIT:-0}"; fi
+if [ "$1 $2" = "repo clone" ]; then git init -q "\${4:-shop}" || exit 9; [ -z "$FAKE_GH_CLONE_REMOTE" ] || git -C "\${4:-shop}" remote add origin "$FAKE_GH_CLONE_REMOTE"; exit "\${FAKE_GH_CLONE_EXIT:-0}"; fi
 exit 0
 `
 
@@ -251,6 +251,12 @@ describe('the wrapper and git wiring in the env', () => {
       GIT_CONFIG_KEY_1: 'user.name',
       GIT_CONFIG_VALUE_1: 'U'
     })
+  })
+
+  it('removes our identity GIT_CONFIG_GLOBAL, keeping one the user set', async () => {
+    const ours = join(fx.userData, 'github-identity', 'p1.gitconfig')
+    expect((await shimFor(fx.userData).apply<Env>({ PATH: '/usr/bin', GIT_CONFIG_GLOBAL: ours })).GIT_CONFIG_GLOBAL).toBeUndefined()
+    expect((await shimFor(fx.userData).apply<Env>({ PATH: '/usr/bin', GIT_CONFIG_GLOBAL: '/home/me/.mine' })).GIT_CONFIG_GLOBAL).toBe('/home/me/.mine')
   })
 
   it('also on Linux; never on Windows', async () => {
@@ -655,6 +661,22 @@ describe.skipIf(!hasCurl || !hasGit)('commit identity after a token-served clone
     writeFileSync(join(fx.home, '.gitconfig'), '[user]\n\tname = Real\n\temail = real@example.com\n')
     const loop = await startLoopback(tokenAnswer)
     await run(['repo', 'clone', 'acme/shop'], { endpoint: loop.url })
+    expect(git(join(fx.root, 'shop'), 'config', '--local', 'user.email')).toBe('')
+  })
+
+  it('under Cinna identity config (GIT_CONFIG_GLOBAL), still keeps the noreply in a github.com clone where the user own config has none', async () => {
+    const dir = join(fx.userData, 'github-identity')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'p1.identity'), '[user]\n\tname = Alice Doe\n\temail = 1+alice@users.noreply.github.com\n')
+    writeFileSync(join(dir, 'p1.gitconfig'), `[includeIf "hasconfig:remote.*.url:https://github.com/**"]\n\tpath = "${join(dir, 'p1.identity')}"\n[include]\n\tpath = "${join(fx.home, '.gitconfig')}"\n`)
+    const loop = await startLoopback(tokenAnswer)
+    const extraEnv = { GIT_CONFIG_GLOBAL: join(dir, 'p1.gitconfig'), FAKE_GH_CLONE_REMOTE: 'https://github.com/acme/shop.git' }
+    expect((await run(['repo', 'clone', 'acme/shop'], { endpoint: loop.url, extraEnv })).status).toBe(0)
+    expect(git(join(fx.root, 'shop'), 'config', '--local', 'user.email')).toBe('1+alice@users.noreply.github.com')
+    // The user's own global identity (included by ours) still wins: nothing written.
+    rmSync(join(fx.root, 'shop'), { recursive: true, force: true })
+    writeFileSync(join(fx.home, '.gitconfig'), '[user]\n\tname = Real\n\temail = real@example.com\n')
+    await run(['repo', 'clone', 'acme/shop'], { endpoint: loop.url, extraEnv })
     expect(git(join(fx.root, 'shop'), 'config', '--local', 'user.email')).toBe('')
   })
 

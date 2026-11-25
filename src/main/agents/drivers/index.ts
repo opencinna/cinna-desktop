@@ -123,6 +123,7 @@ import { cachedPlugins } from '../../services/pluginSkills'
 import { addonPolicies } from '../../services/addonDirectory/policy'
 import { pinnedSkillAutoFetch } from '../../services/pinnedSkillAutoFetch'
 import { engineCredentialEnv } from '../../services/skillRuntime'
+import { githubIdentityKeySuffix } from '../../shell/githubGitConfig'
 import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
 import { isVaultAgent } from '../../vault/isVaultAgent'
 import { vaultAcpRuntime, vaultDriverDeps, vaultLaunchInfo } from './acp/vaultRuntime'
@@ -1353,7 +1354,11 @@ export const acpDriver = createAcpDriver({
     // Every engine (Claude, Codex, OpenCode) is launched with this env and passes it to the
     // shell its tools run in: the credentials path, and for a kit agent the skill runtime.
     const env = engineCredentialEnv(plan.spec.env, prepared)
-    return { ...plan, credentialPrompt: prepared.prompt, spec: { ...plan.spec, env, key: `${plan.spec.key}:credentials:${prepared.generation}` } }
+    // The GitHub commit identity's file is per profile and named in the env, so a warm process
+    // serves only turns held for the profile it was launched for (sign-in and sign-out rewrite the
+    // file, not the key).
+    const identity = githubIdentityKeySuffix(env, prepared.githubEndpoint?.identityProfile)
+    return { ...plan, credentialPrompt: prepared.prompt, spec: { ...plan.spec, env, key: `${plan.spec.key}:credentials:${prepared.generation}${identity}` } }
   },
   recordModelCatalog: (userId, launcher, metadata) => {
     if (isAgentEngine(launcher)) recordRuntimeModelCatalog(userId, launcher, metadata)

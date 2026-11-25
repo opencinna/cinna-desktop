@@ -35,6 +35,7 @@ import type { AcpConnection } from '../types'
 import { placeTurnContext } from '../acpDriver'
 import { createGhShim } from '../../../../shell/ghShim'
 import { engineCredentialEnv } from '../../../../services/skillRuntime'
+import { ensureGithubGitConfig, GITHUB_IDENTITY_DIR_NAME } from '../../../../shell/githubGitConfig'
 
 /**
  * The Claude Code interface contract, checked against the **real** CLI.
@@ -731,7 +732,7 @@ interface ScrubRun {
   bashFile: string | null
   writeFile: string | null
   /** The kit agent's GitHub endpoint: what the gh wrapper and git's credential helper asked it, `<path> <body>`. */
-  github: { wrapper: string; requests: string[] }
+  github: { wrapper: string; requests: string[]; gitConfig: string }
 }
 
 const SCRUB_BASH_TEXT = 'CONTRACT_SCRUB_BASH_4c1'
@@ -750,6 +751,8 @@ const SCRUB_GH_COMMAND = [
   'command -v gh', 'gh auth status; echo "GH_EXIT=$?"',
   'git config --get-all credential.https://github.com.helper',
   "printf 'protocol=https\\nhost=github.com\\npath=contract/probe.git\\n\\n' | GIT_TERMINAL_PROMPT=0 git credential fill",
+  // The commit identity's config (`GIT_CONFIG_GLOBAL`) must survive the scrub too.
+  'echo "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL"',
   `echo ${SCRUB_GH_END}`
 ].join('; ')
 
@@ -804,7 +807,7 @@ process.stdin.on('data', (chunk) => {
 async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): Promise<ScrubRun> {
   const observed: ScrubRun = { error: null, scrubbed: false, setModes: {},
     asks: { auto: 0, printenv: 0, bash: 0, write: 0, mcp: 0, gh: 0 }, results: { auto: '', printenv: '', bash: '', write: '', mcp: '', gh: '' },
-    keyInPrintenv: false, keyInMcp: false, mcpParent: null, bashFile: null, writeFile: null, github: { wrapper: '', requests: [] } }
+    keyInPrintenv: false, keyInMcp: false, mcpParent: null, bashFile: null, writeFile: null, github: { wrapper: '', requests: [], gitConfig: '' } }
   let provider: FakeAnthropic | undefined
   let connection: AdapterConnection | undefined
   let script: ClaudeProviderReply[] = []
@@ -835,8 +838,12 @@ async function scrubScenario(binary: string, trap: EgressTrap, scrub: boolean): 
     const shimmed = await createGhShim({ platform: process.platform, shimDir: () => join(userData, 'gh-shim'),
       configDir: () => join(userData, 'gh-config'), managedGh: () => join(userData, 'no-managed-gh', 'gh'), otherOwnDirs: () => [] }).apply(built)
     observed.github.wrapper = join(userData, 'gh-shim', 'gh')
+    // And the commit identity's config for a signed-in profile (`githubGitConfig.ts`), by the production code.
+    const identityDir = join(userData, GITHUB_IDENTITY_DIR_NAME)
     const kitEnv = engineCredentialEnv(shimmed, { skillRuntime: false,
-      githubEndpoint: { url: `http://127.0.0.1:${githubPort}/github`, token: 'contract-github-bearer' } }, () => null, () => observed.github.wrapper)
+      githubEndpoint: { url: `http://127.0.0.1:${githubPort}/github`, token: 'contract-github-bearer', identityProfile: 'contract' } },
+    () => null, () => observed.github.wrapper, (userId) => ensureGithubGitConfig(identityDir, userId, { HOME: scratch.home }))
+    observed.github.gitConfig = kitEnv.GIT_CONFIG_GLOBAL ?? ''
     const harnessOnly = ['CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ENABLE_TOOL_SEARCH', 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION']
     const env = { ...kitEnv, ...Object.fromEntries(harnessOnly.map((key) => [key, scratch.env[key]])), CLAUDE_CODE_EXECUTABLE: binary }
     connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, env,
@@ -1135,6 +1142,13 @@ describe.skipIf(!binaryRef)('Claude interface contract', () => {
       expect(asked.some((line) => line.startsWith('/github/needed ') && line.includes('"kind":"sign_in"')), JSON.stringify(asked)).toBe(true)
       expect(result, label).toContain(SCRUB_GH_SENTENCE)
       expect(result, label).toContain('GH_EXIT=4')
+      // The commit identity's config (`GIT_CONFIG_GLOBAL`): it reaches Bash without the scrub. Under
+      // the scrub 2.1.318 removes it from Bash's env (the scrub's git-config hardening, not a name
+      // filter: it went whether the file sat in a temp folder or under HOME), so in API Token mode a
+      // Claude kit agent gets no noreply identity from it, only G7's repo-local one after
+      // `gh repo clone`. Pinned both ways: a CLI that starts passing it through fails here first.
+      expect(run?.github.gitConfig, label).toMatch(/github-identity\/contract\.gitconfig$/)
+      expect(result, label).toContain(name === 'on' ? 'GIT_CONFIG_GLOBAL=\n' : `GIT_CONFIG_GLOBAL=${run?.github.gitConfig}\n`)
     }
   })
 

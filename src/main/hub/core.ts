@@ -52,9 +52,12 @@ import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { agentRepo } from '../db/agents'
 import { vaultService } from '../vault/vaultService'
 import { githubAuthService, setGithubGhMissingHook, setGithubSignedInHook } from '../services/github/githubAuthService'
+import { homedir } from 'node:os'
 import { managedGh } from '../shell/managedGh'
-import { which } from '../shell/env'
+import { getShellEnv, which } from '../shell/env'
 import { githubHolderOf, githubLoopbackRoutes } from '../services/github/githubLoopback'
+import { githubIdentityDir, prepareGithubGitConfig } from '../services/skillRuntime'
+import { writeGithubIdentity } from '../shell/githubGitConfig'
 import { userRepo } from '../db/users'
 import { turnLock } from '../services/localAgents/turnLock'
 import { activatedProfileUserId, installActivatedCheck } from '../auth/activatedProfile'
@@ -115,6 +118,21 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
     },
     // A profile that exists but cannot serve is locked; one that is gone answers as no profile.
     exists: (userId) => !!userRepo.get(userId)
+  })
+  // The commit identity a kit agent's git gets (G7b, `githubGitConfig.ts`): the profile's
+  // `.identity` file follows its sign-in live (the engine process launched before the sign-in keeps
+  // its env and reads the file), and each prepare names the profile the agent is held for now.
+  githubAuthService.setOnIdentity((userId, identity) => writeGithubIdentity(githubIdentityDir(), userId, identity))
+  githubAuthService.clearStaleIdentities(userRepo.list().map((user) => user.id))
+  serviceCredentialService.installGithubIdentityProfile(async (agentId) => {
+    const holder = githubAuthService.holderOf(agentId)
+    if (!holder || !('userId' in holder)) return null
+    await githubAuthService.syncIdentity(holder.userId)
+    // HOME and XDG_CONFIG_HOME from main's own view (the login shell's env), not a launch env's,
+    // so the profile's one file reads the same for every engine.
+    const shell = await getShellEnv().catch(() => process.env)
+    prepareGithubGitConfig(holder.userId, { HOME: shell.HOME || homedir(), XDG_CONFIG_HOME: shell.XDG_CONFIG_HOME })
+    return holder.userId
   })
   // Its loopback routes ride the credential token endpoint (same listener, bearer and held rule).
   for (const [path, handle] of Object.entries(githubLoopbackRoutes(githubAuthService))) serviceCredentialService.registerTokenRoute(path, handle)
