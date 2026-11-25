@@ -183,14 +183,20 @@ async function stopVm(name: string, run: ChildProcess, testInfo: TestInfo): Prom
   }
 }
 
-export const test = base.extend<{ vm: BareVm; beforeLaunch: string | undefined }>({
+export const test = base.extend<{ vm: BareVm; beforeLaunch: string | undefined; launchEnv: Record<string, string> | undefined }>({
   /**
    * A guest shell command run after the install and before the launch, for
    * state the app must find at its first start — a pasteboard, a defaults key.
    * Set with `test.use({ beforeLaunch: '…' })`.
    */
   beforeLaunch: [undefined, { option: true }],
-  vm: async ({ beforeLaunch }, use, testInfo) => {
+  /**
+   * Extra environment for the app's process (`open --env`), for a setting main
+   * reads from its env only — a fake GitHub's base URLs. Set with
+   * `test.use({ launchEnv: { … } })`.
+   */
+  launchEnv: [undefined, { option: true }],
+  vm: async ({ beforeLaunch, launchEnv }, use, testInfo) => {
     // A trailing slash is what tab completion leaves on a .app directory.
     const appArchive = process.env.CINNA_BARE_APP?.replace(/\/+$/, '')
     if (!appArchive || !existsSync(appArchive)) {
@@ -296,8 +302,9 @@ export const test = base.extend<{ vm: BareVm; beforeLaunch: string | undefined }
 
       currentStep = 'launch'
       launchedAt = Date.now()
+      const envArgs = Object.entries(launchEnv ?? {}).map(([key, value]) => ` --env ${q(`${key}=${value}`)}`).join('')
       await sh(
-        `open -a ${q(appPath)} --stdout /tmp/cinna.out --stderr /tmp/cinna.err --args --remote-debugging-port=${CDP_PORT}`
+        `open -a ${q(appPath)}${envArgs} --stdout /tmp/cinna.out --stderr /tmp/cinna.err --args --remote-debugging-port=${CDP_PORT}`
       )
       monitoring = true
       monitor = (async () => {
