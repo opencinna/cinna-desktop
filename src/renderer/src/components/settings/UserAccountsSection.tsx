@@ -6,6 +6,7 @@ import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 import { PasswordModal } from './PasswordModal'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 import { GithubAccountSection } from './GithubAccountSection'
+import { SettingsCard, SettingsInfoTip, SettingsSection } from './SettingsLayout'
 
 const inputClass =
   'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
@@ -83,7 +84,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
   const TypeIcon = isCinna ? Cloud : isDefault ? User : HardDrive
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
+    <SettingsCard flush>
       {/* Header */}
       <button
         onClick={() => !isDefault && setExpanded(!expanded)}
@@ -314,7 +315,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
       {showPasswordModal && (
         <PasswordModal user={user} onClose={() => setShowPasswordModal(false)} />
       )}
-    </div>
+    </SettingsCard>
   )
 }
 
@@ -324,23 +325,26 @@ export function UserAccountsSection(): React.JSX.Element {
   const allUsers = users ?? []
 
   return (
-    <div className="space-y-3">
-      <p className="text-[14px] text-[var(--color-text-muted)] -mt-1 mb-3">
-        Manage local user accounts. Each account has its own chats, providers, agents, and settings.
-      </p>
-
-      {allUsers.map((user) => (
-        <UserAccountCard
-          key={user.id}
-          user={user}
-          isCurrentUser={user.id === currentUser?.id}
-        />
-      ))}
+    <div className="space-y-6">
+      <SettingsSection
+        title="Profiles"
+        info={
+          <SettingsInfoTip label="About profiles">
+            Manage local user accounts. Each account has its own chats, providers, agents, and settings.
+          </SettingsInfoTip>
+        }
+      >
+        {allUsers.map((user) => (
+          <UserAccountCard
+            key={user.id}
+            user={user}
+            isCurrentUser={user.id === currentUser?.id}
+          />
+        ))}
+      </SettingsSection>
 
       {/* The current profile's GitHub sign-in (G6: tokens are per profile, signed in where its accounts live). */}
-      <div className="pt-5">
-        <GithubAccountSection />
-      </div>
+      <GithubAccountSection />
     </div>
   )
 }

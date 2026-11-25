@@ -73,14 +73,21 @@ export function SettingsSection({
 /** One setting, or one paragraph about one setting. */
 export function SettingsCard({
   children,
-  className = ''
+  className = '',
+  flush = false
 }: {
   children: ReactNode
   className?: string
+  /**
+   * No padding, clipped to the corners: for a collapsible card whose header is
+   * a full-width button with its own padding (a profile on User Accounts). A
+   * `p-0` in `className` would fight `p-4` on stylesheet order instead.
+   */
+  flush?: boolean
 }): React.JSX.Element {
   return (
     <div
-      className={`rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4 ${className}`}
+      className={`rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] ${flush ? 'overflow-hidden' : 'p-4'} ${className}`}
     >
       {children}
     </div>

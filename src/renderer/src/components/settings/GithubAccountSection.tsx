@@ -5,10 +5,11 @@ import { SettingsButton, SettingsCard, SettingsSection, useDialogChrome } from '
 import { CopyCodeButton, GithubCodeSentence } from '../chat/composerGithubNotices'
 import { openGithubUrl, useGithubSignIn, useGithubSignOut, useGithubStatus, type GithubSignIn } from '../../hooks/useGithub'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { CANCEL, DANGER, DIALOG_TEXT } from '../agents/local/sharing/ShareDialogs'
 import type { GithubCoverage, GithubStatusDto } from '../../../../shared/github'
 
 /** What the section says the sign-in is for, while there is none. */
-export const GITHUB_PURPOSE = 'Lets this profile’s agents use gh and git on your GitHub repositories.'
+export const GITHUB_PURPOSE = 'Lets this profile’s agents work on your GitHub repos.'
 
 /** One installation as a line: "acme: all repositories", "evgeny-l: shop, site". */
 export function coverageLine(install: GithubCoverage): string {
@@ -36,7 +37,7 @@ function SignInCard({ signIn, idle, label }: { signIn: GithubSignIn; idle: React
   const line = phase.kind === 'pending'
     ? <GithubCodeSentence code={phase.userCode} copyButton={<CopyCodeButton code={phase.userCode} className={COPY_CLASS} size={13} />} />
     : phase.kind === 'expired' ? 'Code expired.'
-    : phase.kind === 'denied' ? 'Sign-in was declined.'
+    : phase.kind === 'denied' ? 'GitHub sign-in was declined.'
     : phase.kind === 'error' ? phase.error
     : idle
   const action = phase.kind === 'pending' ? null
@@ -74,30 +75,30 @@ function SignOutDialog({ login, signOut, onCancel, onOpenApplications }: {
   const cancelRef = useRef<HTMLButtonElement>(null)
   useDialogChrome({ modalRef, initialFocusRef: cancelRef, pending: signOut.isPending, onDismiss: onCancel })
   const error = signOut.error ? unwrapIpcError(signOut.error, 'Couldn’t sign out of GitHub.') : null
+  // The standard modal shell: the scrim a sibling of the glass panel, never its parent.
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25">
+    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh]">
+      <div aria-hidden className="app-modal-scrim absolute inset-0" />
       <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="github-sign-out-title"
-        className="app-popover-surface w-96 space-y-4 rounded-lg border border-[var(--color-border)] p-5 shadow-xl">
-        <div id="github-sign-out-title" className="flex items-center gap-2 text-[14px] font-medium text-[var(--color-text)]">
+        className="app-modal-panel relative w-full max-w-md space-y-4 rounded-xl border p-5">
+        <div id="github-sign-out-title" className="flex items-center gap-2 text-base font-semibold text-[var(--color-text)]">
           <AlertTriangle size={16} className="text-[var(--color-warning)]" aria-hidden="true" />
           Sign out of GitHub
         </div>
-        <p className="text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
+        <p className={DIALOG_TEXT}>
           Your repositories and anything already pushed stay as they are. This profile’s agents stop
           using <strong className="text-[var(--color-text)]">{login}</strong> on this computer, and
           their gh and git commands ask you to sign in again.
         </p>
-        <p className="text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
+        <p className={DIALOG_TEXT}>
           Cinna’s access is fully revoked only on GitHub, at{' '}
           <GithubLink onClick={onOpenApplications}>github.com/settings/applications</GithubLink>.
         </p>
         <div className="flex justify-end gap-2">
-          <button ref={cancelRef} type="button" onClick={onCancel} disabled={signOut.isPending}
-            className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-[13px] font-medium text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)] disabled:opacity-50">
+          <button ref={cancelRef} type="button" onClick={onCancel} disabled={signOut.isPending} className={CANCEL}>
             Cancel
           </button>
-          <button type="button" onClick={() => signOut.mutate()} disabled={signOut.isPending}
-            className="min-w-[6.5rem] rounded-md bg-[var(--color-danger)] px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50">
+          <button type="button" onClick={() => signOut.mutate()} disabled={signOut.isPending} className={`${DANGER} min-w-[6.5rem]`}>
             {signOut.isPending ? 'Signing out…' : 'Sign out'}
           </button>
         </div>
@@ -113,23 +114,27 @@ function ConnectedCard({ account, onSignOut, onOpen }: {
   onSignOut: () => void
   onOpen: (target: 'manage' | 'applications') => void
 }): React.JSX.Element {
+  // Each line holds the control that changes it: the login with Sign out, the coverage with
+  // Manage repository access. Lines truncate (whole text in the tooltip) rather than wrap at 800 px.
   return (
     <SettingsCard>
       <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1 text-[14px] font-medium text-[var(--color-text)]">
-          Signed in as <span className="font-mono text-[13px]">{account.login}</span>
-        </div>
-        <SettingsButton onClick={() => onOpen('manage')}><ExternalLink size={13} aria-hidden="true" />Manage repository access</SettingsButton>
+        <span title={account.login} className="min-w-0 flex-1 truncate text-[14px] font-medium text-[var(--color-text)]">{account.login}</span>
         <SettingsButton onClick={onSignOut}><LogOut size={13} aria-hidden="true" />Sign out</SettingsButton>
       </div>
-      <ul aria-label="Repositories Cinna can reach" className="mt-3 space-y-1 text-[13px] text-[var(--color-text-secondary)]">
-        {account.coverage.length === 0
-          ? <li>No repositories yet</li>
-          : account.coverage.map((install) => <li key={install.installationId} className="break-words">{coverageLine(install)}</li>)}
-      </ul>
-      <p className="mt-3 text-[13px] leading-relaxed text-[var(--color-text-muted)]">
-        Signing out stops agents using this account here; a full revoke is at{' '}
-        <GithubLink onClick={() => onOpen('applications')}>github.com/settings/applications</GithubLink>.
+      <div className="mt-3 flex items-start gap-3">
+        <ul aria-label="Repositories Cinna can reach" className="min-w-0 flex-1 space-y-1 pt-1 text-[13px] text-[var(--color-text-secondary)]">
+          {account.coverage.length === 0
+            ? <li>No repositories yet</li>
+            : account.coverage.map((install) => {
+              const line = coverageLine(install)
+              return <li key={install.installationId} title={line} className="truncate">{line}</li>
+            })}
+        </ul>
+        <SettingsButton onClick={() => onOpen('manage')}><ExternalLink size={13} aria-hidden="true" />Manage repository access</SettingsButton>
+      </div>
+      <p className="mt-3 truncate text-[13px] text-[var(--color-text-muted)]">
+        A full revoke is at <GithubLink onClick={() => onOpen('applications')}>github.com/settings/applications</GithubLink>.
       </p>
     </SettingsCard>
   )
@@ -138,7 +143,8 @@ function ConnectedCard({ account, onSignOut, onOpen }: {
 /**
  * Settings → User Accounts → GitHub: the OpenCinna sign-in of the current profile. Signed out,
  * the purpose and Sign in to GitHub (the device flow, as on the composer row); connected, the
- * login, the repositories the app's installations cover, Manage repository access and Sign out;
+ * login with Sign out, then the repositories the app's installations cover with Manage
+ * repository access, and where a full revoke is;
  * expired, Reconnect GitHub.
  */
 export function GithubAccountSection(): React.JSX.Element {

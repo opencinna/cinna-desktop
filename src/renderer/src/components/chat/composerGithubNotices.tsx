@@ -10,7 +10,8 @@ import type { GithubNeedDto } from '../../../../shared/github'
  * The composer's GitHub rows: an agent's `gh` or `git` found nothing to authenticate with (main
  * recorded a need, deduplicated per profile), so the chat of that agent offers the one thing that
  * fixes it. Each row is the panel's one-line template (ux_rules rule 19), warning tone, with a ×;
- * only the device flow's wait keeps its action under the line, as the engine login does.
+ * only the device flow's wait keeps its action under the line, as the engine login does. A need
+ * that clears turns into "GitHub is connected" + Continue, an offer in the accent tone.
  */
 
 /** What Continue sends to the chat, exactly. */
@@ -81,7 +82,7 @@ function accountRow(kind: 'sign_in' | 'reconnect', signIn: GithubSignIn): Pick<C
     return { text: 'Code expired.', title: 'The GitHub sign-in code expired before it was approved.', singleLine: true, action: startButton('Get a new code', RefreshCw) }
   }
   if (phase.kind === 'denied') {
-    return { text: 'Sign-in was declined.', title: 'The GitHub sign-in was declined in the browser.', singleLine: true, action: startButton(label, LogIn) }
+    return { text: 'GitHub sign-in was declined.', title: 'The GitHub sign-in was declined in the browser.', singleLine: true, action: startButton(label, LogIn) }
   }
   if (phase.kind === 'error') {
     return { text: phase.error, title: phase.error, singleLine: true, action: startButton(label, LogIn) }
@@ -131,7 +132,8 @@ export function githubNeedNotice(need: GithubNeedDto, handlers: GithubNoticeHand
 export function githubResolvedNotice(onContinue: () => void, onDismiss: () => void, failed: boolean): ComposerNotice {
   const text = failed ? 'GitHub is connected. The message couldn’t be sent yet.' : 'GitHub is connected.'
   return {
-    key: 'github:resolved', tone: 'warning', icon: Check, text,
+    // An offer, not a problem: the accent tone, as the panel's other offers.
+    key: 'github:resolved', tone: 'accent', panelLabel: 'GitHub', icon: Check, text,
     title: `${text} Continue sends “${GITHUB_CONTINUE_MESSAGE}” to this chat.`,
     singleLine: true,
     onDismiss, dismissLabel: 'Dismiss without sending',
@@ -155,16 +157,19 @@ export function useGithubNotices(chatId: string | null, agentId: string | null, 
   const scope = chatId && agentId ? `${chatId}\n${agentId}` : null
   const needs = scope && status ? status.needs.filter((n) => n.kind !== 'admin' && n.agentIds.includes(agentId as string)) : []
   const keySignature = needs.map((n) => n.key).join('\n')
+  // Keys the user put away with × (in any chat or window): their going is not GitHub getting connected.
+  const dismissedSignature = (status?.dismissed ?? []).join('\n')
   const connected = status?.account?.state === 'connected'
   const resolved = useGithubNoticeStore((s) => (scope ? !!s.resolved[scope] : false))
   useEffect(() => {
     if (!scope || !status) return
     const store = useGithubNoticeStore.getState()
     const keys = keySignature ? keySignature.split('\n') : []
-    const gone = store.see(scope, keys)
+    const dismissed = dismissedSignature ? dismissedSignature.split('\n') : []
+    const cleared = store.see(scope, keys).filter((key) => !dismissed.includes(key))
     if (keys.length > 0) store.clearResolved(scope)
-    else if (gone.length > 0 && connected) store.resolve(scope)
-  }, [scope, status, keySignature, connected])
+    else if (cleared.length > 0 && connected) store.resolve(scope)
+  }, [scope, status, keySignature, dismissedSignature, connected])
   useEffect(() => setSendFailed(false), [scope, resolved])
   useGithubCheckOnFocus(needs.some((n) => n.kind === 'install'))
 

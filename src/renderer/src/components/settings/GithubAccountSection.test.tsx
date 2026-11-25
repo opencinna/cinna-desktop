@@ -42,14 +42,14 @@ afterEach(() => { queryClient.clear(); useAuthStore.getState().setCurrentUser(nu
 
 describe('GitHub section', () => {
   it('signed out: says what it is for and signs in with the device flow', async () => {
-    status = { account: null, device: null, needs: [] }
+    status = { account: null, device: null, needs: [], dismissed: [] }
     api.signIn.mockImplementation(async () => {
-      status = { account: null, device: { userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device', expiresAt: 1, state: 'pending' }, needs: [] }
+      status = { account: null, device: { userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device', expiresAt: 1, state: 'pending' }, needs: [], dismissed: [] }
       return { ok: true, value: status.device }
     })
     show()
     expect(screen.getByRole('heading', { name: 'GitHub' })).toBeTruthy()
-    expect(await screen.findByText('Lets this profile’s agents use gh and git on your GitHub repositories.')).toBeTruthy()
+    expect(await screen.findByText('Lets this profile’s agents work on your GitHub repos.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Sign in to GitHub' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('ABCD-1234'))
     expect(await screen.findByText('ABCD-1234')).toBeTruthy()
@@ -59,33 +59,42 @@ describe('GitHub section', () => {
   })
 
   it('connected: the login, the covered owners and repositories, Manage repository access', async () => {
-    status = { account: account(), device: null, needs: [] }
+    status = { account: account(), device: null, needs: [], dismissed: [] }
     show()
-    expect(await screen.findByText('evgeny-l', { selector: 'span' })).toBeTruthy()
+    // Line 1: the login alone (no "Signed in as") with Sign out beside it.
+    const login = await screen.findByText('evgeny-l', { selector: 'span' })
+    expect(screen.queryByText(/Signed in as/)).toBeNull()
+    expect(login.parentElement?.contains(screen.getByRole('button', { name: 'Sign out' }))).toBe(true)
+    // Line 2: the coverage with Manage repository access on its right.
     const list = screen.getByRole('list', { name: 'Repositories Cinna can reach' })
     expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['acme: all repositories', 'evgeny-l: shop, site'])
-    fireEvent.click(screen.getByRole('button', { name: 'Manage repository access' }))
+    const manage = screen.getByRole('button', { name: 'Manage repository access' })
+    expect(list.nextElementSibling).toBe(manage)
+    fireEvent.click(manage)
     expect(api.openUrl).toHaveBeenCalledWith('manage')
-    expect(screen.getByText(/a full revoke is at/)).toBeTruthy()
+    expect(screen.getByText(/A full revoke is at/)).toBeTruthy()
   })
 
   it('connected with no installation: No repositories yet', async () => {
-    status = { account: account({ coverage: [] }), device: null, needs: [] }
+    status = { account: account({ coverage: [] }), device: null, needs: [], dismissed: [] }
     show()
     expect(await screen.findByText('No repositories yet')).toBeTruthy()
   })
 
   it('confirms Sign out, saying where the full revoke is, and closes only once it is done', async () => {
-    status = { account: account(), device: null, needs: [] }
+    status = { account: account(), device: null, needs: [], dismissed: [] }
     show()
     fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
     const dialog = screen.getByRole('dialog', { name: 'Sign out of GitHub' })
+    // The standard modal shell: a glass panel beside its scrim, not inside it.
+    expect(dialog.className).toContain('app-modal-panel')
+    expect(dialog.previousElementSibling?.className).toContain('app-modal-scrim')
     expect(dialog.textContent).toContain('stop using evgeny-l')
     expect(dialog.textContent).toContain('fully revoked only on GitHub')
     fireEvent.click(within(dialog).getByRole('button', { name: 'github.com/settings/applications' }))
     expect(api.openUrl).toHaveBeenCalledWith('applications')
     expect(api.signOut).not.toHaveBeenCalled()
-    status = { account: null, device: null, needs: [] }
+    status = { account: null, device: null, needs: [], dismissed: [] }
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out' })) })
     expect(api.signOut).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
@@ -93,7 +102,7 @@ describe('GitHub section', () => {
   })
 
   it('keeps a refused sign-out in the dialog', async () => {
-    status = { account: account(), device: null, needs: [] }
+    status = { account: account(), device: null, needs: [], dismissed: [] }
     api.signOut.mockResolvedValueOnce({ ok: false, error: 'Session not activated' } as never)
     show()
     fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
@@ -103,8 +112,15 @@ describe('GitHub section', () => {
     expect(within(dialog).getByRole('alert').textContent).toBe('Session not activated')
   })
 
+  it('says a declined sign-in as GitHub’s, with Sign in to GitHub', async () => {
+    status = { account: null, device: { userCode: 'A', verificationUri: 'https://github.com/login/device', expiresAt: 1, state: 'denied' }, needs: [], dismissed: [] }
+    show()
+    expect(await screen.findByText('GitHub sign-in was declined.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Sign in to GitHub' })).toBeTruthy()
+  })
+
   it('expired: says so and offers Reconnect GitHub', async () => {
-    status = { account: account({ state: 'expired' }), device: null, needs: [] }
+    status = { account: account({ state: 'expired' }), device: null, needs: [], dismissed: [] }
     show()
     expect(await screen.findByText(/Sign-in expired for/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Reconnect GitHub' }))

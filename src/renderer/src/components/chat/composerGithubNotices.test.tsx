@@ -28,8 +28,8 @@ const writeText = vi.fn(async (_text: string) => ({ success: true }))
 let queryClient: QueryClient
 
 const need = (over: Partial<GithubNeedDto> = {}): GithubNeedDto => ({ key: 'account', kind: 'sign_in', agentIds: ['agent-1'], ...over })
-const signedOut = (needs: GithubNeedDto[], device: GithubStatusDto['device'] = null): GithubStatusDto => ({ account: null, device, needs })
-const connected = (needs: GithubNeedDto[] = []): GithubStatusDto => ({ account: { login: 'evgeny-l', state: 'connected', coverage: [], coverageFetchedAt: 1 }, device: null, needs })
+const signedOut = (needs: GithubNeedDto[], device: GithubStatusDto['device'] = null): GithubStatusDto => ({ account: null, device, needs, dismissed: [] })
+const connected = (needs: GithubNeedDto[] = [], dismissed: string[] = []): GithubStatusDto => ({ account: { login: 'evgeny-l', state: 'connected', coverage: [], coverageFetchedAt: 1 }, device: null, needs, dismissed })
 
 function Harness({ chatId, agentId, send }: { chatId: string | null; agentId: string | null; send: (text: string) => Promise<boolean> }): React.JSX.Element {
   const notices = useGithubNotices(chatId, agentId, send)
@@ -146,7 +146,7 @@ describe('the device flow in the row', () => {
   it('says a declined sign-in and main’s error in the row, each with Sign in to GitHub', async () => {
     status = signedOut([need()], { userCode: 'A', verificationUri: 'https://github.com/login/device', expiresAt: 1, state: 'denied' })
     show()
-    expect(await screen.findByText('Sign-in was declined.')).toBeTruthy()
+    expect(await screen.findByText('GitHub sign-in was declined.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Sign in to GitHub' })).toBeTruthy()
     await push(signedOut([need()], { userCode: 'A', verificationUri: 'https://github.com/login/device', expiresAt: 1, state: 'error', error: 'GitHub refused the sign-in (x). Try again.' }))
     expect(await screen.findByText('GitHub refused the sign-in (x). Try again.')).toBeTruthy()
@@ -167,8 +167,24 @@ describe('dismiss and resolve', () => {
     show()
     fireEvent.click(await screen.findByRole('button', { name: 'Dismiss GitHub access request' }))
     expect(api.dismiss).toHaveBeenCalledWith('install:acme')
-    await push(connected([]))
+    await push(connected([], ['install:acme']))
     expect(screen.queryByText('GitHub is connected.')).toBeNull()
+  })
+  it('a need dismissed in another chat or window is forgotten here, not read as connected', async () => {
+    const install = need({ key: 'install:acme', kind: 'install', owner: 'acme', repos: ['acme/shop'] })
+    status = connected([install])
+    const { send } = show({ chatId: 'chat-2' })
+    await screen.findByRole('button', { name: 'Allow access' })
+    // × pressed on the same row in chat-1: main drops the need and lists its key as dismissed.
+    await push(connected([], ['install:acme']))
+    expect(screen.queryByText('GitHub is connected.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    expect(send).not.toHaveBeenCalled()
+    // Recorded again, it shows again; and clearing for real now resolves.
+    await push(connected([install]))
+    expect(await screen.findByRole('button', { name: 'Allow access' })).toBeTruthy()
+    await push(connected([]))
+    expect(await screen.findByText('GitHub is connected.')).toBeTruthy()
   })
   it('turns a cleared need into Continue, which sends exactly the fixed message once', async () => {
     status = signedOut([need()])
@@ -176,6 +192,9 @@ describe('dismiss and resolve', () => {
     await screen.findByText('GitHub isn’t connected.')
     await push(connected([]))
     expect(await screen.findByText('GitHub is connected.')).toBeTruthy()
+    // An offer, not a warning: the accent tone, under its own name.
+    const panel = screen.getByRole('status', { name: 'GitHub' })
+    expect(panel.getAttribute('data-tone')).toBe('accent')
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Continue' })) })
     expect(send).toHaveBeenCalledTimes(1)
     expect(send).toHaveBeenCalledWith('GitHub is connected, go on')
