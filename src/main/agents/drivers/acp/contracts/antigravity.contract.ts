@@ -50,6 +50,13 @@ export const ANTIGRAVITY_CONTRACT: readonly ContractEntry[] = [
     flow: NO_FLOW
   },
   {
+    id: 'antigravity.launch.shell-path', area: 'launch & env', surface: 'env var', name: 'PATH (prepended shims)',
+    expectation: 'With a directory put first on the launcher’s `PATH` (as `withDeveloperToolShims` puts `git-shim/` and `tool-shims/`), a `run_command` of `git` reaches that directory’s `git`: the server keeps the order it was given rather than rebuilding `PATH` in a login shell (whose `/etc/zprofile` `path_helper` would put `/usr/bin` first on macOS, as Codex’s default did). Checked 25 Nov 2026 on 1.4.5 against the fake gateway.',
+    owners: ['src/main/shell/developerToolShims.ts#withDeveloperToolShims', 'src/main/agents/drivers/acp/antigravityEnv.ts#buildAntigravityEnv'],
+    feature: 'On a Mac without the Command Line Tools a `git` or `python3` an Antigravity turn ran would reach the xcrun stub and raise the install dialog, and the managed git would never be used.',
+    flow: { steps: ['none'], note: 'the whole flow runs no shell command with a PATH-dependent tool' }
+  },
+  {
     id: 'antigravity.launch.gemini-home', area: 'launch & env', surface: 'env var', name: 'GEMINI_HOME',
     expectation: 'The server reads `antigravity-acp/settings.json` from, and keeps its conversations and MCP tool schemas under, the home this variable names; unset, the home is `$HOME/.gemini`.',
     owners: [`${LAUNCHER}#antigravityIsolatedHome`, `${LAUNCHER}#prepareAntigravityHome`, `${ENV}#antigravityHome`],

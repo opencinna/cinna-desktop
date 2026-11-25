@@ -135,6 +135,13 @@ export const CODEX_CONTRACT: readonly ContractEntry[] = [
     flow: { steps: ['none'], note: 'the whole flow runs no build session and no networked command' }
   },
   {
+    id: 'codex.launch.login-shell', area: 'launch & env', surface: 'env var', name: 'CODEX_CONFIG allow_login_shell',
+    expectation: 'With a directory put first on the adapter’s `PATH` (as `withDeveloperToolShims` puts `git-shim/` and `tool-shims/`), an exec_command running `git` reaches that directory’s `git` when the process’s `CODEX_CONFIG` carries `allow_login_shell: false`. With Codex’s default the command’s environment comes from a login shell (`/bin/zsh -lc` from `codex exec`; through the adapter `zsh -c` over a login-shell snapshot, which does not report itself as a login shell), and on macOS `/etc/zprofile`’s `path_helper` has moved the prepended directory behind `/usr/bin`, so the system `git` runs instead. Found 25 Nov 2026 on 0.167.0.',
+    owners: ['src/main/agents/drivers/acp/codexLauncher.ts#CODEX_SHELL_CONFIG', 'src/main/shell/developerToolShims.ts#withDeveloperToolShims'],
+    feature: 'On a Mac without the Command Line Tools every `git`, `python3` or `make` a Codex turn ran reached the xcrun stub and raised the "install the command line developer tools" dialog, and the managed git was never used; any PATH wrapper Cinna adds (the planned `gh` wrapper) is bypassed the same way.',
+    flow: { steps: ['none'], note: 'the whole flow runs no shell command with a PATH-dependent tool' }
+  },
+  {
     id: 'codex.sandbox.read-outside-workspace', area: 'permissions & questions', surface: 'ACP method', name: 'sibling read / session/request_permission',
     expectation: 'A shell read (`cat`) of a file outside the workspace and outside the system temp roots runs without an ACP ask and returns the file’s content, in workspace-write and in agent mode alike: the sandbox confines writes, not reads. Measured 6 Oct 2026, and again 11 Oct 2026 on 0.162.1 with codex-acp 2.2.2, against a fake provider.',
     owners: ['src/main/agents/drivers/acp/codexLauncher.ts#modeId'],

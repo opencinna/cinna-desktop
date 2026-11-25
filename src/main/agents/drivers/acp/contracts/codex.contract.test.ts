@@ -12,7 +12,7 @@ import { prepareCodexConductorPolicy, prepareCodexWorkspacePolicy } from '../cod
 import { cinnaToolName } from '../conductorToolPolicy'
 import { isPromptPlaceholder } from '../acpSessionTitle'
 import { parseCodexAuthStatus } from '../codexAuth'
-import { codexSandboxConfig } from '../codexLauncher'
+import { CODEX_SHELL_CONFIG, codexSandboxConfig } from '../codexLauncher'
 import { airClientMeta, createAcpActivityState, translateActivity } from '../acpActivity'
 import { parsePromptTelemetry } from '../acpTelemetry'
 import { AcpMessageStream } from '../acpMessages'
@@ -149,6 +149,8 @@ const seen = {
    */
   /** Scenario N: a loopback connect from workspace-write, with and without the build-session sandbox config. */
   network: { hits: 0, error: null as unknown, variants: {} as Record<string, { reached: boolean; asks: number; outputs: string[] }> },
+  /** Scenario L: which `git` a model command reaches with a marker `git` first on PATH, with and without the launcher's shell config. */
+  loginShell: { error: null as unknown, variants: {} as Record<string, { outputs: string[] }> },
   deny: [] as { name: string; asks: AdapterMessage[]; sent: (string | null)[]; answer: Json | null; requests: number; written: boolean }[],
   /** Scenario F: two `workspace` chats on one process, its cwd profile-owned, each session in its chat folder. */
   workspace: { error: null as unknown, prepared: null as AcpLaunchPlan | null, chats: [] as string[], processDir: '',
@@ -666,6 +668,56 @@ async function networkScenario(binary: string): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------- scenario L */
+
+/**
+ * Which `git` a model-issued command reaches: a directory holding a marker
+ * `git` is put first on the adapter's PATH, as `withDeveloperToolShims` puts
+ * `git-shim/` and `tool-shims/`, and exec_command runs `git`. Once with the
+ * launcher's shell config and once with Codex's default (a login shell, whose
+ * /etc/zprofile path_helper reorders PATH on macOS).
+ */
+async function loginShellScenario(binary: string): Promise<void> {
+  for (const variant of ['launcher', 'default'] as const) {
+    const scratch = makeScratch(`cinna-contract-shell-${variant}-`)
+    let provider: FakeProvider | undefined
+    let connection: AdapterConnection | undefined
+    try {
+      const shims = join(scratch.home, 'shims')
+      mkdirSync(shims)
+      writeFileSync(join(shims, 'git'), '#!/bin/sh\necho CINNA_SHIM_GIT_REACHED\n')
+      chmodSync(join(shims, 'git'), 0o755)
+      let script: ProviderReply[] = []
+      provider = await startFakeProvider((turn): ProviderReply =>
+        turn.kind !== 'conversation' ? ownRequestReply(turn) : (script.shift() ?? { kind: 'text', text: 'OK' }))
+      writeProviderConfig(scratch.codexHome, provider.port, MODEL)
+      const config = { model: MODEL, model_provider: 'probe', ...(variant === 'launcher' ? CODEX_SHELL_CONFIG : {}) }
+      connection = spawnAdapter({ adapterPath: adapter, cwd: scratch.cwd, answer: allowOnce,
+        env: { ...scratch.env, PATH: `${shims}:${scratch.env.PATH ?? ''}`, CODEX_PATH: binary, INITIAL_AGENT_MODE: 'workspace-write',
+          MODEL_PROVIDER: 'probe', CODEX_CONFIG: JSON.stringify(config) } })
+      await connection.rpc('initialize', { protocolVersion: 1,
+        clientCapabilities: { elicitation: { form: {} }, _meta: airClientMeta(['asyncTasks']) }, clientInfo: { name: 'cinna-desktop', version: '1' } })
+      const created = await connection.rpc('session/new', { cwd: scratch.cwd, mcpServers: [] }, 60_000)
+      const sessionId = String(created.result?.sessionId ?? '')
+      if (!sessionId) { seen.loginShell.error ??= created.error ?? 'no session'; continue }
+      await connection.rpc('session/set_mode', { sessionId, modeId: 'workspace-write' })
+      const turnsAt = provider.turns.length
+      script = [{ kind: 'tool', name: 'exec_command', args: JSON.stringify({ cmd: 'git', yield_time_ms: 8000, max_output_tokens: 1000 }) }]
+      const answer = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Run git.' }] }, 90_000)
+      if (answer.error) seen.loginShell.error ??= answer.error
+      await sleep(500)
+      const turns = provider.turns.slice(turnsAt).filter((turn) => turn.kind === 'conversation')
+      seen.loginShell.variants[variant] = { outputs: turns.flatMap((turn) => turn.pendingOutputs ? turn.outputs.slice(-turn.pendingOutputs) : []) }
+    } catch (error) {
+      seen.loginShell.error ??= error instanceof Error ? error.message : String(error)
+    } finally {
+      await connection?.close()
+      await provider?.close()
+      scratch.dispose()
+    }
+  }
+}
+
 /* -------------------------------------------------------------- scenario F */
 
 const WORKSPACE_MARKER = 'CONTRACT_WORKSPACE_INSTRUCTIONS_c61'
@@ -932,6 +984,7 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     await subagentScenario(binary, 'v1')
     await denyScenario(binary)
     await networkScenario(binary)
+    await loginShellScenario(binary)
     await workspaceScenario(binary)
     seen.handover = await probeFolderHandovers('codex', binary, adapter)
   }, 420_000)
@@ -1349,6 +1402,17 @@ describe.skipIf(!binaryRef)('Codex interface contract', () => {
     // Every other launch: refused by the sandbox, still without an ask.
     expect(seen.network.variants['plain']).toMatchObject({ reached: false, asks: 0 })
     expect(seen.network.hits).toBe(1)
+  })
+  it(entry('codex.launch.login-shell'), () => {
+    expect(seen.loginShell.error).toBeNull()
+    // The launcher's config: the command reaches the directory put first on PATH.
+    expect(seen.loginShell.variants['launcher']?.outputs.join(' ')).toContain('CINNA_SHIM_GIT_REACHED')
+    // Codex's default builds the command's environment from a login shell (`zsh -lc`, or `zsh -c` over a
+    // snapshot of one, which is not itself a login shell); on macOS /etc/zprofile's path_helper put /usr/bin first.
+    if (process.platform === 'darwin') {
+      expect(seen.loginShell.variants['default']?.outputs.join(' ')).not.toContain('CINNA_SHIM_GIT_REACHED')
+      expect(seen.loginShell.variants['default']?.outputs.join(' ')).toMatch(/usage: git/)
+    }
   })
   it(entry('codex.sandbox.write-outside-workspace'), () => {
     expect(seen.handover?.writes.map((write) => write.mode)).toEqual([

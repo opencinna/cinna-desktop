@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -120,6 +120,8 @@ interface Step {
 
 /** Everything the scenarios observed. Filled by `beforeAll`. */
 const seen = {
+  /** Scenario P: which `git` a model command reaches with a marker `git` first on the launcher's PATH. */
+  shellPath: { error: null as unknown, output: '' },
   version: { status: null as number | null, output: '' },
   uid: { status: null as number | null, output: '' },
   folder: {
@@ -203,6 +205,56 @@ function answerAsk(permissions: AdapterMessage[]) {
       ? permissionQuestionAnswer(question, [['Yes']])
       : pickPermissionOption(optionsOf(request) as unknown as PermissionOption[], 'allow')
     return optionId ? { outcome: { outcome: 'selected', optionId } } : undefined
+  }
+}
+
+/* -------------------------------------------------------------- scenario P */
+
+/**
+ * Which `git` a model-issued `run_command` reaches when a directory holding a
+ * marker `git` is first on the launcher's PATH, as `withDeveloperToolShims`
+ * puts `git-shim/` and `tool-shims/`. A server that ran commands in a login
+ * shell would have /etc/zprofile's path_helper put /usr/bin first on macOS.
+ */
+async function shellPathScenario(binary: string): Promise<void> {
+  const scratch = makeAntigravityScratch('cinna-contract-agy-shell-')
+  let gateway: FakeGateway | undefined
+  let connection: AdapterConnection | undefined
+  try {
+    const shims = join(scratch.root, 'shims')
+    mkdirSync(shims)
+    writeFileSync(join(shims, 'git'), '#!/bin/sh\necho CINNA_SHIM_GIT_REACHED\n')
+    chmodSync(join(shims, 'git'), 0o755)
+    const cwd = join(scratch.root, 'work')
+    mkdirSync(cwd)
+    let next: GatewayReply | null = null
+    gateway = await startFakeGateway((turn): GatewayReply => {
+      if (turn.responses.length === 0 && next) { const reply = next; next = null; return reply }
+      return { kind: 'text', text: 'OK' }
+    })
+    const env = { ...scratch.env, ...gatewayEnv(gateway.port, MODELS), PATH: `${shims}:${scratch.env.PATH ?? ''}` }
+    const plan = await plannedFolder(binary, cwd, env, 'isolated')
+    connection = spawnAntigravity({ binary: plan.spec.command, args: plan.spec.args, cwd: plan.spec.cwd ?? cwd,
+      env: plan.spec.env, geminiHome: plan.spec.env.GEMINI_HOME ?? null, answer: answerAsk([]) })
+    await connection.rpc('initialize', plan.init as unknown as Json)
+    const created = await connection.rpc('session/new', { cwd, mcpServers: [], _meta: plan.session.meta })
+    const sessionId = String(created.result?.sessionId ?? '')
+    if (!sessionId) { seen.shellPath.error = created.error ?? 'no session'; return }
+    for (const option of plan.setup.configOptions ?? []) await connection.rpc('session/set_config_option', { sessionId, configId: option.configId, value: option.value })
+    if (plan.setup.modeId) await connection.rpc('session/set_mode', { sessionId, modeId: plan.setup.modeId })
+    const at = connection.updates.length
+    next = { kind: 'call', name: 'run_command', args: { CommandLine: 'git', Cwd: cwd, WaitMsBeforeAsync: 5000, toolAction: 'Running', toolSummary: 'git' } }
+    const answer = await connection.rpc('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Run git.' }] })
+    if (answer.error) seen.shellPath.error = answer.error
+    await sleep(500)
+    const done = connection.updates.slice(at).find((update) => update.sessionUpdate === 'tool_call_update' && update.status === 'completed')
+    seen.shellPath.output = String((done?.rawOutput as Json | undefined)?.formatted_output ?? JSON.stringify(connection.updates.slice(at)).slice(0, 2000))
+  } catch (error) {
+    seen.shellPath.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    await connection?.close()
+    await gateway?.close()
+    scratch.dispose()
   }
 }
 
@@ -691,6 +743,7 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
       seen.uid = { status: uid.status, output: `${uid.stdout}\n${uid.stderr}` }
     } finally { scratch.dispose() }
     await folderScenario(binary)
+    await shellPathScenario(binary)
     await nativeScenario(binary)
     await chatScenario(binary)
     // Chat ids that sort before `processes/` and after it, and the control:
@@ -802,6 +855,11 @@ describe.skipIf(!binaryRef)('Antigravity interface contract', () => {
     expect(resumed?.userText).toContain(FOLDER_MARKER)
     expect(resumed?.lastUserText).toContain(AFTER_LOAD_PROMPT)
     expect(resumed?.lastUserText).not.toContain(FOLDER_MARKER)
+  })
+
+  it(entry('antigravity.launch.shell-path'), () => {
+    expect(seen.shellPath.error).toBeNull()
+    expect(seen.shellPath.output).toContain('CINNA_SHIM_GIT_REACHED')
   })
 
   it(entry('antigravity.tool.command-output'), () => {

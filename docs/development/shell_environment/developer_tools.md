@@ -40,6 +40,7 @@ Keep the app — and every engine, custom agent and MCP server it starts — wor
 - **A failed probe is never cached as an answer.** The last real answer stands for another minute, so a hanging `xcode-select` costs one five-second timeout a minute, not one per caller
 
 ### The shims
+- **Prepended only works if the child keeps the order.** A login shell re-runs `/etc/zprofile`, whose `path_helper` moves anything prepended behind `/usr/bin`, so an engine that runs commands in one reaches the stubs anyway. Codex did by default and is launched with `allow_login_shell: false` ([The Codex Engine](../../agents/local_agents/codex_engine.md)); OpenCode runs `/bin/zsh -c` and Claude keeps the order (both observed in real turns, 25 Nov 2026); Antigravity keeps it too (contract `antigravity.launch.shell-path`). Check this for any new engine
 - **Engine, custom-agent and stdio MCP children only — never `getShellEnv()`**, which the user's own terminal reads too
 - **Applied last, to the environment that feeds the launch key**, so installing the tools or the managed git landing changes `PATH`, changes the key, and replaces the running child on its next turn. OpenCode's key now includes the inherited `PATH` for exactly this reason. A development agent's replaced `PATH` gets the shims put back in front
 - **On an MCP server the shims go on the base environment**, before the server's own `env` map is merged, so a `PATH` the user set for that server still wins

@@ -113,6 +113,17 @@ export function codexSandboxConfig(network: boolean | undefined): { sandbox_work
   return network ? { sandbox_workspace_write: { network_access: true } } : {}
 }
 
+/**
+ * Every host launch's shell setting (`codex.launch.login-shell`). Commands run
+ * as `zsh -c`, not Codex's default `zsh -lc`: a login shell sources
+ * /etc/zprofile, whose `path_helper` moves the PATH entries we prepend
+ * (`git-shim/`, `tool-shims/`) behind `/usr/bin`. On a Mac without the Command
+ * Line Tools every `git` or `python3` a turn ran then reached the xcrun stub
+ * and raised the install dialog. The environment we pass is already the
+ * resolved login-shell one (`getShellEnv`), so nothing from `.zprofile` is lost.
+ */
+export const CODEX_SHELL_CONFIG = { allow_login_shell: false } as const
+
 /** Pinned app-server adapter, always driving Cinna's managed (or explicitly configured) Codex executable. */
 export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
   const loggedOut = async (options?: ReadinessOptions): Promise<boolean> => {
@@ -177,6 +188,7 @@ export function createCodexLauncher(deps: CodexLauncherDeps): AcpLauncher {
           developer_instructions: deps.systemPrompt(ctx.userId, ctx.agentId, ctx.folder.runtimeMode),
           ...(settings.model ? { model: settings.model } : {}),
           model_reasoning_effort: settings.effort,
+          ...CODEX_SHELL_CONFIG,
           ...codexSandboxConfig(settings.network)
         }
         phase = 'runtime'

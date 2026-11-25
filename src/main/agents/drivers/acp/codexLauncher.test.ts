@@ -41,7 +41,7 @@ describe('Codex ACP launcher', () => {
     expect(plan.spec.command).toBe('/app/Electron')
     expect(plan.spec.args).toEqual(['--require', '/app/preload.cjs', '/app/codex-acp/dist/index.js'])
     expect(plan.spec.env).toMatchObject({ CODEX_PATH: '/usr/local/bin/codex', INITIAL_AGENT_MODE: 'workspace-write', ELECTRON_RUN_AS_NODE: '1' })
-    expect(JSON.parse(plan.spec.env.CODEX_CONFIG)).toEqual({ developer_instructions: 'You are the folder agent.', model_reasoning_effort: 'medium' })
+    expect(JSON.parse(plan.spec.env.CODEX_CONFIG)).toEqual({ developer_instructions: 'You are the folder agent.', model_reasoning_effort: 'medium', allow_login_shell: false })
     // No collaboration mode on an ordinary turn: a user's own `/plan` stays.
     expect(plan.setup).toEqual({ modeId: 'workspace-write' })
     expect(plan.init.clientCapabilities?.elicitation).toEqual({ form: {} })
