@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `73fbf33a3bce0c38`.
+Your current kit is version `6c7a47839cd00d43`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,19 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.26.0 — agents work on GitHub repositories
+
+Additive. Every 1.x folder stays valid.
+
+- **`guides/15-github-repos.md`** (new) — work on a user's GitHub repository with
+  plain `gh` and `git`: clones go under `app-data/repos/<owner>__<repo>/` and are
+  never committed, commands use `git -C` and `gh --repo`, the repository's own docs
+  and conventions come before any change, and on Cinna Desktop `gh` and `git` are
+  already authenticated, so the agent relays the app's access sentences instead of
+  logging in or asking for a token.
+- **`START.md`, `README.md`** — point at guide 15 when the user wants to work on a
+  GitHub repository. No capability-ladder rung: a clone is not part of the agent.
 
 ## 1.25.1 — the agent API CLI verbs are released
 

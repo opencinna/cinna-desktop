@@ -96,10 +96,12 @@ The finished root looks like this:
 3. To create the first agent, follow `guides/01-first-agent.md`.
 
 Read guides on demand. The ladder tells you which one to open and when. Do not read
-all fourteen up front, and do not add a capability whose trigger has not fired.
+all fifteen up front, and do not add a capability whose trigger has not fired.
 
 When the user wants to keep an eye on something over time in Cinna Desktop, or in Cinna for a cloud agent, build a
 dashboard component in `dashboards/<name>/` (`guides/14-dashboards.md`), not an artifact.
+
+When the user wants to work on a GitHub repository, read `guides/15-github-repos.md`.
 
 ## 4. The three roles you switch between
 
@@ -156,4 +158,4 @@ It compares `.cinna-kit/VERSION` against `https://opencinna.io/api/agent-start/v
 
 ---
 
-Kit version 73fbf33a3bce0c38 · https://opencinna.io/agent-start · human-readable page: https://opencinna.io/agent-start?format=html
+Kit version 6c7a47839cd00d43 · https://opencinna.io/agent-start · human-readable page: https://opencinna.io/agent-start?format=html

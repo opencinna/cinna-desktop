@@ -3,7 +3,7 @@
 This is the index of `.cinna-kit/`. Read this file at the start of any session that
 changes an agent. Then read only the guides whose trigger has fired.
 
-Kit version `73fbf33a3bce0c38` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
+Kit version `6c7a47839cd00d43` · contract version in `CONTRACT_VERSION` · instance https://opencinna.io
 
 ## Documents
 
@@ -24,6 +24,7 @@ Kit version `73fbf33a3bce0c38` · contract version in `CONTRACT_VERSION` · inst
 | `guides/12-keeping-up-to-date.md` | The kit may be stale, or a convention changed under you. |
 | `guides/13-design-patterns.md` | Interviewing for any new agent (§0), and whenever the agent reaches an external system, sends or posts, answers several kinds of question, or will serve other people. |
 | `guides/14-dashboards.md` | The owner wants to see, track or keep an eye on something over time in Cinna Desktop, or in Cinna for a cloud agent. |
+| `guides/15-github-repos.md` | The user wants to work on a GitHub repository. |
 | `assistants/claude-code.md` | You are Claude Code. |
 | `assistants/codex.md` | You are Codex or another sandboxed CLI assistant. |
 | `assistants/antigravity.md` | You are Google Antigravity's agent. |
