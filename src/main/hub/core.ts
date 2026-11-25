@@ -51,7 +51,9 @@ import { prewarm, prewarmState, uvPrewarm } from '../services/localAgents/uvPrew
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { agentRepo } from '../db/agents'
 import { vaultService } from '../vault/vaultService'
-import { githubAuthService } from '../services/github/githubAuthService'
+import { githubAuthService, setGithubGhMissingHook, setGithubSignedInHook } from '../services/github/githubAuthService'
+import { managedGh } from '../shell/managedGh'
+import { which } from '../shell/env'
 import { githubLoopbackRoutes } from '../services/github/githubLoopback'
 import { userRepo } from '../db/users'
 
@@ -105,6 +107,13 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   })
   // Its loopback routes ride the credential token endpoint (same listener, bearer and held rule).
   for (const [path, handle] of Object.entries(githubLoopbackRoutes(githubAuthService))) serviceCredentialService.registerTokenRoute(path, handle)
+  // The managed gh (G5): a completed sign-in, or a gh wrapper call that found no gh, starts its
+  // background install when the user's PATH has no gh of its own. Nothing waits on it.
+  const installGhUnlessPresent = (): void => {
+    void which('gh').then((found) => { if (!found) void managedGh.ensureInstalled() })
+  }
+  setGithubSignedInHook(installGhUnlessPresent)
+  setGithubGhMissingHook(installGhUnlessPresent)
   taskRuntimeService.recover()
   registerRecoverer('a2a', a2aTurnRecoverer)
   registerRecoverer('managed', managedTurnRecoverer)

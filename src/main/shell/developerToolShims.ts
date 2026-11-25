@@ -39,6 +39,8 @@ import { createLogger } from '../logger/logger'
 import { which, whichPastStub } from './env'
 import { MAC_DEVELOPER_TOOL_STUBS, macDeveloperTools, type DeveloperToolsState } from './macDeveloperTools'
 import { managedGit, shellQuote, type ManagedGit } from './managedGit'
+import { managedGh } from './managedGh'
+import { createGhShim, GH_CONFIG_DIR_NAME, GH_SHIM_DIR_NAME } from './ghShim'
 import { withManagedUvFallback } from './managedUvPath'
 
 const logger = createLogger('developer-tool-shims')
@@ -204,6 +206,20 @@ const developerToolShims = createDeveloperToolShims({
 })
 
 /**
+ * Cinna's `gh` wrapper (`ghShim.ts`): first on `PATH` on macOS and Linux,
+ * always, with git's github.com credential helper pointed at it. Applied after
+ * the developer-tool shims, so it stays in front of `git-shim/` and
+ * `tool-shims/`, which its real-`gh` lookup skips.
+ */
+const ghShim = createGhShim({
+  platform: process.platform,
+  shimDir: () => join(runtimeHost.getPath('userData'), GH_SHIM_DIR_NAME),
+  configDir: () => join(runtimeHost.getPath('userData'), GH_CONFIG_DIR_NAME),
+  managedGh: () => managedGh.binaryLocation(),
+  otherOwnDirs: () => [join(runtimeHost.getPath('userData'), SHIM_DIR_NAME), dirname(managedGit.wrapperLocation())]
+})
+
+/**
  * The environment an engine child (Claude Code, Codex, OpenCode) runs in, with
  * the developer-tool stubs shadowed when the tools are absent and the managed
  * git in front when there is no other. Apply it last, to the env that also
@@ -216,7 +232,11 @@ const developerToolShims = createDeveloperToolShims({
  * actually gets. Its directory is versioned (`uv-<pin>`), so a pin move
  * changes it once; otherwise only the user installing a uv of their own
  * changes the result (the `UV_PYTHON_PREFERENCE` it adds goes away).
+ *
+ * The `gh` wrapper's directory goes first of all, and the env gains the G4
+ * `GIT_CONFIG_COUNT/KEY/VALUE` entries after any it already had. A caller that
+ * takes only `PATH` from a re-application keeps the entries of the first.
  */
 export async function withDeveloperToolShims<T extends Record<string, string | undefined>>(env: T): Promise<T> {
-  return withManagedUvFallback(await developerToolShims.apply(env))
+  return withManagedUvFallback(await ghShim.apply(await developerToolShims.apply(env)))
 }
