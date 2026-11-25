@@ -51,11 +51,12 @@ vi.mock('../db/client', () => ({
   }
 }))
 
-const oauth = vi.hoisted(() => ({ flow: vi.fn() }))
+const oauth = vi.hoisted(() => ({ flow: vi.fn(), Denied: class extends Error {} }))
 vi.mock('../auth/cinna-oauth', () => ({
   CINNA_CLOUD_URL: 'https://cloud.cinna.test',
   startCinnaOAuthFlow: oauth.flow,
-  CinnaReauthRequired: class extends Error {}
+  CinnaReauthRequired: class extends Error {},
+  CinnaAuthorizationDenied: oauth.Denied
 }))
 vi.mock('../auth/cinna-tokens', () => ({
   storeCinnaTokens: vi.fn(),
@@ -207,6 +208,46 @@ describe('reauthentication that outlives its activated profile', () => {
       else expect(localDevService.reconcile).not.toHaveBeenCalled()
     }
   )
+})
+
+describe('re-authentication names the expected account', () => {
+  it('sends the profile email as the expected account; first sign-in sends none', async () => {
+    const id = await signInSelfHosted('https://one.cinna.test')
+    expect(oauth.flow).toHaveBeenLastCalledWith('https://one.cinna.test')
+    await authService.reauthCinna(id)
+    expect(oauth.flow).toHaveBeenLastCalledWith('https://one.cinna.test', { expectedEmail: holder.profileEmail })
+  })
+
+  it('refuses another account with a message naming the expected one, and stores nothing', async () => {
+    const id = await signInSelfHosted('https://one.cinna.test')
+    vi.mocked(storeCinnaTokens).mockClear()
+    oauthAnswers('someone-else@cinna.test')
+    await expect(authService.reauthCinna(id)).rejects.toMatchObject({
+      code: 'identity_mismatch',
+      message: `Sign in as ${holder.profileEmail} to reconnect this profile. The browser signed in as someone-else@cinna.test.`
+    })
+    expect(storeCinnaTokens).not.toHaveBeenCalled()
+    expect(userActivation.credentialsRenewed).not.toHaveBeenCalled()
+  })
+
+  it('refuses an email that differs only in case: core may hold such a user as a separate account', async () => {
+    const id = await signInSelfHosted('https://one.cinna.test')
+    vi.mocked(storeCinnaTokens).mockClear()
+    oauthAnswers(holder.profileEmail.toUpperCase())
+    await expect(authService.reauthCinna(id)).rejects.toMatchObject({ code: 'identity_mismatch' })
+    expect(storeCinnaTokens).not.toHaveBeenCalled()
+  })
+
+  it('a sign-in declined in the browser names the expected account and stores nothing', async () => {
+    const id = await signInSelfHosted('https://one.cinna.test')
+    vi.mocked(storeCinnaTokens).mockClear()
+    oauth.flow.mockRejectedValueOnce(new oauth.Denied('declined'))
+    await expect(authService.reauthCinna(id)).rejects.toMatchObject({
+      code: 'access_denied',
+      message: `Sign in as ${holder.profileEmail} to reconnect this profile. The sign-in was declined in the browser.`
+    })
+    expect(storeCinnaTokens).not.toHaveBeenCalled()
+  })
 })
 
 describe('creating a local profile', () => {

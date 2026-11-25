@@ -11,7 +11,7 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 | **In-place re-auth** | Re-runs the OAuth Authorization Code + PKCE flow against the user's stored `cinnaServerUrl`, then writes the resulting tokens back to the **same** `users` row — no row insert, no cascade delete |
 | **Reauth required** | The state in which the desktop must obtain a fresh OAuth grant. Detected three ways: (1) `getCinnaAccessToken()` throws `CinnaReauthRequired` because no tokens are stored or refresh failed with `invalid_grant` / `token_reuse_detected` / `unauthorized`; (2) the Cinna server returns 401/403 on the agent-card fetch — the desktop's locally-stored token still looks valid but the server has revoked it; (3) the A2A stream RPC fails mid-turn with 401/403 |
 | **Cinna-token-backed agent** | An agent with `source === 'remote'` — its access token comes from `getCinnaAccessToken()` (the user's Cinna JWT). 401/403 from such an agent is treated as reauth-required. Manually-added local A2A agents (`source === 'local'`) authenticate with a user-supplied static token; their 401s remain plain "token rejected" errors with no in-app reauth flow |
-| **Identity match check** | Guard that compares the OAuth-returned `profile.email` to the existing row's `username`. Mismatch is rejected with `identity_mismatch` so a user cannot accidentally re-link the local profile to a different server identity |
+| **Identity match check** | Two layers. The re-auth authorize URL carries the profile's email as `login_hint`, so core's consent page names the expected account and refuses another account's approval. The desktop then compares the OAuth-returned `profile.email` to the row's `username` (case and surrounding whitespace ignored, as core matches the hint) and rejects a difference with `identity_mismatch`, so a user cannot re-link the local profile to a different server identity. The second layer exists because an old core ignores the hint |
 | **Reauth-required error code** | Typed discriminator (`cinna_reauth_required`) shipped on the stream's `error` event (`RunErrorEvent.code`) and persisted on error message rows — drives the dedicated reauth bubble in the chat without substring-matching the user-facing copy |
 | **Reauth bubble swap** | The dedicated chat bubble owns two visual states keyed off local component state: pre-reauth (danger, `AlertTriangle`, expired copy, "Re-authenticate" button) and post-reauth (success, `CheckCircle`, "Authenticated — you can resend your message now."). Replacing the entire bubble — rather than appending a success note under the now-stale danger headline — avoids the visual contradiction of a red "expired" banner immediately after the user has fixed the session |
 | **Global reauth modal** | App-level modal (`ReauthModal`, mounted in `App.tsx`, `z-[100]` so it sits over every other overlay) raised whenever a reauth-required code surfaces, regardless of which feature triggered it. **Primary trigger:** the IPC wrapper (`ipc/_wrap.ts`) — the one path every handler shares — calls `broadcastReauthRequired` (`auth/reauth-notify.ts`) whenever a handler *throws* `reauth_required`/`cinna_reauth_required` (e.g. `catalog:list`) **or returns** an `{ success: false, code: 'reauth_required' }` shape (e.g. `agent-status:list`, which catches internally). The broadcast resolves the active profile and ships `{ account, serverUrl, source }` so the modal names which connection failed. **Secondary trigger:** the renderer QueryClient's `queryCache`/`mutationCache` `onError` → `flagReauthFromError` (no details), covering anything that bypasses an IPC reject. Visibility is held in `useReauthStore`, gated to `cinna_user`. Dismissing sets a session `dismissed` flag so the next failed poll doesn't re-pop it; a successful re-auth anywhere clears it via the shared `useCinnaReauth` `onSuccess`. The pre-existing inline surfaces (catalog banner, User Accounts card re-auth button, agent-status panel, chat bubble) still work independently. **Sign-in variant:** switching into a Cinna profile with no stored tokens (one signed out on purpose, see [User Accounts](../user_accounts/user_accounts.md#signed-out-and-signing-back-in)) opens the same modal as *Sign in to Cinna* / *Sign in* rather than *Cinna session expired*, because nothing expired; the button runs the same OAuth, and a later reauth-required error does not rewrite its wording |
@@ -46,12 +46,13 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 2. When the user has no tokens (`hasCinnaTokens === false`) — the card also carries a "Signed out" tag — the row shows the "session expired" copy and the button is rendered in the accent colour to draw attention; otherwise it's a neutral outline button
 3. Clicking it runs the same OAuth flow (`useCinnaReauth`). On failure, an inline error is shown under the description so the user can retry
 
-### Identity mismatch path
-1. User clicks Re-authenticate → browser opens → user accidentally signs in to the Cinna server as a different account
-2. After the OAuth round-trip, the desktop compares the returned `profile.email` to the existing user's `username`
-3. They differ → `AuthError('identity_mismatch', ...)` is raised → no tokens are written
-4. The surface that initiated the flow shows the error: *"Signed in as B, but this account is A. Sign in with the matching account on the Cinna server."*
-5. User can retry. Local data and the previous token state (still cleared) are untouched
+### Wrong account or declined sign-in
+1. User clicks Re-authenticate → browser opens on core's authorize page with `login_hint` set to the profile's email (re-auth only; first sign-in and add-account send none)
+2. A current core shows the expected account on its consent page. If the user approves as a different account, core answers 403 `account_mismatch`, mints nothing and calls nothing back, so the desktop flow simply keeps waiting until the user cancels or approves as the right account. Without that, the user would be left with a dead browser tab and no signal in the app
+3. An old core ignores the hint and completes with the wrong account. The desktop compares emails, finds a difference and raises `AuthError('identity_mismatch')` before any token is written
+4. If the browser comes back with `error=access_denied`, the flow raises `AuthError('access_denied')`
+5. Both messages name the account to use first, so a narrow surface that truncates the text still says which account is needed: *"Sign in as A to reconnect this profile. The browser signed in as B."* and *"Sign in as A to reconnect this profile. The sign-in was declined in the browser."*
+6. Every surface shows main's message as-is (ReauthModal, User Accounts, Agents settings, the expired banner in the chat, and the composer's unavailable-account row, which reads "Re-authentication failed: <message>"). Local data, the previous token state (still cleared) and held credential slots are untouched; the user can retry
 
 ## Business Rules
 
@@ -60,9 +61,9 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 - Re-auth always operates on the **active profile** (`getProfileScopeUserId()`) resolved main-side. The renderer never supplies a userId — closes the confused-deputy gap where a renderer bug could target a non-active account
 - The flow is only available for users where `type === 'cinna_user'` and `cinnaServerUrl` is non-null. Non-Cinna users see no entry
 - The OAuth round-trip uses the user's **stored** `cinnaServerUrl` — the server URL is not user-editable at re-auth time; switching servers requires creating a new account
-- Identity is verified by exact-match between `profile.email` (server response) and `users.username` (local row). Case sensitivity follows whatever the server returns — emails are not normalised
+- Identity is verified between `profile.email` (server response) and `users.username` (local row), exactly. Core matches `login_hint` ignoring case, but it can still hold legacy users whose emails differ only in case, so a case-only difference is refused here rather than linking this profile to another account. `login_hint` is sent on re-auth only
 - On success, only the four `cinna_*` token columns (`cinnaClientId`, `cinnaAccessTokenEnc`, `cinnaRefreshTokenEnc`, `cinnaTokenExpiresAt`) are rewritten. No other row data is touched. No migration or cascade runs
-- On failure (`oauth_failed`, `identity_mismatch`, network error during browser flow), the existing token state is unchanged. If tokens were already cleared before the click, they remain cleared
+- On failure (`oauth_failed`, `identity_mismatch`, `access_denied`, network error during browser flow), the existing token state is unchanged. If tokens were already cleared before the click, they remain cleared
 - Cache invalidation after success: `['users']`, `['auth', 'current']`, `['agents']`, and the remote-sync status cache. Every banner that depends on `hasCinnaTokens` or sync state refreshes automatically — no manual reload
 - The reauth chip in the chat error bubble only appears when `currentUser.type === 'cinna_user'`. Non-Cinna users would have no way to act on the chip even if the code were set
 - In-chat stream errors (both LLM and A2A) render **only** as the persisted error bubble inside the conversation — the transient "send error" banner above the composer is no longer populated from stream-port `'error'` events. The persisted bubble carries the reauth chip and the typed `code`, so duplicating it as a banner would just show the same text twice without the action button. The transient banner is still used for the new-chat-flow case where no chat row exists yet to host a bubble
@@ -82,11 +83,13 @@ Trigger:
                                         reauthCinna(getProfileScopeUserId()):
                                           row = userRepo.get(userId)
                                           assert row.type === 'cinna_user'
-                                          startCinnaOAuthFlow(row.cinnaServerUrl)  ──→ shell.openExternal
-                                                                                  User authorizes
+                                          startCinnaOAuthFlow(url, {expectedEmail})  ──→ shell.openExternal (login_hint)
+                                                                                  User authorizes (core: 403
+                                                                              account_mismatch = stays waiting)
                                                                               ←── localhost callback
                                           Exchange code, fetch profile
-                                          IF profile.email !== row.username:
+                                          callback error=access_denied → AuthError('access_denied')
+                                          IF email differs (exact compare):
                                             throw AuthError('identity_mismatch')
                                           ELSE:
                                             storeCinnaTokens(SAME userId, …)        # in-place

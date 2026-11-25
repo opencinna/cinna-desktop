@@ -7,7 +7,8 @@ import { userActivation } from '../auth/activation'
 import {
   CINNA_CLOUD_URL,
   startCinnaOAuthFlow,
-  CinnaReauthRequired
+  CinnaReauthRequired,
+  CinnaAuthorizationDenied
 } from '../auth/cinna-oauth'
 import { storeCinnaTokens, clearCinnaTokens } from '../auth/cinna-tokens'
 import { syncService } from './syncService'
@@ -120,6 +121,14 @@ function toDto(row: UserRow): UserDto {
     dto.hasCinnaTokens = !!(row.cinnaAccessTokenEnc && row.cinnaRefreshTokenEnc)
   }
   return dto
+}
+
+/**
+ * A re-auth that did not sign in as the profile's account: names the account it needs first (what a
+ * narrow composer row keeps), then what happened. Tokens and held credentials are left as they were.
+ */
+export function reauthExpectedAccountMessage(expected: string, cause: string): string {
+  return `Sign in as ${expected} to reconnect this profile. ${cause}`
 }
 
 export const authService = {
@@ -306,8 +315,14 @@ export const authService = {
 
     let tokens: Awaited<ReturnType<typeof startCinnaOAuthFlow>>
     try {
-      tokens = await startCinnaOAuthFlow(row.cinnaServerUrl)
+      // The profile's account goes as `login_hint`: core shows it on the consent page and refuses
+      // another account's approval (403 account_mismatch), so the flow stays pending until it is right.
+      tokens = await startCinnaOAuthFlow(row.cinnaServerUrl, { expectedEmail: row.username })
     } catch (err) {
+      if (err instanceof CinnaAuthorizationDenied) {
+        logger.warn('cinna reauth declined in the browser', { userId: row.id })
+        throw new AuthError('access_denied', reauthExpectedAccountMessage(row.username, 'The sign-in was declined in the browser.'))
+      }
       const message = err instanceof Error ? err.message : 'OAuth authentication failed'
       logger.error('cinna reauth OAuth failed', {
         userId: row.id,
@@ -321,6 +336,9 @@ export const authService = {
       desktopFeatures.authCompleted()
     }
 
+    // The backstop: an old core ignores `login_hint`. Exact, unlike core's hint check (any case):
+    // core can still hold legacy users whose emails differ only in case, and a looser compare here
+    // would link this profile to another account's tokens.
     if (tokens.profile.email !== row.username) {
       logger.warn('cinna reauth rejected: identity mismatch', {
         existing: row.username,
@@ -328,7 +346,7 @@ export const authService = {
       })
       throw new AuthError(
         'identity_mismatch',
-        `Signed in as ${tokens.profile.email}, but this account is ${row.username}. Sign in with the matching account on the Cinna server.`
+        reauthExpectedAccountMessage(row.username, `The browser signed in as ${tokens.profile.email}.`)
       )
     }
 

@@ -128,7 +128,42 @@ export async function discoverCinnaEndpoints(serverUrl: string, signal?: AbortSi
  * which handles login + client registration + authorization in one flow.
  * The callback returns both an auth code and client_id.
  */
-export async function startCinnaOAuthFlow(serverUrl: string): Promise<CinnaOAuthResult> {
+/** The browser came back with `error=access_denied`: the sign-in was declined on the consent page. */
+export class CinnaAuthorizationDenied extends Error {
+  constructor() {
+    super('Cinna authorization was declined.')
+    this.name = 'CinnaAuthorizationDenied'
+  }
+}
+
+/**
+ * The authorize URL, with `login_hint` when an expected account is given (re-auth only): core shows
+ * that account on its consent page and refuses an approval by another one. Old cores ignore it.
+ */
+export function cinnaAuthorizeUrl(endpoint: string, params: URLSearchParams, loginHint?: string | null): string {
+  const query = new URLSearchParams(params)
+  const hint = loginHint?.trim()
+  if (hint) query.set('login_hint', hint)
+  return `${endpoint}?${query.toString()}`
+}
+
+/** `url` with its `login_hint` value replaced, for logs: the expected account's email is not logged. */
+export function redactAuthorizeUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (!parsed.searchParams.has('login_hint')) return url
+    parsed.searchParams.set('login_hint', 'redacted')
+    return parsed.toString()
+  } catch {
+    return url.replace(/([?&]login_hint=)[^&#]*/g, '$1redacted')
+  }
+}
+
+/**
+ * Sign in to a Cinna server in the browser. `expectedEmail` (re-auth of an existing profile only)
+ * is sent as `login_hint`; first sign-in and add-account send none.
+ */
+export async function startCinnaOAuthFlow(serverUrl: string, options: { expectedEmail?: string | null } = {}): Promise<CinnaOAuthResult> {
   logger.info(`Starting OAuth flow against ${serverUrl}`)
   const endpoints = await discoverCinnaEndpoints(serverUrl)
 
@@ -152,8 +187,8 @@ export async function startCinnaOAuthFlow(serverUrl: string): Promise<CinnaOAuth
     app_version: runtimeHost.getVersion()
   })
 
-  const authorizeUrl = `${endpoints.authorization_endpoint}?${params.toString()}`
-  logger.info('Opening browser for authorization', { authorizeUrl })
+  const authorizeUrl = cinnaAuthorizeUrl(endpoints.authorization_endpoint, params, options.expectedEmail)
+  logger.info('Opening browser for authorization', { authorizeUrl: redactAuthorizeUrl(authorizeUrl) })
   let result: Awaited<typeof promise>
   try {
     await runtimeHost.shell.openExternal(authorizeUrl)
@@ -173,6 +208,7 @@ export async function startCinnaOAuthFlow(serverUrl: string): Promise<CinnaOAuth
     throw new Error('OAuth state mismatch — possible CSRF attack')
   }
 
+  if (result.params.error === 'access_denied') throw new CinnaAuthorizationDenied()
   if (result.params.error || !result.code) throw new Error('Cinna authorization was not completed.')
 
   // Server includes client_id as an extra query parameter in the callback URL

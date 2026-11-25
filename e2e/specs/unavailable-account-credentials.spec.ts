@@ -51,7 +51,10 @@ import type { AgentRootDto, LocalAgentDto } from '../../src/shared/localAgents'
  * restart (clearing her tokens makes main derive the accounts again at once); U7 the kept profile rebound to another core account
  * (her address moved by the admin to a second throwaway user, then signed in over
  * `auth.register`), whose held slot reads `unknown` and is named only from what was recorded;
- * U8 an own skill's credential slot held the same way; U9 a vault agent on the fake vault backend
+ * U8 an own skill's credential slot held the same way; U10 Re-authenticate naming her account
+ * (`login_hint`): core refuses another account's approval (403 `account_mismatch`), desktop refuses
+ * it when the hint is stripped (`identity_mismatch`, the message names her email), her approval
+ * brings the credential back; U9 a vault agent on the fake vault backend
  * (`CINNA_VAULT_FAKE=1`, no VM, network for the move's `uv python install`) whose run-secrets copy
  * is withdrawn at the first turn after she signs out.
  *
@@ -783,6 +786,73 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
       await expect(held.getByRole('button', { name: `Switch to ${FIRST}`, exact: true })).toBeVisible()
       await expect(held).not.toContainText('None of your credentials fits it')
       await expect(dialog).not.toContainText(c.name)
+    })
+  })
+
+  test('U10 Re-authenticate names her account: core refuses another account’s approval, desktop refuses it when the hint is gone, and only her approval brings the credential back', async ({ cinna }) => {
+    test.setTimeout(180_000)
+    const c = credential!
+    const p = person!
+    const live = config as LiveCinnaConfig
+    const admin = await signIn(live)
+    const tag = `${Date.now()}-${randomBytes(3).toString('hex')}`
+    const other = await makePerson(admin, { first: 'Bruno', label: 'wrong account', email: `e2e-unavailable-wrong-${tag}@example.com` })
+    const { userId, clientId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Hinted', slots: [{ name: SLOT, serviceUri: c.serviceUri }] }])
+    await revokeSession(cinna, p, userId, clientId)
+    const page = cinna.page
+    await expect(page.getByText('Cinna session expired', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Not now', exact: true }).click()
+    await newChatWith(cinna, 'Held Hinted')
+    const sessionRow = `${FIRST}’s session expired: 1 credential comes from that account.`
+    await expectRows(cinna, [sessionRow])
+    const authorizeUrl = (): Promise<string> => cinna.electronApp.evaluate(() => (globalThis as unknown as { __authorizeUrl?: string }).__authorizeUrl ?? '')
+    const stillHeld = async (): Promise<void> => {
+      expect((await page.evaluate(() => window.api.auth.listUsers())).find((u) => u.id === userId)?.hasCinnaTokens).toBe(false)
+      const setup = await page.evaluate((id) => window.api.serviceCredentials.setupState(id), agent.id)
+      expect(setup.ok && setup.value.slots.map((s) => [s.name, s.state])).toEqual([[SLOT, 'account_unavailable']])
+      expect(readCredentials(agent)).toBe('')
+    }
+    const reauthenticate = async (): Promise<string> => {
+      await recordBrowser(cinna)
+      await statusPanel(cinna).getByRole('button', { name: 'Re-authenticate', exact: true }).click()
+      await expect.poll(authorizeUrl, { timeout: 30_000, message: 'the app never asked to open an authorization URL' }).not.toBe('')
+      return authorizeUrl()
+    }
+
+    await test.step('(a) the authorize URL carries her email as login_hint; core shows it and refuses Bruno’s approval with 403 account_mismatch', async () => {
+      const url = await reauthenticate()
+      expect(new URL(url).searchParams.get('login_hint')).toBe(p.email)
+      const redirect = await fetch(url, { redirect: 'manual' })
+      expect(redirect.status).toBe(307)
+      const nonce = new URL(redirect.headers.get('location')!, live.serverUrl).searchParams.get('request')!
+      const request = await api(other.token, `/desktop-auth/requests/${encodeURIComponent(nonce)}`)
+      expect(request.status).toBe(200)
+      expect(request.body.expected_email).toBe(p.email)
+      const refused = await api(other.token, '/desktop-auth/consent', { method: 'POST', body: { request_nonce: nonce, action: 'approve' } })
+      expect([refused.status, refused.body]).toEqual([403, { detail: 'account_mismatch' }])
+      // Nothing came back to the app: its flow is still waiting, no tokens, the slot still held.
+      await expect(statusPanel(cinna).getByRole('button', { name: 'Signing in…', exact: true })).toBeVisible()
+      await stillHeld()
+      await page.evaluate(() => window.api.auth.cinnaOAuthAbort())
+      await expect(statusPanel(cinna).getByRole('button', { name: 'Re-authenticate', exact: true })).toBeVisible()
+      await stillHeld()
+    })
+
+    await test.step('(b) with the hint stripped (an old core), Bruno can approve; desktop refuses with a message naming her account and keeps the slot held', async () => {
+      const url = new URL(await reauthenticate())
+      url.searchParams.delete('login_hint')
+      await approveDesktopAuth({ ...live, email: other.email, password: other.password }, url.toString())
+      await expectRows(cinna, [`Re-authentication failed: Sign in as ${p.email} to reconnect this profile. The browser signed in as ${other.email}.`])
+      await stillHeld()
+      expect(await rendererView(cinna, agent.id)).not.toContain(c.name)
+    })
+
+    await test.step('(c) her own approval: new tokens, the row is gone, the credential is delivered again', async () => {
+      await reauthenticate()
+      await approveDesktopAuth({ ...live, email: p.email, password: p.password }, await authorizeUrl())
+      await expect.poll(async () => (await page.evaluate(() => window.api.auth.listUsers())).find((u) => u.id === userId)?.hasCinnaTokens).toBe(true)
+      await expect(statusPanel(cinna).getByText(sessionRow)).toHaveCount(0)
+      await expect.poll(() => readCredentials(agent), { timeout: 30_000 }).toContain(c.secret)
     })
   })
 
