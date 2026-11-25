@@ -1,0 +1,65 @@
+# GitHub Repos
+
+## Purpose
+
+A folder agent can run `gh` and `git` against the user's GitHub repositories with no token in a file, no login in a terminal and no setup the user has to remember. The user signs in to GitHub once per Cinna profile, in the app; every kit agent's `gh` and `git` then authenticate through Cinna, and when something is missing the composer under that chat says what to click.
+
+## Core Concepts
+
+- **OpenCinna** — the one public GitHub App every profile signs in to (no client secret, no private key). Its access is the intersection of what the user can reach and what the app is **installed** on; installing is a separate step on github.com, per owner, on all repositories or on selected ones.
+- **Sign-in** — GitHub's device flow, per Cinna profile (the guest profile included). The tokens belong to the profile and never leave main; the renderer sees a login, a state (`connected` or `expired`) and the coverage.
+- **Coverage** — the installations of the app the signed-in user can see: owner, and either all repositories or a list. It decides whether a repository is reachable, and what **Allow access** opens.
+- **Need** — what an agent could not do: **sign in**, **reconnect** (the sign-in died), or **install** for an owner (the app cannot reach a repository). Kept in memory per profile, deduplicated, remembering which agents hit it. Needs are what the composer rows show.
+- **The `gh` wrapper** — a script Cinna puts first on the `PATH` of every child it launches. It, not the agent, decides which login a `gh` or `git` call uses.
+- **Managed gh** — Cinna's own pinned GitHub CLI, downloaded only when the machine has no `gh`.
+
+## User Stories / Flows
+
+1. **First use.** An agent runs `gh repo clone owner/repo`. Nothing can authenticate, so the call exits with a sentence telling the agent to ask the user to click **Sign in to GitHub** under the message box, and the chat shows that row.
+2. **Sign in.** **Sign in to GitHub** starts the device flow, copies the code to the clipboard and opens github.com/login/device. The row becomes "Enter code ABCD-1234 on GitHub. Only enter a code Cinna shows you." with a wait line and **Cancel**. Approving in the browser ends it. A declined or expired code is said in the row and offers **Get a new code** or the sign-in again.
+3. **Allow access.** A signed-in user whose app installation does not cover the repository gets "Cinna's GitHub app can't reach owner/repo yet" and **Allow access**, which opens the installation's configure page (app installed on the owner, repository not selected) or the app's install page (not installed). When the window regains focus Cinna reads the installations again, so the row clears once the user is back.
+4. **Continue.** When a need this chat showed clears (a sign-in from Settings or another chat, a coverage change), the row turns into "GitHub is connected." with **Continue**, which sends "GitHub is connected, go on" through the composer. The agent then reruns what failed.
+5. **Settings → User Accounts → GitHub.** Signed out: the purpose and **Sign in to GitHub**. Connected: the login with **Sign out**, one line per installation ("acme: all repositories", "evgeny-l: shop, site") with **Manage repository access**, and where a full revoke is. Expired: **Reconnect GitHub**. **Sign out** asks first, and says that the app's access is fully revoked only at github.com/settings/applications.
+6. **Reconnect.** A refresh token GitHub no longer accepts (rotated out, revoked, expired) marks the sign-in `expired`, drops its tokens and shows **Reconnect GitHub**.
+
+## Business Rules
+
+- **One sign-in per profile, used by every kit agent.** Folder agents are shared by all profiles, so an agent's request is served for the profile that is active now. A profile that cannot serve (not activated, deleted, password-protected and not unlocked this session) reads as signed out, never as an error: it gets no token, no status and no needs.
+- **A token is never handed out with under ten minutes left.** Refresh tokens rotate: a refresh kills the previous access and refresh token at once. So a refresh runs once at a time per profile, and the new pair is persisted before anyone is answered. A refresh answered from two callers would have burned the first caller's pair and left the profile needing Reconnect.
+- **A transient failure is not an expiry.** GitHub unreachable, slow, 5xx or unreadable answers "try again in a moment" and keeps the sign-in. Only `bad_refresh_token` and `incorrect_client_credentials` (or an expired refresh token) mean Reconnect.
+- **The user's own `gh` login is the fallback, never the first choice for a kit agent.** Order of the wrapper, per call: the OpenCinna token; otherwise the real `gh` untouched when the user is logged in to it; otherwise the need is recorded and the call fails with a sentence and exit 4. A kit agent therefore acts as OpenCinna even when the user's `gh` is logged in as someone else, and a user who never signs in to OpenCinna keeps working on their own login.
+- **Only a kit agent's child gets the OpenCinna route.** The loopback address and bearer, and the git credential-helper wiring, go to kit agents' engines, kit commands and scheduled runs. A bare agent, an MCP server, a Run Script window and a non-kit `/run:` keep the user's own keychain or credential-manager login for github.com; the wrapper is on their `PATH` too but falls straight through to the real `gh`. Pointing git's helper at a wrapper in a child that cannot reach the endpoint would have broken the user's own pushes.
+- **Commits are the user's.** A repository a served `gh repo clone` creates gets the profile's GitHub login name and `<id>+<login>@users.noreply.github.com` as `user.name` and `user.email`, only when git has no email configured there. Anyone else's identity is left alone.
+- **The token travels in the smallest place.** In the env of the one `gh` the wrapper runs (with an empty `GH_CONFIG_DIR`, so the user's gh config and login do not mix in) or on stdout to git. Never on a command line, in a file or in a log; the bearer reaches curl on stdin.
+- **A sandbox that blocks loopback is told so.** If the endpoint cannot be connected to at all, the wrapper says the command needs network access and should be run again with escalated permissions, "not an internet outage". A connected-but-slow endpoint says "try again in a moment" instead. Without this split an agent reads the first as an outage and gives up.
+- **Dismissed is not resolved.** × on a row hides it and remembers its key, so another chat does not show "GitHub is connected" for a need the user merely closed. The same need arriving again un-dismisses it; sign-out clears the list.
+- **Needs are stale as soon as they are false.** A sign-in need recorded while signed in, or an install need for a repository the cache covers, is dropped. A completed sign-in clears the account need; each coverage read clears the install needs it now covers.
+- **A coverage read is rate-limited.** From the renderer a window focus reads at most once per 10 s; main applies the same 10 s per profile; a token request for an uncovered repository refreshes the cache at most once a minute. If the installations cannot be read at all, the token is handed out anyway: GitHub enforces the bounds.
+- **Sign-out forgets locally.** It does not revoke (that needs the app's secret); the dialog sends the user to github.com/settings/applications for that.
+- **The managed gh is a last resort and never awaited.** Any `gh` the user installed wins. A completed sign-in with no `gh` on the user's `PATH`, or a wrapper call that finds none, starts one background download (once per app run). While it runs the wrapper says Cinna is still installing gh; if no install is running it says to install the GitHub CLI from cli.github.com. Behaviour of the download: [Developer Tools on a Bare Machine](../../development/shell_environment/developer_tools.md); the pin: [Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md).
+- **macOS and Linux only.** The wrapper is a POSIX script; on Windows nothing is installed and the agent's `gh` is whatever the machine has.
+
+## What it does not do
+
+- No MCP tools for GitHub: agents use `gh` and `git`.
+- No organization-admin flow: the `admin` need kind exists in the shared type and is never produced or shown.
+- It does not store a token in the agent folder, `credentials/` or any env value the user can see; it is separate from [Service Credentials](../service_credentials/README.md), whose loopback listener it only borrows.
+
+## Architecture Overview
+
+```
+Agent turn -> engine child (PATH: gh-shim first; CINNA_GITHUB_URL/AUTH; GIT_CONFIG_* helper)
+  gh / git -> gh-shim/gh -> POST loopback /github/token -> githubAuthService (refresh, coverage)
+        token  -> real or managed gh with GH_TOKEN / git on stdout
+        needed -> user's own gh login, else POST /github/needed -> needs registry -> github:changed
+Renderer composer rows / Settings -> window.api.github -> github:* IPC -> githubAuthService -> GitHub
+```
+
+## Integration Points
+
+- [Service Credentials](../service_credentials/README.md) — the loopback listener, per-agent bearer and held-only-while-a-turn rule the GitHub routes ride.
+- [Skills (tech)](../local_agents/skills_tech.md) — `engineCredentialEnv` sets or strips the GitHub env.
+- [User Accounts](../../auth/user_accounts/user_accounts.md) — the GitHub section sits under the Profiles section; a deleted profile's sign-in goes with it.
+- [Developer Tools on a Bare Machine](../../development/shell_environment/developer_tools.md) — the wrapper's place on `PATH`; the managed gh.
+- [Runtime Pins](../../development/runtime_pins/runtime_pins_llm.md) — the `gh` pin.
+- Technical detail: [GitHub Repos — Technical Details](github_repos_tech.md).

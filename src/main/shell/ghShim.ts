@@ -11,13 +11,13 @@
  *
  * 1. With the loopback endpoint in the env (`CINNA_GITHUB_URL` and
  *    `CINNA_GITHUB_AUTH`, a kit agent's child while a turn, command or run
- *    holds it), it asks `POST /token` for the repo when it can tell which one,
+ *    holds it), it asks `POST /github/token` for the repo when it can tell which one,
  *    and runs the real `gh` with the OpenCinna token in `GH_TOKEN` and an empty
  *    `GH_CONFIG_DIR`, so neither the user's login nor their gh config mixes in.
  * 2. Otherwise — no endpoint, a 401 (nothing holds the agent any more), or an
  *    answer that something is needed while the user's own `gh` login answers —
  *    the real `gh` runs untouched.
- * 3. Neither: it asks the app to show the row (`POST /needed`), prints the
+ * 3. Neither: it asks the app to show the row (`POST /github/needed`), prints the
  *    endpoint's sentence and exits 4, gh's own "authentication required" code.
  *
  * An endpoint that cannot be connected to at all means a sandbox without
@@ -71,7 +71,7 @@ export const GH_INSTALLING_MESSAGE = 'Cinna is still installing gh, try again in
 /** What the wrapper prints when a token is there, no `gh`, and no managed install is running (exit 1). */
 export const GH_NOT_INSTALLED_MESSAGE =
   "gh isn't installed and Cinna couldn't install it. Ask the user to install the GitHub CLI from https://cli.github.com, then run this command again."
-/** curl's `--max-time` for `POST /token`: above the app's 20 s GitHub call timeout, so a slow refresh answers `unavailable` first. */
+/** curl's `--max-time` for `POST /github/token`: above the app's 20 s GitHub call timeout, so a slow refresh answers `unavailable` first. */
 export const GH_TOKEN_MAX_TIME_S = 40
 
 type Env = Record<string, string | undefined>

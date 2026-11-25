@@ -59,6 +59,13 @@ Keep the app — and every engine, custom agent and MCP server it starts — wor
 - **Swept like an engine runtime.** It installs into the same `runtimes/` root, and a fresh install removes superseded `git-<version>` directories not used for a week; the wrapper re-stamps its tree as used at most hourly
 - **`CINNA_GIT_DOWNLOAD=off` turns the download off**, which the E2E fixture does on every launch
 
+### The `gh` wrapper and the managed gh
+- **The wrapper's directory goes first of all.** `withDeveloperToolShims` applies `<userData>/gh-shim/gh` after the shims, so it stays in front of `git-shim/` and `tool-shims/`, which its real-`gh` lookup skips. macOS and Linux, on every child that takes the shims, always: with no loopback endpoint in the env it runs the real `gh` untouched, so it costs nothing. What it decides when the endpoint is there: [GitHub Repos](../../agents/github_repos/github_repos.md)
+- **git's github.com credential helper is not set here.** Only `engineCredentialEnv` adds it, together with the endpoint, and `withDeveloperToolShims` removes any entries of ours, so a bare agent, MCP server, Run Script or non-kit `/run:` keeps the user's own keychain login
+- **Any `gh` wins; the managed one is last.** The wrapper's real `gh` is the first on `PATH` past Cinna's own directories, else Cinna's pinned copy at `<userData>/runtimes/gh-<version>/bin/gh` once it has landed. Unlike git it needs no wrapper: one static executable
+- **Downloaded only for GitHub repos, never at startup, never awaited.** Triggers: a completed GitHub sign-in on a machine whose `PATH` has no `gh`, and a wrapper call that found none. At most one install per app run; after a failure nothing retries until the next start (a log warning, no UI). Same staged, digest-checked, atomically renamed install as the managed git; a tree that verifies but does not report exactly the pinned `gh --version` leaves `<userData>/runtimes/.gh-<version>-unsupported` and is never fetched again. While it runs, the wrapper tells the agent Cinna is still installing gh; once it has failed, to ask the user to install the GitHub CLI
+- **`CINNA_GH_DOWNLOAD=off` turns the download off**, which the E2E fixture does on every launch. Tool detection lists `gh` ("GitHub CLI") with source `managed` when only Cinna's copy exists
+
 ### The managed uv
 - **Why.** A kit agent's commands are `uv run …`, and a fresh Mac has no uv. Cinna already downloads a pinned, checksummed uv for MCP servers and Local Development; the same copy is the last place a local-agent child looks. Without it, the first `/run:status` on a bare machine failed with "exited with code 127"
 - **Appended, never prepended.** A uv the user installed always wins; Homebrew or a distro package installed later takes over with no setting. The directory is added whether or not the download has landed, so a long-lived engine process finds uv the moment the install finishes
@@ -96,11 +103,12 @@ Engine / custom agent / stdio MCP child env
 ## Integration Points
 
 - [Shell Environment Resolution](shell_environment.md) — `which()` and the login-shell `PATH` this builds on; `clearToolCache()` (Settings **Refresh**) also drops the tools-state answer
-- [Runtime Pins](../runtime_pins/runtime_pins_llm.md) — the `git` pin
+- [Runtime Pins](../runtime_pins/runtime_pins_llm.md) — the `git` and `gh` pins
+- [GitHub Repos](../../agents/github_repos/github_repos.md) — what the `gh` wrapper decides, and the sign-in behind it
 - [The Local Engine](../../agents/local_agents/engine.md#binary-resolution-and-what-verified-means) — the shared managed install and sweep; engine launch keys
 - [Custom Agents](../../agents/custom_agents/custom_agents.md), [MCP Connections](../../mcp/connections/connections.md) — the other children that get the shims
 - [Open in Tools](../../agents/local_agents/open_in_tools.md) — tool detection reads a stub as not installed
-- [E2E](../e2e/e2e_llm.md) — `CINNA_GIT_DOWNLOAD=off`, `CINNA_UV_PREWARM=off`
+- [E2E](../e2e/e2e_llm.md) — `CINNA_GIT_DOWNLOAD=off`, `CINNA_GH_DOWNLOAD=off`, `CINNA_UV_PREWARM=off`
 - [Local Agent Commands](../../agents/local_agents/commands.md) — the commands the managed uv exists for
 - [Bare-Mac Tests](../bare_mac/bare_mac.md) — [A fresh Mac, nothing installed](#a-fresh-mac-nothing-installed) on a real VM with no developer tools, failing on any system dialog: startup, the managed git download and tool detection (steps 3 and 5), and step 2 for Codex and OpenCode, whose children start a session in the agent folder. A Claude or Antigravity agent with no login spawns no child, so theirs is not reached
 

@@ -67,9 +67,11 @@ A Cinna profile with no stored tokens **is signed out**, and that survives a res
 "Erased" is true of the profile's own rows, not of every trace of the account. When a local folder agent has Core credentials attached under the account, the app keeps, in installation-wide settings that outlive the profile: the account key's name (profile, name, email, server) and each attached reference's type, Service URI and name. Without them the agent's slot would read as missing, and Finish setup would offer a duplicate, as soon as the profile that held it was gone. They hold no token, secret or credential value, and are kept only while some agent still references the account key and pruned once none does, when every agent root can be listed. A deleted profile therefore leaves the agent a warning ("*Alice* was removed: its credentials come from that account") rather than nothing, and **Detach** is how the user lets go of them. A Sign Out that keeps the data keeps all of it, the profile row included, so nothing is retained *instead*: the agent reads "*Alice* is signed out: its credentials come from that account" and **Switch to Alice** is the way back. See [Unavailable accounts](../../agents/service_credentials/README.md#unavailable-accounts).
 
 ### Manage Accounts (Settings)
-1. User navigates to Settings → "User Accounts" (last menu item in the main settings block, after MCP Providers)
-2. All accounts listed as expandable cards — default user shows "Guest" badge, not expandable
+1. User navigates to Settings → "User Accounts" (last menu item in the main settings block, after MCP Providers). The page has two sections: **Profiles** (its (?) explains that each account has its own chats, providers, agents and settings) and **GitHub**
+2. Profiles lists all accounts as expandable cards — default user shows "Guest" badge, not expandable
 3. Click a card to expand and see/edit account details
+
+The **GitHub** section is the current profile's OpenCinna sign-in (sign in, reconnect, sign out, the repositories Cinna can reach); it follows the profile switch, and deleting a profile deletes its sign-in with it. See [GitHub Repos](../../agents/github_repos/github_repos.md).
 
 ### Edit Account (Settings)
 1. User expands an account card in Settings → User Accounts
@@ -150,5 +152,6 @@ Account Management (Settings):
 - **All IPC handlers** filter queries by `getCurrentUserId()` — see [Messaging](../../chat/messaging/messaging.md), [Adapters](../../llm/adapters/adapters.md), [Connections](../../mcp/connections/connections.md), [Agents](../../agents/agents/agents.md), [Chat Modes](../../chat/chat_modes/chat_modes.md)
 - **LLM Registry** — `clearAllAdapters()` + re-init on user switch (see [Adapters](../../llm/adapters/adapters.md))
 - **MCP Manager** — `disconnectAll()` + reconnect on user switch (see [Connections](../../mcp/connections/connections.md))
+- **GitHub Repos** — each profile (the guest included) has its own GitHub sign-in, stored encrypted outside the `users` row and removed by the account's cascade delete; a profile that is locked or not activated reads as signed out (see [GitHub Repos](../../agents/github_repos/github_repos.md))
 - **Settings** — providers, modes, MCP servers, agents are all user-scoped via `userId` column; "User Accounts" is a settings section (see [Settings](../../ui/settings/settings.md))
 - **Theme** — stored in `localStorage` (browser-level), not user-scoped (shared across all users on the same machine)

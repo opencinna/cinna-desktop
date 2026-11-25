@@ -40,7 +40,7 @@
 | LoginPrompt | `src/renderer/src/components/auth/LoginPrompt.tsx` | Full-screen login overlay for user switching — wraps `PasswordUnlockForm` |
 | PasswordUnlockForm | `src/renderer/src/components/auth/PasswordUnlockForm.tsx` | Shared OS-style centered avatar + password form (used by both LoginScreen and LoginPrompt) |
 | RegisterForm | `src/renderer/src/components/auth/RegisterForm.tsx` | Multi-step account creation modal with horizontal type-selection cards (local + Cinna) — see [Cinna Accounts Tech](../cinna_accounts/cinna_accounts_tech.md) |
-| Settings | `src/renderer/src/components/settings/UserAccountsSection.tsx` | User Accounts settings page — list, edit, delete accounts |
+| Settings | `src/renderer/src/components/settings/UserAccountsSection.tsx` | User Accounts settings page — a Profiles section (list, edit, delete accounts, as `SettingsCard flush` cards) and the GitHub section (`GithubAccountSection.tsx`, see [GitHub Repos tech](../../agents/github_repos/github_repos_tech.md)) |
 | Sidebar | `src/renderer/src/components/layout/Sidebar.tsx` | Hosts `UserMenu compact` in the sidebar footer (previously a top-bar slot); settings sidebar includes the "User Accounts" menu item |
 | Settings Page | `src/renderer/src/components/settings/SettingsPage.tsx` | Routes `accounts` tab to `UserAccountsSection` |
 | UI Store | `src/renderer/src/stores/ui.store.ts` | `SettingsMenu` type includes `'accounts'` |
