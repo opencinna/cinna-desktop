@@ -50,6 +50,7 @@ import {
 import { clearPastedFilesAtStart } from './host/desktop/clipboard'
 import { mentionPathsFromArgv, pathMentionIntentService } from './host/desktop/pathMentionIntentService'
 import { BACKGROUND_WINDOW, focusMainWindow, installWindowCreator, installWindowResolver } from './window/focus'
+import { startupSplashArgs } from '../shared/startupSplash'
 import { AGENT_SHORTCUT_SLOTS, type AppShortcut } from '../shared/appShortcuts'
 import {
   loadWindowState,
@@ -300,7 +301,10 @@ function createWindow(): void {
       nodeIntegration: false,
       // The default, stated: the preload and `window.api` stay out of every
       // subframe, the HTML preview frame included.
-      nodeIntegrationInSubFrames: false
+      nodeIntegrationInSubFrames: false,
+      // The E2E harness's fast startup splash (`CINNA_STARTUP_SPLASH=fast`);
+      // empty in a packaged build.
+      additionalArguments: startupSplashArgs(process.env, app.isPackaged)
     }
   })
 

@@ -20,6 +20,10 @@ import { useIsFetching } from '@tanstack/react-query'
  * - Any key or pointer press reveals at once: the user's action wins.
  * - Once per launch. A shell mounted after the login or onboarding screen (or
  *   again after a sign-out) is not a launch, and skips it.
+ * - Fast (`window.api.app.startupSplashFast`, the E2E harness's
+ *   `CINNA_STARTUP_SPLASH=fast`, never in a packaged build): `wait` still runs,
+ *   then it goes straight to `done` — no hold, no reveal — so the shell turns
+ *   opaque at a fixed point (visible + two frames) whatever is loading.
  */
 export type StartupSplashPhase = 'wait' | 'hold' | 'reveal' | 'done'
 
@@ -45,6 +49,7 @@ export function resetStartupSplashForTests(): void {
 
 export function useStartupSplash(): StartupSplashPhase {
   const [phase, setPhase] = useState<StartupSplashPhase>(() => (used ? 'done' : 'wait'))
+  const [fast] = useState(() => window.api?.app?.startupSplashFast === true)
   const [minElapsed, setMinElapsed] = useState(false)
   const fetching = useIsFetching()
 
@@ -62,7 +67,7 @@ export function useStartupSplash(): StartupSplashPhase {
     const enter = (): void => {
       if (document.visibilityState !== 'visible' || frame) return
       frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(() => setPhase('hold'))
+        frame = requestAnimationFrame(() => setPhase(fast ? 'done' : 'hold'))
       })
     }
     enter()
@@ -71,7 +76,7 @@ export function useStartupSplash(): StartupSplashPhase {
       cancelAnimationFrame(frame)
       document.removeEventListener('visibilitychange', enter)
     }
-  }, [phase])
+  }, [phase, fast])
 
   useEffect(() => {
     if (phase !== 'hold') return

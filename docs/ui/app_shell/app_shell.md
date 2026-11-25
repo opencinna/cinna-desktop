@@ -133,6 +133,7 @@ A reveal made by the app — **Show in the Chats list** on a task page — peeks
 - **Once per window, and only for a launch.** Skipped when the launch went through the login screen, the startup error or onboarding: the shell that follows is not a launch.
 - **Three things are deliberately not blocks.** The sidebar's tab rail is part of the card's surface: the active tab reaches into the card through its own patch, which, as a block, drew over the card's band, so the tabs fade in with the content. The stock Cinna logo is a wireframe hidden until clicked, so a placeholder would show something that is not there. A brand logo `<img>` is content, not a block: the content rule cannot hide an `img` inside its own placeholder.
 - **A functional signal (ux_rules rule 16).** It runs with Extra UI animation off; under reduced motion the band holds still.
+- **Fast under the E2E harness.** `CINNA_STARTUP_SPLASH=fast`, which the E2E fixture sets and a packaged build ignores, skips the hold and the reveal: once the window is visible the shell shows at once.
 - **Known limits.** A launch view with no composer would show a blank main area during the hold (launch is always the new-chat home today). A toast raised at launch is hidden for the hold.
 
 ## Architecture Overview

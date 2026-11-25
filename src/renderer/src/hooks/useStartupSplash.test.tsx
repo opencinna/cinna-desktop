@@ -138,6 +138,40 @@ describe('useStartupSplash', () => {
     expect(result.current).toBe('done')
   })
 
+  describe('fast (the E2E harness)', () => {
+    beforeEach(() => {
+      window.api = { app: { startupSplashFast: true } } as never
+    })
+    afterEach(() => {
+      delete (window as { api?: unknown }).api
+    })
+
+    it('goes from wait straight to done once the window shows, with a query still in flight', () => {
+      const { client, result } = setup()
+      holdQuery(client)
+      expect(result.current).toBe('wait')
+      enter()
+      expect(result.current).toBe('done')
+    })
+
+    it('still waits for the window to be visible', () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      try {
+        const { result } = setup()
+        act(() => vi.advanceTimersByTime(MAX_HOLD_MS * 2))
+        expect(result.current).toBe('wait')
+        visibility.mockReturnValue('visible')
+        act(() => {
+          document.dispatchEvent(new Event('visibilitychange'))
+        })
+        enter()
+        expect(result.current).toBe('done')
+      } finally {
+        visibility.mockRestore()
+      }
+    })
+  })
+
   it('is skipped when the launch went through login or onboarding first', () => {
     skipStartupSplash()
     const { result } = setup()

@@ -125,6 +125,9 @@ function span(rec: SplashRecord, phase: string): { start: number; end: number } 
 const composerOf = (page: Page) => page.getByRole('combobox', { name: 'Type a message...', exact: true })
 
 test.describe('startup splash', () => {
+  // The fixture sets CINNA_STARTUP_SPLASH=fast for every other spec.
+  test.use({ env: { CINNA_STARTUP_SPLASH: 'full' } })
+
   test('a launch into the shell holds a skeleton, then reveals on its own', async ({ cinna }) => {
     await cinna.skipOnboarding()
     await cinna.relaunch()

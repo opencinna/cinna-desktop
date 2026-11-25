@@ -83,6 +83,10 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
   // No dashboard tile warms up at launch: a spec's tiles run only when it
   // shows them. Set before `extra`, so a spec of the warm-up can turn it on.
   env.CINNA_DASHBOARD_WARMUP = 'off'
+  // No startup splash hold or reveal: the shell turns opaque as soon as the
+  // window is visible. Set before `extra`, so the splash's own spec turns it
+  // back on (any other value is the full splash; a packaged build ignores it).
+  env.CINNA_STARTUP_SPLASH = 'fast'
   // A spec's own variables go in *before* the sandbox ones, so no spec can
   // point the app at the developer's real `HOME` or profile by accident.
   for (const [key, value] of Object.entries(extra)) env[key] = value

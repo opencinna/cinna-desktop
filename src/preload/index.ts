@@ -17,6 +17,7 @@ import type {
   ToolInstallProgress
 } from '../shared/localTools'
 import { TOOL_INSTALL_CHANNEL } from '../shared/localTools'
+import { STARTUP_SPLASH_FAST_ARG } from '../shared/startupSplash'
 import type { DesktopAppConnectResult, DesktopAppConnectRunning, DesktopAppId, DetectedDesktopApp } from '../shared/desktopApps'
 import type { GitDetail, GitStatus, GitUpdateResult } from '../shared/agentGit'
 import type {
@@ -728,6 +729,8 @@ const api = {
     }
   },
   app: {
+    /** The E2E harness's fast startup splash: main passes it to an unpackaged build only. */
+    startupSplashFast: process.argv.includes(STARTUP_SPLASH_FAST_ARG),
     setTheme: (theme: 'dark' | 'light'): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('app:set-theme', theme),
     /** ⌘N, ⇧⌘N and ⌘1–⌘9 from the application menu. Returns an unsubscribe. */
