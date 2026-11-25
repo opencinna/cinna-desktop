@@ -51,6 +51,12 @@ CLAUDE.md, and its branch and pull request conventions. Look at `git log` and
 `git status`. Follow those conventions for branches, commits and pull requests
 (`gh pr create`).
 
+## Commit identity
+
+Never set a commit identity yourself: no `git -c user.*`, no `git config user.*`,
+no `--author`. Cinna Desktop supplies the user's identity. If git still says it
+doesn't know who you are, relay that to the user and end your turn.
+
 ## Scripts
 
 A script uses `gh api …`. A library that needs a token gets it from

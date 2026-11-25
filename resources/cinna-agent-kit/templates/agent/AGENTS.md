@@ -21,6 +21,7 @@ instructions live in `docs/WORKFLOW_PROMPT.md` and nowhere else.
    goes to `app-data/dashboards/<name>/`, never into `dashboards/`. Never write to `docs/`, `skills/`, `scripts/`, `knowledge/`
    or `files/` while acting as the agent.
 6. Read tunable parameters from `config/`, not from hardcoded values in scripts.
+7. When the user wants to work on a GitHub repository, read `../../.cinna-kit/guides/15-github-repos.md` first.
 
 ## When the user asks to change or extend this agent
 

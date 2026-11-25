@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `aa91ec587c2d566d`.
+Your current kit is version `6283f549374bf439`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,18 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.27.0 — running agents find guide 15, and never set a commit identity
+
+Additive. Every 1.x folder stays valid.
+
+- **`templates/agent/AGENTS.md`** — a running agent reads
+  `../../.cinna-kit/guides/15-github-repos.md` first when the user wants to work on
+  a GitHub repository, so the guide is reached outside the building workflow too.
+  Existing folders keep their `AGENTS.md`; add the line by hand if you want it.
+- **`guides/15-github-repos.md`** — never set a commit identity (`git -c user.*`,
+  `git config user.*`, `--author`); Cinna Desktop supplies the user's. If git still
+  doesn't know who you are, relay that to the user and end the turn.
 
 ## 1.26.1 — every GitHub sentence that needs the user is relayed
 
