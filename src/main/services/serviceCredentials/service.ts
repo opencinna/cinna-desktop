@@ -1,11 +1,14 @@
 import { createLogger } from '../../logger/logger'
 import { markAllRootsDirty } from '../localAgents/scannerService'
 import { createHash, randomUUID } from 'node:crypto'
+import { statSync } from 'node:fs'
 import { runtimeHost } from '../../host/runtimeHost'
 import { publishEvent } from '../../host/events'
 import { getProfileScopeUserId } from '../../auth/scope'
 import { getStoredCinnaSubject } from '../../auth/cinna-tokens'
 import { userRepo } from '../../db/users'
+import { credentialAccountRepo, credentialRefRepo, type CredentialAccountRecord, type CredentialRefRecord } from '../../db/credentialAccounts'
+import { unavailableReason as accountReason } from './accountAvailability'
 import { credentialDto, serviceCredentialRepo as repo, type ServiceCredentialRow } from '../../db/serviceCredentials'
 import { localAgentService } from '../localAgents/localAgentService'
 import { desktopStateService } from '../localAgents/desktopStateService'
@@ -19,8 +22,8 @@ import type { CinnaSendResult } from '../cinna-http'
 import { localBundle, validateLocal } from './transforms'
 import { autoMatch, isDeadKey, slotCandidates, type SlotSpec } from './slotMatch'
 import { collectSkillSlots, judgeSkillSlot, skillSlotSpec, slotClaimed, type SkillSlot } from './skillSlots'
-import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, isGoogleOAuthType, type OAuthConnectFlow, type OAuthCredentialStatus, type SlotOAuthAction, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupOption, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
-import type { LocalAgentCredentialState, LocalAgentDto } from '../../../shared/localAgents'
+import { AGENT_API_KEY_PAUSED_STATUSES, SERVICE_CREDENTIALS_CHANGED, isGoogleOAuthType, type OAuthConnectFlow, type OAuthCredentialStatus, type SlotOAuthAction, type AutoAttachedCredential, type CredentialSetupDto, type CredentialSetupOption, type CredentialSetupSkillSlot, type CredentialSetupSlot, type SkillProvisionOutcome, type UnavailableCredentialAccount, type SkillProvisionSlot, type ServiceCredentialAttachOptions, type ServiceCredentialAttachments, type ServiceCredentialAttachmentRef, type ServiceCredentialAttachmentDto, type ServiceCredentialBundle, type ServiceCredentialDto, type ServiceCredentialEntry, type ServiceCredentialInput } from '../../../shared/serviceCredentials'
+import { ACCOUNT_UNAVAILABLE, missingCredentialSlots, type LocalAgentCredentialState, type LocalAgentDto } from '../../../shared/localAgents'
 import { refuseVaultAgent } from '../../vault/isVaultAgent'
 
 const LOCAL = '__default__', SHARED_TTL = 7 * 86400_000
@@ -54,6 +57,15 @@ const accounts = new Map<string, Account>()
 /** Profiles signed out in this app session stay ineligible until activated again. */
 const signedOut = new Set<string>()
 let unlocked: (userId: string) => boolean = () => false
+/**
+ * The account key each Cinna profile's stored token derived to at the last refresh (null: none),
+ * eligible or not, so an unavailable account can be told from one whose identity is gone.
+ */
+const identities = new Map<string, string | null>()
+/** {@link credentialAccountRepo}, read once and kept current as keys are derived. */
+let recorded: Map<string, CredentialAccountRecord> | null = null
+/** {@link credentialRefRepo}, read once and kept current as references are recorded and pruned. */
+let refRecords: Map<string, Map<string, CredentialRefRecord>> | null = null
 const logger = createLogger('service-credentials')
 const pendingAgents = new Set<string>()
 /**
@@ -494,10 +506,10 @@ function eligibleUsers(): ReturnType<typeof userRepo.list> {
   return userRepo.list().sort((x, y) => Number(y.id === currentUser) - Number(x.id === currentUser))
     .filter(u => u.type === 'cinna_user' && !!u.cinnaServerUrl && !signedOut.has(u.id) && !(u.passwordHash && !unlocked(u.id) && u.id !== currentUser))
 }
-/** Eligible: {@link eligibleUsers} whose stored token names a subject. */
-async function eligible(): Promise<Map<string, AccountInfo>> {
+/** Eligible: {@link eligibleUsers} whose stored token names a subject, with the subjects read for them. */
+async function eligible(): Promise<{ found: Map<string, AccountInfo>; subjects: Map<string, string | null> }> {
   const before = eligibleUsers()
-  const subjects = new Map(await Promise.all(before.map(async u => [u.id, await getStoredCinnaSubject(u.id).catch(() => null)] as const)))
+  const subjects = new Map<string, string | null>(await Promise.all(before.map(async u => [u.id, await getStoredCinnaSubject(u.id).catch(() => null)] as const)))
   const out = new Map<string, AccountInfo>()
   // Read again after the keystore: a profile signed out, locked or deleted meanwhile is left out,
   // and one that became eligible meanwhile is added by the refresh its change queued.
@@ -506,11 +518,225 @@ async function eligible(): Promise<Map<string, AccountInfo>> {
     if (!subject) continue
     let origin: string
     try { origin = new URL(u.cinnaServerUrl!).origin } catch { continue }
-    const key = createHash('sha256').update(origin + '\n' + subject).digest('hex').slice(0, 16)
+    const key = accountKeyOf(origin, subject)
     if (!out.has(key)) out.set(key, { key, userId: u.id, origin, label: u.displayName || u.username, detail: hostOf(u.cinnaServerUrl!), serverUrl: u.cinnaServerUrl!,
       name: u.cinnaFullName?.trim() || u.displayName || u.username, email: u.username })
   }
+  return { found: out, subjects }
+}
+function accountKeyOf(origin: string, subject: string): string { return createHash('sha256').update(origin + '\n' + subject).digest('hex').slice(0, 16) }
+function originOf(url: string | null | undefined): string | null { try { return url ? new URL(url).origin : null } catch { return null } }
+function recordedAccounts(): Map<string, CredentialAccountRecord> {
+  if (!recorded) { try { recorded = credentialAccountRepo.list() } catch { return new Map() } }
+  return recorded
+}
+function sameRecord(x: CredentialAccountRecord | undefined, y: CredentialAccountRecord): boolean {
+  return !!x && x.userId === y.userId && x.name === y.name && x.email === y.email && x.serverUrl === y.serverUrl
+}
+/** Persist `record` as the name of `key` when it changed. Never throws. */
+function recordAccount(key: string, record: CredentialAccountRecord): void {
+  const known = recordedAccounts()
+  if (sameRecord(known.get(key), record)) return
+  try { credentialAccountRepo.set(key, record); known.set(key, record) }
+  catch (error) { logger.warn('A credential account name was not recorded', { error: error instanceof Error ? error.message : String(error) }) }
+}
+/** Forget the name of `key` (no agent attaches under it). Never throws. */
+function forgetAccount(key: string): void {
+  try { credentialAccountRepo.remove(key); recordedAccounts().delete(key) }
+  catch (error) { logger.warn('A credential account name was not forgotten', { error: error instanceof Error ? error.message : String(error) }) }
+}
+/**
+ * The profile a key is named after when several derive it (a recreated profile): the current one,
+ * else the one already recorded for it, else the first. The same answer every refresh, so neither
+ * the record nor {@link profileOfKey} flips between them.
+ */
+function ownerOf(deriving: readonly string[], recordedUserId: string | undefined): string | undefined {
+  if (deriving.includes(currentUser)) return currentUser
+  if (recordedUserId !== undefined && deriving.includes(recordedUserId)) return recordedUserId
+  return deriving[0]
+}
+/**
+ * Remember which key every Cinna profile's token derives to, eligible or not (a locked or signed-out
+ * profile's token still names its account), and persist the names of the keys agents attach under,
+ * so an agent whose credentials come from an account that cannot supply them can name it later,
+ * after its tokens or its profile are gone. Runs after the eligible set is applied, reading the
+ * other profiles' tokens side by side. Never throws: naming is a courtesy, eligibility is not.
+ */
+async function recordIdentities(found: Map<string, AccountInfo>, subjects: Map<string, string | null>): Promise<void> {
+  try {
+    const byUser = new Map([...found.values()].map(acc => [acc.userId, acc.key]))
+    const users = userRepo.list().filter(u => u.type === 'cinna_user' && !!u.cinnaServerUrl)
+    const derived = new Map<string, string | null>(await Promise.all(users.map(async u => {
+      const held = byUser.get(u.id)
+      if (held) return [u.id, held] as const
+      const subject = subjects.has(u.id) ? subjects.get(u.id) ?? null : await getStoredCinnaSubject(u.id).catch(() => null)
+      const origin = originOf(u.cinnaServerUrl)
+      return [u.id, subject && origin ? accountKeyOf(origin, subject) : null] as const
+    })))
+    identities.clear()
+    for (const [userId, key] of derived) identities.set(userId, key)
+    // Named only while some agent attaches under the key: a name nothing needs is not kept.
+    const { refs: referenced } = referencedRefs()
+    const deriving = new Map<string, string[]>()
+    for (const [userId, key] of derived) if (key && referenced.has(key)) deriving.set(key, [...(deriving.get(key) ?? []), userId])
+    for (const [key, userIds] of deriving) {
+      // The eligible holder first, as the eligible set decides; else the tie rule.
+      const owner = found.get(key)?.userId ?? ownerOf(userIds, recordedAccounts().get(key)?.userId)
+      const u = users.find(row => row.id === owner)
+      if (u) recordAccount(key, { userId: u.id, name: u.cinnaFullName?.trim() || u.displayName || u.username, email: u.username, serverUrl: u.cinnaServerUrl! })
+    }
+  } catch (error) {
+    logger.warn('Credential account names were not recorded', { error: error instanceof Error ? error.message : String(error) })
+  }
+}
+/** {@link recordIdentities}' answer for the profiles whose subjects `eligible` read, at once: no keystore read. */
+function setEligibleIdentities(found: Map<string, AccountInfo>, subjects: Map<string, string | null>): void {
+  const byUser = new Map([...found.values()].map(acc => [acc.userId, acc.key]))
+  for (const [userId, subject] of subjects) {
+    const held = byUser.get(userId)
+    if (held) { identities.set(userId, held); continue }
+    const origin = originOf(userRepo.list().find(u => u.id === userId)?.cinnaServerUrl)
+    identities.set(userId, subject && origin ? accountKeyOf(origin, subject) : null)
+  }
+}
+/**
+ * Whether the profile recorded for `key` still holds that account. A profile signed in again to
+ * another server or as another account (`registerCinna`'s rebind) keeps its id but derives another
+ * key, and nothing it can do brings this one back. Without an identity to compare (its tokens name
+ * none now), the server it was recorded on decides. A deleted profile answers true: `removed` says so.
+ */
+function stillDerives(key: string, record: CredentialAccountRecord): boolean {
+  const u = userRepo.list().find(row => row.id === record.userId)
+  if (!u) return true
+  const derived = identities.get(u.id)
+  if (derived) return derived === key
+  return originOf(record.serverUrl) === originOf(u.cinnaServerUrl)
+}
+/** The profile an account key belongs to, as last derived or recorded; null when none is known (or the recorded one now holds another account). */
+function profileOfKey(key: string): string | null {
+  const record = recordedAccounts().get(key)
+  const derivedBy = [...identities].filter(([, derived]) => derived === key).map(([userId]) => userId)
+  return ownerOf(derivedBy, record?.userId) ?? (record && stillDerives(key, record) ? record.userId : null)
+}
+/**
+ * An account that cannot supply the agent's credentials now, named and explained (counts only).
+ * With no profile known (`userId` null: `unknown`), it is still named from what was recorded for
+ * its key, if anything: a profile since rebound to another account leaves its old name there.
+ */
+function unavailableAccount(key: string, userId: string | null, kind: 'credentials' | 'ai', credentials: number): UnavailableCredentialAccount {
+  const record = recordedAccounts().get(key)
+  const u = userId ? userRepo.list().find(row => row.id === userId) : undefined
+  const reason = accountReason(userId === null ? null : {
+    exists: !!u, current: userId === currentUser, signedOut: signedOut.has(userId), hasIdentity: !!identities.get(userId),
+    hasPassword: !!u?.passwordHash, unlocked: unlocked(userId)
+  }, kind)
+  const fromRecord = !!record && (userId === null || record.userId === userId)
+  const serverUrl = u?.cinnaServerUrl ?? (fromRecord ? record!.serverUrl : null) ?? null
+  const named = u ? { name: u.cinnaFullName?.trim() || u.displayName || u.username, email: u.username } : fromRecord ? { name: record!.name, email: record!.email } : null
+  return { key, userId, name: named?.name ?? null, email: named?.email ?? null, host: serverUrl ? hostOf(serverUrl) : null, reason,
+    current: userId !== null && userId === currentUser && reason === 'session_expired', credentials, aiCredential: kind === 'ai' }
+}
+function recordedRefs(): Map<string, Map<string, CredentialRefRecord>> {
+  if (!refRecords) { try { refRecords = credentialRefRepo.list() } catch { return new Map() } }
+  return refRecords
+}
+function sameRef(x: CredentialRefRecord | undefined, y: CredentialRefRecord): boolean {
+  return !!x && x.type === y.type && x.serviceUri === y.serviceUri && x.name === y.name
+}
+/**
+ * Every account key folder agents attach under, with the refs attached. `complete` is false while a
+ * root is not there or cannot be listed (an unmounted volume, a home this app may not read), or a
+ * listed folder is gone: its agents are missing from the listing, so what they attach would read as
+ * unreferenced.
+ */
+function referencedRefs(): { refs: Map<string, Set<string>>; complete: boolean } {
+  const listed = localAgentService.list(LOCAL)
+  const refs = new Map<string, Set<string>>()
+  for (const a of listed.agents) {
+    for (const [key, list] of Object.entries(state(a).accounts)) {
+      if (!refs.has(key)) refs.set(key, new Set())
+      for (const { ref } of list) refs.get(key)!.add(ref)
+    }
+  }
+  // A root that is there but could not be listed (EPERM, or `Local/` gone for the moment of a git
+  // branch switch) is as incomplete as a missing one, and so is a listing that names a folder no
+  // longer on disk (a cached scan): what those agents attach would read as unreferenced.
+  const complete = (listed.roots ?? []).every(root => root.exists && root.listable !== false)
+    && (listed.homeMissing || listed.homeAccess === 'ready')
+    && listed.agents.every(a => isFolder(a.path))
+  return { refs, complete }
+}
+function isFolder(path: string): boolean { try { return statSync(path).isDirectory() } catch { return false } }
+/**
+ * Keep {@link credentialRefRepo} and {@link credentialAccountRepo} to what folder agents attach
+ * under. For an `account` that is eligible now, each referenced record its profile's cache holds is
+ * recorded (`type`, `serviceUri`, `name`), so its slot still reads as held once the account cannot
+ * supply it and its cache is gone, and the account's name is recorded too. Pruning: a key no agent
+ * attaches under loses its references and its name (a deleted profile's included); an eligible
+ * account's references are kept to what is attached (its cache can record them again); an
+ * ineligible one's are never pruned one by one (a signed-out account's cache is gone, so they could
+ * not be recorded again). Nothing is pruned while a root is not there. Never throws.
+ */
+function rememberRefs(account?: Account): void {
+  try {
+    const { refs: referenced, complete } = referencedRefs()
+    const all = recordedRefs()
+    const current = account && accounts.get(account.key) === account ? account : undefined
+    const cached = current ? repo.list(current.userId).filter(r => r.origin === 'cloud') : []
+    for (const key of new Set([...all.keys(), ...(current ? [current.key] : [])])) {
+      const before = all.get(key) ?? new Map<string, CredentialRefRecord>(), refs = referenced.get(key)
+      const next = !complete ? new Map(before)
+        : !refs ? new Map<string, CredentialRefRecord>()
+          : accounts.has(key) ? new Map([...before].filter(([ref]) => refs.has(ref)))
+            : new Map(before)
+      if (current && key === current.key && refs) {
+        for (const ref of refs) {
+          const row = cached.find(r => r.cloud_id === ref)
+          if (!row) continue
+          const m = credentialDto(row)
+          next.set(ref, { type: m.type, serviceUri: m.serviceUri, name: m.name })
+        }
+      }
+      const unchanged = next.size === before.size && [...next].every(([ref, r]) => sameRef(before.get(ref), r))
+      if (unchanged) continue
+      credentialRefRepo.set(key, next)
+      if (next.size) all.set(key, next); else all.delete(key)
+    }
+    if (current && referenced.has(current.key)) recordAccount(current.key, { userId: current.userId, name: current.name, email: current.email, serverUrl: current.serverUrl })
+    if (complete) for (const key of [...recordedAccounts().keys()]) if (!referenced.has(key)) forgetAccount(key)
+  } catch (error) {
+    logger.warn('Credential references were not recorded', { error: error instanceof Error ? error.message : String(error) })
+  }
+}
+/** An id for a held record known only by what was recorded for it: stable, and naming neither the account nor Core's id. */
+function heldId(key: string, ref: string): string { return createHash('sha256').update('held\n' + key + '\n' + ref).digest('hex') }
+type HeldRecord = { group: string; ref: string; dto: ServiceCredentialDto & { state: 'account_unavailable' } }
+/**
+ * Every attachment of `a` whose account cannot supply it now, as metadata to match slots by: its
+ * profile's cached row while there is one (a locked or not-current profile keeps its cache), else
+ * what {@link rememberRefs} recorded for it (a signed-out profile's cache is gone). One with
+ * neither matches nothing. Main-only: what these say is never sent to the renderer.
+ */
+function heldRecords(a: Pick<LocalAgentDto, 'path' | 'kind'>): HeldRecord[] {
+  const out: HeldRecord[] = []
+  const cached = new Map<string, ServiceCredentialRow[]>()
+  for (const v of resolve(a)) {
+    if (v.available) continue
+    const userId = profileOfKey(v.group)
+    if (userId && !cached.has(userId)) cached.set(userId, repo.list(userId).filter(r => r.origin === 'cloud'))
+    const row = userId ? cached.get(userId)!.find(r => r.cloud_id === v.ref) : undefined
+    if (row) { out.push({ group: v.group, ref: v.ref, dto: { ...credentialDto(row), state: ACCOUNT_UNAVAILABLE } }); continue }
+    const known = recordedRefs().get(v.group)?.get(v.ref)
+    if (!known) continue
+    out.push({ group: v.group, ref: v.ref, dto: { id: heldId(v.group, v.ref), origin: 'cloud', cloudId: v.ref, name: known.name, type: known.type, serviceUri: known.serviceUri,
+      notes: null, status: 'complete', isPlaceholder: false, relation: 'owned', ownerEmail: null, localUseAllowed: true, revision: null, hasValues: false, expiresAt: null,
+      keyStatus: null, agentApi: null, keyBlocked: null, oauthStatus: null, grantedUserEmail: null, state: ACCOUNT_UNAVAILABLE } })
+  }
   return out
+}
+/** The account a held record's group belongs to, as the composer's account row names it. */
+function heldAccount(a: Pick<LocalAgentDto, 'path' | 'kind'>, group: string): UnavailableCredentialAccount {
+  return unavailableAccount(group, profileOfKey(group), 'credentials', state(a).accounts[group]?.length ?? 0)
 }
 function retireAccount(account: Account): void {
   account.abort.abort(); account.epoch++; account.flight = null; account.synthetic = []; account.scheduler.stop()
@@ -557,7 +783,7 @@ function retireIneligible(): void {
 }
 async function applyEligible(): Promise<void> {
   if (!started) return
-  const next = await eligible(), touched = new Set<string>()
+  const { found: next, subjects } = await eligible(), touched = new Set<string>()
   if (!started) return
   for (const account of [...accounts.values()]) {
     const wanted = next.get(account.key)
@@ -570,7 +796,17 @@ async function applyEligible(): Promise<void> {
     accounts.set(key, account); touched.add(key)
     account.scheduler.start({ profileUserId: account.userId, settingsUserId: LOCAL })
   }
+  // The eligible profiles' identities are known now, from the keystore read above: set before anything
+  // regenerates or answers, so a profile rebound to another account never reads, for the length of the
+  // other profiles' token reads, as still holding the old one (its row would say Re-authenticate, then
+  // Open accounts).
+  setEligibleIdentities(next, subjects)
   if (touched.size) regenerate(a => Object.keys(state(a).accounts).some(key => touched.has(key)))
+  // Awaited, since what is pruned below reads them: the other, ineligible profiles' tokens are read
+  // only to name accounts, and nothing above waits on them.
+  await recordIdentities(next, subjects)
+  // What no agent attaches under any more is forgotten (a deleted profile's names included).
+  if (started) rememberRefs()
   changed()
 }
 /**
@@ -646,6 +882,8 @@ async function syncPass(account: Account, g: Guard, light = false): Promise<void
     }
     for (const row of previous) if (!seen.has(row.cloud_id!)) { repo.remove(row.id); dirty = true }
     if (!light || dirty) {
+      // What the account's attached records are matched by once it cannot supply them (its cache gone).
+      rememberRefs(account)
       const attachedIds = new Set(allAgents().flatMap(a => resolve(a).flatMap(v => v.account === account && v.row ? [v.row.id] : [])))
       // A record Core just could not get a token for is left alone for a while (tokenTiming.unavailableRetryMs).
       await fetchValues(account, repo.list(userId).filter(r => attachedIds.has(r.id) && deliverable(r) && !backedOff(r) && (!r.payload_enc || r.payload_fetched_at === null || (r.expires_at !== null && r.expires_at < Date.now() + 600_000))), g)
@@ -686,7 +924,8 @@ function envFilled(slot: LocalAgentCredentialState): boolean {
 }
 /** The scanner's verdict on a slot, restated: what Finish setup shows and auto-attach skips. */
 function slotState(slot: LocalAgentCredentialState): CredentialSetupSlot['state'] {
-  if (slot.attachment) return slot.attachment.state === 'ready' ? 'connected' : 'missing'
+  // Held by an account that cannot supply it now: not missing, so nothing attaches a duplicate unasked.
+  if (slot.attachment) return slot.attachment.state === 'ready' ? 'connected' : slot.attachment.state === ACCOUNT_UNAVAILABLE ? ACCOUNT_UNAVAILABLE : 'missing'
   return envFilled(slot) ? 'env' : 'missing'
 }
 /**
@@ -731,6 +970,8 @@ async function writeAttachments(id: string, group: string, refsOf: (before: Serv
     else if (next.length) s.accounts[group] = next
     else delete s.accounts[group]
     desktopStateService.patch(a.path, a.kind, { serviceCredentials: s })
+    // Local records need none: only an account's can become unavailable.
+    if (group !== 'local') rememberRefs(account)
     await materialize(a, true)
   })
   if (account) updatePolling(account)
@@ -1023,13 +1264,14 @@ function slotTarget(a: LocalAgentDto, setup: CredentialSetupDto, slotKey: string
     const declared = setup.skillSlots.filter(slot => slot.slot === name)
     // One Service URI two skills declare with different types: the missing Google one is the one to authorize.
     const slot = declared.find(v => isGoogleOAuthType(v.type) && v.state === 'missing') ?? declared.find(v => isGoogleOAuthType(v.type)) ?? declared.find(v => v.state === 'missing') ?? declared[0]
-    return slot ? { type: slot.type, serviceUri: slot.slot, missing: slot.state === 'missing', judged: [slot.attached?.credential ?? null, slot.notReady] } : null
+    return slot ? { type: slot.type, serviceUri: slot.slot, missing: slot.state !== 'connected', judged: [slot.attached?.credential ?? null, slot.notReady] } : null
   }
   const slot = setup.slots.find(v => v.name === slotKey)
   if (!slot) return null
   // The scanner's tiers: the declared Service URI, else the slot's name (records named like it, then Service URI = name).
   const serviceUri = a.credentials.find(c => c.name === slotKey)?.serviceUri || slot.name
-  return { type: slot.type, serviceUri, missing: slot.state === 'missing', judged: [slot.attached?.credential ?? null, slot.notReady] }
+  // A held slot can be authorized too: Finish setup offers it only when the user asks to replace the held one.
+  return { type: slot.type, serviceUri, missing: slot.state === 'missing' || slot.state === ACCOUNT_UNAVAILABLE, judged: [slot.attached?.credential ?? null, slot.notReady] }
 }
 
 /** The loopback token endpoint (D4). Bearers are per agent and app session; a turn holding the agent makes one usable. */
@@ -1120,7 +1362,39 @@ async function tokenEndpointFor(a: LocalAgentDto): Promise<{ url: string; token:
 }
 
 export const serviceCredentialService = {
-  metadataForPath(path: string) { return resolve({ path, kind: 'kit' }).filter(v => v.available && v.row).map(v => ({ ...credentialDto(v.row!), state: attachmentState(v.row) })) },
+  /**
+   * What the scanner judges a folder's slots by: every available attachment with its state, and each
+   * attachment of an account that cannot supply it now, as `account_unavailable`, matched by its
+   * profile's cached record or, once that cache is gone (a logout clears it), by what was recorded
+   * for it while the account was eligible ({@link heldRecords}). Those are only matched against slots
+   * (a slot they fit is held, not missing) and never delivered or shown; with neither, the slot
+   * stays plainly missing.
+   */
+  metadataForPath(path: string): (ServiceCredentialDto & { state: ServiceCredentialAttachmentDto['state'] })[] {
+    const a = { path, kind: 'kit' as const }
+    return [...attachedMetadata(a), ...heldRecords(a).map(h => h.dto)]
+  },
+  /**
+   * The accounts a folder agent's attached Core credentials are stored under that cannot supply
+   * them now (not in the eligible set), each named from its profile or from the last name recorded
+   * for its key, with why and how many references it holds. Counts only, never the records.
+   */
+  unavailableAccounts(id: string): UnavailableCredentialAccount[] {
+    const s = state(agent(id))
+    return Object.entries(s.accounts)
+      .filter(([key, list]) => list.length > 0 && !accounts.has(key))
+      .map(([key, list]) => unavailableAccount(key, profileOfKey(key), 'credentials', list.length))
+  },
+  /**
+   * The account of a profile an agent's AI credential was provisioned to, as an unavailable account
+   * (`other_profile` when nothing but being the current profile stands in the way); null for the
+   * current profile, whose credentials resolve.
+   */
+  profileAccount(userId: string): UnavailableCredentialAccount | null {
+    if (userId === currentUser) return null
+    const key = identities.get(userId) ?? [...recordedAccounts()].find(([, r]) => r.userId === userId)?.[0] ?? `user:${userId}`
+    return unavailableAccount(key, userId, 'ai', 0)
+  },
   /** Local records plus the current profile's cloud cache (the settings pages). */
   list(): ServiceCredentialDto[] { return [...repo.list(LOCAL), ...(currentUser === LOCAL ? [] : repo.list(currentUser))].map(credentialDto) },
   snapshot(userId: string, serverUrl: string | null) {
@@ -1245,8 +1519,10 @@ export const serviceCredentialService = {
     try {
       const account = activeAccount()
       if (!account) return []
+      // A slot an unavailable account holds is claimed too: attaching another would duplicate it.
+      const claimed = (a: LocalAgentDto) => [...attachedMetadata(a), ...heldRecords(a).map(h => h.dto)]
       const open = (): SkillSlot[] => {
-        const a = agent(id), attached = attachedMetadata(a)
+        const a = agent(id), attached = claimed(a)
         return collectSkillSlots(a.skills).filter(slot => !slotClaimed(slot, attached))
       }
       const wanted = open()
@@ -1276,7 +1552,7 @@ export const serviceCredentialService = {
       // Service URI two skills declare with different types gets one record, not one per type.
       const appended = await appendWithoutWaiting(id, account, [...picks.keys()], (ref, soFar) => {
         const slot = picks.get(ref)!.slot
-        return !slotClaimed(slot, attachedMetadata(a)) && !soFar.some(other => picks.get(other)!.slot.slot === slot.slot)
+        return !slotClaimed(slot, claimed(a)) && !soFar.some(other => picks.get(other)!.slot.slot === slot.slot)
       }, ref => ({ slot: picks.get(ref)!.slot.slot }))
       if (!appended.length) return []
       logger.info('Attached matching credentials for skill slots', { agentId: id, count: appended.length })
@@ -1345,9 +1621,16 @@ export const serviceCredentialService = {
     const offered = (slotSpec: SlotSpec): CredentialSetupOption[] => slotCandidates(slotSpec, usable).map(m => m.option)
     // When nothing usable is offered: the best record that fits but would not be ready, so the dialog says why.
     const notReadyFor = (slotSpec: SlotSpec): ServiceCredentialDto | null => slotCandidates(slotSpec, unusable)[0]?.option.credential ?? null
+    const held = heldRecords(a)
+    const heldBy = (credentialId: string | undefined): UnavailableCredentialAccount | null => {
+      const record = credentialId ? held.find(h => h.dto.id === credentialId) : undefined
+      return record ? heldAccount(a, record.group) : null
+    }
     const slots: CredentialSetupSlot[] = a.credentials.map(slot => {
       const judged = slot.attachment ? rows.find(v => credentialDto(v.row!).id === slot.attachment!.credentialId) : undefined
       const verdict = slotState(slot)
+      // Held: the account it comes from, never its record (a locked profile's metadata stays hidden).
+      const heldAccountOf = verdict === ACCOUNT_UNAVAILABLE ? heldBy(slot.attachment?.credentialId) : null
       const options = verdict === 'connected' ? [] : offered(spec(slot))
       const attachedDto = judged ? credentialDto(judged.row!) : null
       const notReady = verdict === 'connected' || options.length > 0 ? null : notReadyFor(spec(slot))
@@ -1358,19 +1641,23 @@ export const serviceCredentialService = {
         expectedKeys: slot.expectedKeys, presentKeys: slot.presentKeys,
         options,
         notReady,
-        oauth: slotOAuth(slot.type, verdict === 'missing', renewable(account, [attachedDto, notReady]))
+        account: heldAccountOf,
+        oauth: slotOAuth(slot.type, verdict !== 'connected' && verdict !== 'env', renewable(account, [attachedDto, notReady]))
       }
     })
     const attached = attachedMetadata(a)
     const skillSlots: CredentialSetupSkillSlot[] = collectSkillSlots(a.skills).map(slot => {
-      const { attachment, filled, typeMismatch } = judgeSkillSlot(slot, attached)
+      const judgedSkill = judgeSkillSlot(slot, [...attached, ...held.map(h => h.dto)])
+      const heldSkill = judgedSkill.attachment?.state === ACCOUNT_UNAVAILABLE ? heldBy(judgedSkill.attachment.id) : null
+      const { filled, typeMismatch } = judgedSkill, attachment = heldSkill ? null : judgedSkill.attachment
       const options = filled ? [] : offered(skillSlotSpec(slot))
       const notLocal = filled || options.length > 0 ? null : pool.find(m => m.relation !== 'owned' && m.type === slot.type && m.serviceUri === slot.slot && !m.localUseAllowed) ?? null
       const notReady = filled || options.length > 0 ? null : notReadyFor(skillSlotSpec(slot))
       return {
         slot: slot.slot, type: slot.type, skills: slot.skills, description: slot.description,
-        state: filled ? 'connected' : 'missing',
+        state: filled ? 'connected' : heldSkill ? ACCOUNT_UNAVAILABLE : 'missing',
         attached: attachment ? { credential: withoutState(attachment), state: attachment.state } : null,
+        account: heldSkill,
         typeMismatch: typeMismatch ? withoutState(typeMismatch) : null,
         notLocal,
         notReady,
@@ -1380,7 +1667,7 @@ export const serviceCredentialService = {
       }
     })
     // Skill slots never decide setupNeeded: they warn, as in Core, and never open the dialog.
-    return { slots, skillSlots, setupNeeded: a.credentials.some(c => !c.satisfied), oauthAccount: account !== undefined }
+    return { slots, skillSlots, setupNeeded: missingCredentialSlots(a.credentials).length > 0, oauthAccount: account !== undefined }
   },
   /**
    * A turn's or command's credentials: the files written (or removed), and whether the folder carries
@@ -1499,6 +1786,8 @@ export const serviceCredentialService = {
     flows.clear(); flowStarts.clear(); tokenBackoff.clear()
     for (const account of [...accounts.values()]) retireAccount(account)
     provisioned.clear()
+    // Read from the store again on the next activation.
+    recorded = null; refRecords = null; identities.clear()
     started = false
   },
   /**

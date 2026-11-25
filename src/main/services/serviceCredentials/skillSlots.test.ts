@@ -46,6 +46,12 @@ describe('the strict match', () => {
     expect(judgeSkillSlot(slot, [attached('n', 'api_token', null)])).toMatchObject({ filled: false, attachment: null, typeMismatch: null })
   })
 
+  it('holds a slot an unavailable account fills: never filled, judged after a live record, never a type mismatch', () => {
+    expect(judgeSkillSlot(slot, [attached('h', 'api_token', 'erp-api', 'account_unavailable')])).toMatchObject({ filled: false, attachment: { id: 'h', state: 'account_unavailable' } })
+    expect(judgeSkillSlot(slot, [attached('h', 'api_token', 'erp-api', 'account_unavailable'), attached('x', 'api_token', 'erp-api', 'expired')])).toMatchObject({ filled: false, attachment: { id: 'x' } })
+    expect(judgeSkillSlot(slot, [attached('h', 'odoo', 'erp-api', 'account_unavailable')])).toMatchObject({ attachment: null, typeMismatch: null })
+  })
+
   it('treats any attachment with the slot as the user’s choice', () => {
     expect(slotClaimed(slot, [{ serviceUri: 'erp-api' }])).toBe(true)
     expect(slotClaimed(slot, [{ serviceUri: 'erp' }, { serviceUri: null }])).toBe(false)

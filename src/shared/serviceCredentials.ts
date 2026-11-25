@@ -131,8 +131,12 @@ export interface CredentialSetupSlot {
   type: string
   optional: boolean
   envPrefix: string | null
-  /** `connected`: its matching attachment is ready; `env`: no attachment and `.env` fills it (every name, or any name under `envPrefix` for a slot with no `fields`); else `missing`. */
-  state: 'connected' | 'env' | 'missing'
+  /**
+   * `connected`: its matching attachment is ready; `env`: no attachment and `.env` fills it (every name, or any name under `envPrefix` for a slot with no `fields`);
+   * `account_unavailable`: its only matching attachment is stored under a Cinna account that cannot supply it now (named in `account`):
+   * not missing, so nothing attaches another unasked; else `missing`.
+   */
+  state: 'connected' | 'env' | 'account_unavailable' | 'missing'
   /** The attached record the slot is judged by — ready when `connected`, otherwise the reason it does not count. */
   attached: { credential: ServiceCredentialDto; state: ServiceCredentialAttachmentState } | null
   /** `<envPrefix><FIELD>` names the slot reads from `credentials/.env`; empty when it declares no `fields`. */
@@ -147,7 +151,12 @@ export interface CredentialSetupSlot {
    */
   notReady: ServiceCredentialDto | null
   /**
-   * A missing Google OAuth slot: what `authorizeSlot` would do for it — `reconnect` an owned record that
+   * `account_unavailable` only: the account the slot's credential comes from, as the composer's account row names it.
+   * Never the record itself (`attached` is null then): an unavailable account's credential metadata stays in main.
+   */
+  account: UnavailableCredentialAccount | null
+  /**
+   * A missing (or held) Google OAuth slot: what `authorizeSlot` would do for it — `reconnect` an owned record that
    * fits it but whose grant is not ready (attached, or `notReady`), else `authorize` (create one with the
    * slot's Service URI). Null for any other slot, or one that is not missing.
    */
@@ -177,12 +186,14 @@ export interface CredentialSetupSkillSlot {
   skills: string[]
   /** The first declaring skill's description of it, if any. */
   description: string | null
-  /** `connected`: a strictly matching attachment is ready. */
-  state: 'connected' | 'missing'
+  /** `connected`: a strictly matching attachment is ready; `account_unavailable`: held, as `CredentialSetupSlot.state`. */
+  state: 'connected' | 'account_unavailable' | 'missing'
   /** The strictly matching attachment the slot is judged by, ready when `connected`. */
   attached: { credential: ServiceCredentialDto; state: ServiceCredentialAttachmentState } | null
   /** An attached record with this Service URI but another type: the skill's `by_slot` would find it, and it does not fit. */
   typeMismatch: ServiceCredentialDto | null
+  /** As `CredentialSetupSlot.account`. */
+  account: UnavailableCredentialAccount | null
   /**
    * When nothing fits: an account record of the slot's type and Service URI that this
    * computer may not use (Allow local use is off), so the dialog can say why it is not offered.
@@ -209,6 +220,40 @@ export interface CredentialSetupDto {
   /** The active profile has an eligible Cinna account, so a Google OAuth slot can be authorized from here. */
   oauthAccount: boolean
 }
+/**
+ * Why an account a local agent's credentials come from cannot supply them now:
+ * `signed_out` (logged out this session, or no identity it can be read as), `locked` (a password
+ * profile not unlocked this session), `session_expired` (its stored tokens name no account; on the
+ * current profile, re-authentication fixes it), `removed` (the profile was deleted), `other_profile`
+ * (an AI credential provisioned to a profile that is not the current one: those follow the profile)
+ * and `unknown` (no profile on this computer is known to hold that account).
+ */
+export type UnavailableAccountReason = 'signed_out' | 'locked' | 'session_expired' | 'removed' | 'other_profile' | 'unknown'
+/**
+ * One account a local folder agent takes credentials from that cannot supply them now. Counts only:
+ * the names and types of an unavailable account's credentials are never sent (a locked profile's
+ * credential metadata stays hidden).
+ */
+export interface UnavailableCredentialAccount {
+  /** The account key (`sha256(origin + "\n" + sub)[:16]`), or `user:<id>` for a profile whose key is not known. */
+  key: string
+  /** The profile behind it; null when none is known. A `removed` profile's id no longer exists. */
+  userId: string | null
+  /** As accounts are named elsewhere: the Cinna full name, else the profile's display name; null when unknown. */
+  name: string | null
+  /** The profile's username (the email it signs in with); null when unknown. */
+  email: string | null
+  /** The server's host, for "Name (email · host)"; null when unknown. */
+  host: string | null
+  reason: UnavailableAccountReason
+  /** The profile is the current one (its session expired): Re-authenticate, not Switch. */
+  current: boolean
+  /** How many of the agent's attached Core credentials are stored under this account. */
+  credentials: number
+  /** The agent's AI credential (OpenCode runtime, the machine pin, Claude API Token mode) was provisioned to this account's profile. */
+  aiCredential: boolean
+}
+export interface AgentCredentialAccounts { accounts: UnavailableCredentialAccount[] }
 /**
  * A credential attached without asking after a Get, Update or Use the team's version.
  * `skill: true` for a skill slot, whose `slot` is a Service URI and may equal an agent slot's name.

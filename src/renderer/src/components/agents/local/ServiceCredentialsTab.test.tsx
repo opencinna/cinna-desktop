@@ -34,6 +34,18 @@ const changed = new Set<() => void>()
 window.api = { serviceCredentials: { attachments, setAttachments, reconnectOAuth, oauthFlow, cancelOAuth, attachOptions,
   onChanged: (cb: () => void) => { changed.add(cb); return () => changed.delete(cb) } }, system: { openExternal } } as never
 vi.mock('./ReadOnlyCards', () => ({ useOpenCredentialsFile: () => null, CredentialsCard: () => null }))
+/** Main's answer about the accounts the agent's credentials come from, and the profile switch it offers. */
+const accounts = vi.hoisted(() => ({ value: [] as unknown[] }))
+const login = vi.hoisted(() => vi.fn(async (): Promise<unknown> => ({ success: false, error: 'The profile could not be opened here.' })))
+vi.mock('../../../hooks/useServiceCredentials', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useAgentCredentialAccounts: () => ({ data: { accounts: accounts.value }, isError: false })
+}))
+vi.mock('../../../hooks/useAuth', () => ({
+  useUsers: () => ({ data: [{ id: 'u-alice', hasPassword: false, cinnaServerUrl: 'https://core.corp.com' }] }),
+  useLogin: () => ({ mutateAsync: login, isPending: false }),
+  useCinnaReauth: () => ({ mutate: vi.fn(), isPending: false, error: null, data: undefined })
+}))
 vi.mock('./CredentialAttachModal', () => ({
   CredentialAttachModal: ({ open, onAttach }: { open: boolean; onAttach: (group: string, ref: string) => Promise<void> }) =>
     createElement('button', { onClick: () => void onAttach('local', 'y'), 'data-open': String(open) }, 'fake attach y')
@@ -62,10 +74,28 @@ describe('ServiceCredentialsTab', () => {
   it('offers Detach for an attachment whose account is signed out', async () => {
     stored = { local: [], 'a1b2c3d4e5f60718': ['gone'] }; release = null
     renderTab()
-    await screen.findByText(/Account not signed in/)
+    await screen.findByText(/Hidden until its account is available/)
     expect(screen.queryByRole('button', { name: /^Manage/ })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /^Detach / }))
     await waitFor(() => expect(setAttachments).toHaveBeenLastCalledWith('folder:a', 'a1b2c3d4e5f60718', []))
+  })
+  it('heads an unavailable account’s group with the account and its Switch, its rows with the composer’s label as a warning', async () => {
+    stored = { local: [], 'a1b2c3d4e5f60718': ['gone'] }; release = null
+    accounts.value = [{ key: 'a1b2c3d4e5f60718', userId: 'u-alice', name: 'Alice Smith', email: 'alice@corp.com', host: 'core.corp.com', reason: 'signed_out', current: false, credentials: 1, aiCredential: false }]
+    try {
+      renderTab()
+      const group = await screen.findByRole('region', { name: 'Alice Smith <alice@corp.com> core.corp.com' })
+      expect(within(group).getByRole('link', { name: 'core.corp.com' })).toBeTruthy()
+      const status = within(group).getByRole('img', { name: 'Alice is signed out' })
+      expect(status.className).toContain('--color-warning')
+      fireEvent.click(within(group).getByRole('button', { name: /Switch to Alice/ }))
+      await waitFor(() => expect(login).toHaveBeenCalledWith({ userId: 'u-alice' }))
+      // The refusal lands on the heading of the group whose Switch was clicked.
+      // Short, so the cause survives 800 px; the whole sentence is its title.
+      const alert = await within(group).findByRole('alert')
+      expect(alert.textContent).toBe('Switch failed: The profile could not be opened here.')
+      expect(alert.getAttribute('title')).toBe('Couldn’t switch to Alice Smith <alice@corp.com> core.corp.com: The profile could not be opened here.')
+    } finally { accounts.value = [] }
   })
   it('shows each attachment as the shared row, with icon actions and Manage for a cloud record', async () => {
     stored = { local: ['x', 'z'], acct: ['c'] }; release = null

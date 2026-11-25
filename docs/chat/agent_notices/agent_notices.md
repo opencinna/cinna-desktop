@@ -4,6 +4,10 @@
 
 Renders agent-side system messages — startup pings, environment transitions, and other status-style updates the agent itself emits during a turn — as muted system messages inside the chat transcript, distinct from the agent's actual answer bubbles. Notices are excluded from the LLM history rebuild so they never feed back into the model.
 
+## Not these
+
+Transcript notices are the agent's own words. The composer's *account* rows (a Cinna account the agent's credentials come from is signed out, locked, expired or removed, with **Switch to *name***, **Re-authenticate** or **Open accounts**) are the desktop's, belong to the composer notice panel, and never enter the transcript or the `agent_transition` history: see [The composer notice panel](../conversation_ui/conversation_ui.md#the-composer-notice-panel) and [Unavailable accounts](../../agents/service_credentials/README.md#unavailable-accounts). Their warning tone is their own and does not use `cinna.notice_tone`.
+
 ## Core Concepts
 
 - **Notice** — A TextPart sent by a Cinna agent with `metadata['cinna.content_kind'] = 'notice'`. Unlike `text` / `thinking` / `tool` / `tool_result` parts, notices do NOT join the assistant message's `parts[]` — they land on their own `agent_transition` row.

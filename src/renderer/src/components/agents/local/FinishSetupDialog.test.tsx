@@ -19,7 +19,7 @@ const record = (over: Partial<ServiceCredentialDto>): ServiceCredentialDto => ({
 })
 const slot = (over: Partial<CredentialSetupSlot>): CredentialSetupSlot => ({
   name: 'acme', type: 'api_token', optional: false, envPrefix: null, state: 'missing', attached: null,
-  expectedKeys: [], presentKeys: [], options: [], notReady: null, oauth: null, ...over
+  expectedKeys: [], presentKeys: [], options: [], notReady: null, account: null, oauth: null, ...over
 })
 let setup: CredentialSetupDto
 const setupState = vi.fn(async () => ({ ok: true, value: setup }))
@@ -28,7 +28,7 @@ let skillAttached: AutoAttachedCredential[] = []
 const setupSkills = vi.fn(async () => ({ ok: true, value: skillAttached }))
 const skillSlot = (over: Partial<CredentialSetupSkillSlot>): CredentialSetupSkillSlot => ({
   slot: 'erp-api', type: 'api_token', skills: ['erp-orders'], description: null, state: 'missing', attached: null,
-  typeMismatch: null, notLocal: null, notReady: null, options: [], provision: null, oauth: null, ...over
+  typeMismatch: null, account: null, notLocal: null, notReady: null, options: [], provision: null, oauth: null, ...over
 })
 const openCredentials = vi.fn(async (): Promise<unknown> => ({ created: false, revealed: false }))
 const setEnvValues = vi.fn(async (_id: string, values: Record<string, string>): Promise<unknown> => {
@@ -43,9 +43,12 @@ const reopenOAuth = vi.fn(async () => ({ ok: true, value: undefined }))
 const cancelOAuth = vi.fn(async () => ({ ok: true, value: undefined }))
 const gflow = (over: Partial<OAuthConnectFlow>): OAuthConnectFlow => ({ id: 'flow-1', agentId: AGENT, group: 'acct', type: 'gmail_oauth_readonly', credentialId: 'g-1',
   reconnect: false, slot: 'mail', state: 'waiting', error: null, expiresAt: Date.now() + 600_000, ...over })
+const listUsers = vi.fn(async () => [{ id: 'account-a', type: 'cinna_user', username: 'alice@corp.com', displayName: 'alice', hasPassword: false, cinnaServerUrl: 'https://core.corp' }])
+const login = vi.fn(async (_data: { userId: string }): Promise<unknown> => ({ success: false, error: 'The profile could not be opened here.' }))
 window.api = {
   serviceCredentials: { setupState, attach, setupSkills, oauthFlow, authorizeSlot, reopenOAuth, cancelOAuth, onChanged: () => () => {} },
-  localAgents: { setEnvValues, openCredentials }
+  localAgents: { setEnvValues, openCredentials },
+  auth: { listUsers, login }
 } as never
 
 function Harness({ followRequests }: { followRequests?: boolean }): React.JSX.Element {
@@ -517,5 +520,102 @@ describe('notReadyNote', () => {
     expect(notReadyNote({ ...base, isPlaceholder: true })).toBe('ERP fits it, but some of its values are missing. Fill them in on Cinna.')
     expect(notReadyNote({ ...base, keyBlocked: 'insecure_base_url' } as never)).toBe('ERP fits it, but this computer refused its address as unsafe.')
     expect(notReadyNote({ ...base, oauthStatus: 'pending_authorization' } as never)).toBe('ERP fits it, but its Google access has to be reconnected first.')
+  })
+})
+
+describe('a slot an unavailable account holds', () => {
+  const alice = { key: 'k-alice', userId: 'account-a', name: 'Alice Smith', email: 'alice@corp.com', host: 'core.corp', reason: 'signed_out' as const, current: false, credentials: 1, aiCredential: false }
+  const heldSlot = () => slot({ name: 'acme', state: 'account_unavailable', account: alice, envPrefix: 'ACME_', expectedKeys: ['ACME_TOKEN'],
+    options: [{ group: 'acct-b', ref: 'acme-b', credential: record({ name: 'Acme (mine)' }) }] })
+  const toggle = () => within(row('acme')).getByRole('button', { name: /Use another credential instead|Keep the account’s credential/ })
+
+  it('says why as its status, names the account in the app’s form with its Switch, and offers another credential only when asked', async () => {
+    login.mockClear()
+    setup = { ...setup, slots: [heldSlot()] }
+    renderHarness()
+    fireEvent.click(screen.getByText('open'))
+    const held = await within(await screen.findByTestId('finish-setup-slot-acme')).findByTestId('held-account-line')
+    // Only the reason, in the warning tone: the line below names the account.
+    const status = within(row('acme')).getByText('Signed out')
+    expect(status.closest('span[title]')!.className).toContain('--color-severity-warning-text')
+    // The account as the app names one: "Name <email> host", the host a link.
+    expect(await within(held).findByRole('link', { name: 'core.corp' })).toBeTruthy()
+    expect(held.textContent).toMatch(/^From ?Alice Smith <alice@corp\.com> core\.corp/)
+    // At 540 px the email gives way first: the name and the host stay.
+    const email = held.querySelector('[data-part="email"]')!
+    expect(email.className).toMatch(/(^| )truncate( |$)/)
+    expect(email.className).toContain('shrink-[1000]')
+    expect(within(held).getByRole('link', { name: 'core.corp' }).className).toContain('shrink-0')
+    // Collapsed: nothing that would attach a duplicate.
+    expect(within(row('acme')).queryByText('Use this')).toBeNull()
+    expect(within(row('acme')).queryByLabelText('ACME_TOKEN')).toBeNull()
+    fireEvent.click(toggle())
+    expect(within(row('acme')).getByTitle('Use Acme (mine)')).toBeTruthy()
+    expect(within(row('acme')).getByLabelText('ACME_TOKEN')).toBeTruthy()
+    // The account line stays first in the card.
+    expect(row('acme').querySelector('[data-testid="held-account-line"]')!.compareDocumentPosition(within(row('acme')).getByTitle('Use Acme (mine)')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Switch goes through the shared profile switch, by first name; its refusal replaces the held line, not the footer.
+    await waitFor(() => expect(listUsers).toHaveBeenCalled())
+    fireEvent.click(within(row('acme')).getByRole('button', { name: 'Switch to Alice' }))
+    await waitFor(() => expect(login).toHaveBeenCalledWith({ userId: 'account-a' }))
+    const alert = await within(held).findByRole('alert')
+    // Short, so the cause shows at 800 px; the whole sentence is the title.
+    expect(alert.textContent).toBe('Switch failed: The profile could not be opened here.')
+    expect(alert.getAttribute('title')).toBe('Couldn’t switch to Alice Smith <alice@corp.com> core.corp: The profile could not be opened here.')
+    expect(dialog().querySelectorAll('[role="alert"]')).toHaveLength(1)
+  })
+
+  it('reads "Use another credential instead" as a link, not a hint', async () => {
+    setup = { ...setup, slots: [heldSlot()] }
+    renderHarness()
+    fireEvent.click(screen.getByText('open'))
+    await screen.findByTestId('held-account-line')
+    expect(toggle().className).toContain('text-[var(--color-accent)]')
+    expect(toggle().className).toMatch(/(^| )underline( |$)/)
+    expect(toggle().className).not.toContain('text-[var(--color-text-muted)]')
+  })
+
+  it('drops what was typed under it when it is folded away: Done saves nothing hidden, and Escape closes', async () => {
+    setup = { ...setup, slots: [heldSlot()] }
+    renderHarness()
+    fireEvent.click(screen.getByText('open'))
+    await screen.findByTestId('held-account-line')
+    fireEvent.click(toggle())
+    fireEvent.change(field('acme', 'ACME_TOKEN'), { target: { value: 'secret' } })
+    fireEvent.click(toggle())
+    // Opened again: the field starts empty.
+    fireEvent.click(toggle())
+    expect(field('acme', 'ACME_TOKEN').value).toBe('')
+    fireEvent.click(toggle())
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByText('open'))
+    await screen.findByTestId('held-account-line')
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(setEnvValues).not.toHaveBeenCalled()
+  })
+
+  it('never saves, nor holds Escape for, a draft of a slot that turned held while it was typed', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(createElement(QueryClientProvider, { client }, createElement(Harness, {})))
+    /** Type into the slot while it is missing, then main says an account it cannot reach holds it. */
+    const typeThenHold = async () => {
+      setup = { ...setup, slots: [slot({ name: 'acme', envPrefix: 'ACME_', expectedKeys: ['ACME_TOKEN'] })] }
+      await act(() => client.invalidateQueries({ queryKey: ['service-credentials', 'setup', AGENT] }))
+      fireEvent.click(screen.getByText('open'))
+      fireEvent.change(await within(await screen.findByTestId('finish-setup-slot-acme')).findByLabelText('ACME_TOKEN'), { target: { value: 'secret' } })
+      setup = { ...setup, slots: [heldSlot()] }
+      await act(() => client.invalidateQueries({ queryKey: ['service-credentials', 'setup', AGENT] }))
+      await within(row('acme')).findByTestId('held-account-line')
+      expect(within(row('acme')).queryByLabelText('ACME_TOKEN')).toBeNull()
+    }
+    await typeThenHold()
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(setEnvValues).not.toHaveBeenCalled()
+    await typeThenHold()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

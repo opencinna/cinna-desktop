@@ -30,8 +30,23 @@ export function CredentialOwnershipGlyph({ ownership, size = 14 }: { ownership: 
  * An account in its standard form, "Name <email> host", everywhere a
  * credential list names one: the remote settings header and the agent's
  * attachment groups. The host opens the server in the browser.
+ *
+ * `squeezeEmail` (a narrow line, such as Finish setup's held slot) truncates
+ * the email first, so the name and the host stay readable; the name gives way
+ * only once the email is gone, and the host never does.
  */
-export function AccountReferenceLabel({ reference, onError, className = '' }: { reference: AccountReference; onError: (message: string) => void; className?: string }): React.JSX.Element {
+export function AccountReferenceLabel({ reference, onError, className = '', squeezeEmail = false }: {
+  reference: AccountReference; onError: (message: string) => void; className?: string; squeezeEmail?: boolean
+}): React.JSX.Element {
+  if (squeezeEmail) {
+    return <span className={`flex min-w-0 items-baseline gap-[0.25em] ${className}`}>
+      {/* The spaces between parts are for the text (copy, a screen reader): a flex line drops them, the gap draws them. */}
+      <span className="min-w-0 truncate text-[var(--color-text-secondary)]">{reference.name}</span>
+      {reference.email && <>{' '}<span data-part="email" className="min-w-0 shrink-[1000] truncate">&lt;{reference.email}&gt;</span></>}
+      {' '}<a href={reference.serverUrl} title={reference.serverUrl} className="shrink-0 text-[var(--color-accent)] hover:underline"
+        onClick={e => { e.preventDefault(); void openExternalUrl(reference.serverUrl, onError) }}>{reference.host}</a>
+    </span>
+  }
   return <span className={`min-w-0 truncate ${className}`}>
     <span className="text-[var(--color-text-secondary)]">{reference.name}</span>
     {reference.email && <> &lt;{reference.email}&gt;</>}

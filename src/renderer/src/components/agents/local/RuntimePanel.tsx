@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Check, Loader2, Minus } from 'lucide-react'
+import { AlertTriangle, Check, Loader2, Minus } from 'lucide-react'
 import { ClaudeStatus, EngineRow } from './EngineCell'
 import {
   useOpenAgentCredentials,
@@ -32,6 +32,12 @@ import { useRuntimeSetup } from '../../../hooks/useRuntimeSetup'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { useClaudeApiCredential } from '../../../hooks/useClaudeApiCredential'
 import { useAgentCredentialResolution } from '../../../hooks/useAgentAiCredential'
+import { useAgentCredentialAccounts } from '../../../hooks/useServiceCredentials'
+import {
+  accountFailureSentence, accountFailureTitle, heldSlotLabel, heldSlotTitle, unavailableAccountLabel, unavailableAccountSentence,
+  unavailableAccountTitle, UnavailableAccountButton, useHeldSlotAccounts, useUnavailableAccountActions, type AccountButtonProps
+} from '../../chat/composerAccountNotices'
+import type { UnavailableCredentialAccount } from '../../../../../shared/serviceCredentials'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
@@ -68,7 +74,7 @@ import {
 } from '../../../../../shared/runtimeModelCatalog'
 import { SettingsInfoTip } from '../../settings/SettingsLayout'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
-import { isStaleWriteError } from '../../../../../shared/localAgents'
+import { heldByUnavailableAccount, isStaleWriteError, missingCredentialSlots } from '../../../../../shared/localAgents'
 import {
   defaultRuntimeModelId,
   modelBelongsElsewhere,
@@ -187,9 +193,16 @@ const DANGER = 'text-[10px] text-[var(--color-danger)]'
 /** One line of the panel's reserved status slot; `login` makes it the logged-out line with its button. */
 /**
  * `title` carries the full sentence when `text` is the short form that fits the
- * 800px line; `refresh` puts the labelled Refresh button after the text.
+ * 800px line; `refresh` puts the labelled Refresh button after the text;
+ * `account` is the unavailable account the AI credential comes from, whose
+ * action (the composer's) follows the text.
  */
-type StatusLine = { text: string; tone: string; login?: EngineLoginId; title?: string; refresh?: true }
+type StatusLine = { text: string; tone: string; login?: EngineLoginId; title?: string; refresh?: true; account?: UnavailableCredentialAccount }
+
+/** The panel's line button, as {@link UnavailableAccountButton} draws the account's action on the status line. */
+function AccountLineButton({ children, ...props }: AccountButtonProps): React.JSX.Element {
+  return <button type="button" className={LINE_BUTTON} {...props}>{children}</button>
+}
 
 
 /**
@@ -429,8 +442,11 @@ function SecretsLine({
   onOutcome: (outcome: { text: string; tone: string } | null) => void
 }): React.JSX.Element | null {
   const openCredentials = useOpenAgentCredentials()
+  const heldAccount = useHeldSlotAccounts(agent)
   if (agent.credentials.length === 0) return null
-  const missing = agent.credentials.filter((slot) => !slot.satisfied && !slot.optional)
+  // A slot held by an account that cannot supply it now is not one to add here: that would
+  // duplicate it under the current account. It says whose it is instead.
+  const missing = missingCredentialSlots(agent.credentials).filter((slot) => !slot.optional)
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
       <span className="font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
@@ -441,7 +457,9 @@ function SecretsLine({
           key={slot.name}
           className="flex items-center gap-1 text-[var(--color-text-secondary)]"
           title={
-            slot.expectedKeys.length === 0
+            !slot.satisfied && heldByUnavailableAccount(slot)
+              ? heldSlotTitle(heldAccount(slot.name))
+              : slot.expectedKeys.length === 0
               ? 'No variable names declared'
               : slot.expectedKeys
                   .map((key) => `${key}${slot.presentKeys.includes(key) ? ' ✓' : ''}`)
@@ -450,6 +468,8 @@ function SecretsLine({
         >
           {slot.satisfied ? (
             <Check size={11} className="text-[var(--color-success)]" />
+          ) : heldByUnavailableAccount(slot) ? (
+            <AlertTriangle size={11} aria-hidden="true" className="text-[var(--color-warning)]" />
           ) : (
             <Minus
               size={11}
@@ -458,6 +478,9 @@ function SecretsLine({
           )}
           {slot.name}
           {slot.optional && <span className="text-[var(--color-text-muted)]">(optional)</span>}
+          {!slot.satisfied && heldByUnavailableAccount(slot) && (
+            <span data-testid="held-slot-label" className="text-[var(--color-warning)]">{heldSlotLabel(heldAccount(slot.name))}</span>
+          )}
         </span>
       ))}
       <button
@@ -914,6 +937,16 @@ export function RuntimePanel({
     credentialMissing,
     issue: credentialIssue
   } = useAgentCredentialResolution(declaredCredential)
+  /**
+   * The summary badge and the status line read main's account answer, as the composer does: an AI
+   * credential another profile provisioned is that account's ("Alice is signed out"), not "needed".
+   * Asked only when they would otherwise say so, and both wait for the answer. The line carries the
+   * account's action (Switch to <name>, Re-authenticate, Open accounts), owned here.
+   */
+  const aiAccounts = useAgentCredentialAccounts(credentialIssue === 'missing' ? agent : null)
+  const aiAccount = aiAccounts.data?.accounts.find((account) => account.aiCredential) ?? null
+  const aiAccountsAnswered = aiAccounts.data !== undefined || aiAccounts.isError
+  const { actions: accountActions, prompt: accountPrompt } = useUnavailableAccountActions()
 
   const modelChoices = useMemo(
     () => (models ?? []).filter((model) => model.providerId === effectiveProvider?.id),
@@ -1371,6 +1404,18 @@ export function RuntimePanel({
     // would put a false warning in the slot and then take it away again.
     if (!providers) {
       return modelsLoaded ? null : { text: 'Loading the model list…', tone: NOTE }
+    }
+    // An AI credential another profile provisioned is that account's, as the badge and the
+    // composer say ("Alice is signed out"), with its action; silent until main has answered, so
+    // "No AI credential" is never said first and then taken back.
+    if (credentialIssue === 'missing' && !aiAccountsAnswered) return null
+    if (credentialIssue === 'missing' && aiAccount) {
+      return {
+        text: unavailableAccountLabel(aiAccount),
+        title: unavailableAccountTitle(aiAccount, unavailableAccountSentence(aiAccount)),
+        tone: WARN,
+        account: aiAccount
+      }
     }
     // Credential problems, from the shared ladder. Above the loading states
     // below, because a missing or keyless credential is knowable without the
@@ -1949,15 +1994,17 @@ export function RuntimePanel({
       : onAntigravity
         ? (antigravityFailure ? antigravityFailure.badge : antigravityAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
       : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
-      : credentialIssue === 'missing' ? 'AI credential needed'
+      : credentialIssue === 'missing' ? (aiAccount ? unavailableAccountLabel(aiAccount) : aiAccountsAnswered ? 'AI credential needed' : null)
       : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
+    const issueTitle = issue && aiAccount && credentialIssue === 'missing' && !onCodex && !onAntigravity && !onClaude
+      ? unavailableAccountTitle(aiAccount, unavailableAccountSentence(aiAccount)) : status?.text
     const badge = SUMMARY_BADGE
     return <div role="group" aria-label="Runtime summary" className="mt-2 flex flex-wrap items-center gap-1.5">
       {leading}
       <span className={badge} title={onClaude && claudeAuth?.state === 'logged_in'
         ? `Claude Code${accountSuffix(claudeAuth.email, claudeAuth.subscriptionType)}` : label}>{label}</span>
       {model && <span className={badge} title={`Model: ${model}`}>{model}</span>}
-      {issue && <span className={`${badge} !text-[var(--color-warning)]`} title={status?.text}>{issue}</span>}
+      {issue && <span className={`${badge} !text-[var(--color-warning)]`} title={issueTitle}>{issue}</span>}
     </div>
   }
 
@@ -2412,6 +2459,23 @@ export function RuntimePanel({
       <div className="mt-2 h-4">
         {status?.login ? (
           <LoginLine text={status.text} tone={status.tone} engine={status.login} login={login} />
+        ) : status?.account ? (
+          /*
+            The AI credential's account, as the badge and the composer name it, and its one action
+            (the composer's button, at this line's scale). The action's failure stands in for the
+            label, cause first, until the next try (rules 1, 6).
+          */
+          <div className="flex h-4 min-w-0 items-center gap-2">
+            {(() => {
+              const failure = accountActions.failure(status.account)
+              return failure
+                ? <div role="alert" className={`min-w-0 truncate ${DANGER}`} title={accountFailureTitle(status.account, failure)}>
+                    {accountFailureSentence(status.account, failure)}
+                  </div>
+                : <div className={`min-w-0 truncate ${status.tone}`} title={status.title ?? status.text}>{status.text}</div>
+            })()}
+            <UnavailableAccountButton account={status.account} actions={accountActions} Button={AccountLineButton} iconSize={10} />
+          </div>
         ) : status?.refresh ? (
           /*
             The list could not be read, or no longer lists the agent's model:
@@ -2434,6 +2498,7 @@ export function RuntimePanel({
         )}
       </div>
       {status?.login && shownLoginCommand && <LoginCommandRow key={shownLoginCommand} command={shownLoginCommand} />}
+      {accountPrompt}
 
       {(agent.credentials.length > 0 || !canEdit || bare) && (
         <div className="mt-2 space-y-1.5 border-t border-[var(--color-border)] pt-2.5">

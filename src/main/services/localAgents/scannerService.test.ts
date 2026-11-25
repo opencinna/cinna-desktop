@@ -1434,6 +1434,53 @@ it('fills a slot that declares no .env names with a ready attachment, and names 
   installCredentialReadiness(() => [])
 })
 
+it('holds a slot an unavailable account fills: unsatisfied, not missing, with its own reason; .env and live records still decide', () => {
+  const dir = scaffold('held-agent')
+  const manifest = readManifest(manifestPath(dir))
+  manifest.credentials = [{ name: 'acme', type: 'api_token', service_uri: 'acme-api', env_prefix: 'ACME_', fields: ['token'] }, { name: 'beta', type: 'api_token', service_uri: 'beta-api' }]
+  writeManifest(manifestPath(dir), manifest)
+  const held = { id: 'row-held', name: 'Acme', type: 'api_token', serviceUri: 'acme-api', state: 'account_unavailable' } as never
+  const ready = { id: 'row-beta', name: 'Beta', type: 'api_token', serviceUri: 'beta-api', state: 'ready' } as never
+  installCredentialReadiness(() => [held, ready])
+  let agent = scannerService.scanRoot(USER, root).agents[0]
+  expect(agent.credentials[0]).toMatchObject({ satisfied: false, attachment: { credentialId: 'row-held', state: 'account_unavailable' }, overlappingKeys: [] })
+  expect(agent.readiness).toBe('credentials_needed')
+  // Not the "Add the credentials for …" sentence: attaching another would duplicate it.
+  expect(agent.readinessReason).toBe('A credential this agent uses comes from a Cinna account that isn’t available right now.')
+  // A genuinely missing slot keeps the old reason, naming only itself.
+  installCredentialReadiness(() => [held])
+  agent = scannerService.scanRoot(USER, root).agents[0]
+  expect(agent.readinessReason).toBe('Add the credentials for beta by attaching them or configuring credentials/.env.')
+  // `.env` fills it: the unavailable record decides nothing.
+  installCredentialReadiness(() => [held, ready])
+  writeFileSync(join(dir, 'credentials/.env'), 'ACME_TOKEN=x\n')
+  agent = scannerService.scanRoot(USER, root).agents[0]
+  expect(agent.credentials[0]).toMatchObject({ satisfied: true, attachment: null })
+  expect(agent.readiness).toBe('ok')
+  writeFileSync(join(dir, 'credentials/.env'), '')
+  // A live attachment of the slot is judged first.
+  installCredentialReadiness(() => [held, ready, { ...(held as object), id: 'row-live', state: 'expired' } as never])
+  expect(scannerService.scanRoot(USER, root).agents[0].credentials[0]).toMatchObject({ satisfied: false, attachment: { credentialId: 'row-live', state: 'expired' } })
+  installCredentialReadiness(() => [])
+})
+
+it('picks a slot’s match tier over live records first: a held record named like the slot never hides a live one by Service URI', () => {
+  const dir = scaffold('tiered-agent')
+  const manifest = readManifest(manifestPath(dir))
+  manifest.credentials = [{ name: 'acme', type: 'api_token' }]
+  writeManifest(manifestPath(dir), manifest)
+  const heldByName = { id: 'row-held', name: 'acme', type: 'api_token', serviceUri: null, state: 'account_unavailable' } as never
+  const liveByUri = { id: 'row-live', name: 'Acme API', type: 'api_token', serviceUri: 'acme', state: 'ready' } as never
+  installCredentialReadiness(() => [heldByName, liveByUri])
+  const agent = scannerService.scanRoot(USER, root).agents[0]
+  expect(agent.credentials[0]).toMatchObject({ satisfied: true, attachment: { credentialId: 'row-live', state: 'ready' } })
+  expect(agent.readiness).toBe('ok')
+  // Alone, the held one still holds the slot by its tier.
+  installCredentialReadiness(() => [heldByName])
+  expect(scannerService.scanRoot(USER, root).agents[0].credentials[0]).toMatchObject({ satisfied: false, attachment: { credentialId: 'row-held', state: 'account_unavailable' } })
+  installCredentialReadiness(() => [])
+})
+
 it('reads a slot with no env_prefix under the prefix the kit derives from its name', () => {
   const dir = scaffold('derived-agent')
   const manifest = readManifest(manifestPath(dir))

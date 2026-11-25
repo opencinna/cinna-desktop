@@ -3,6 +3,7 @@ import type { ManifestStamp } from '../kit/manifestIo'
 import { userActivation } from '../auth/activation'
 import { ipcHandle } from './_wrap'
 import { serviceCredentialService as service } from '../services/serviceCredentials/service'
+import { agentAccountsService } from '../services/serviceCredentials/agentAccountsService'
 import type { ServiceCredentialInput, ServiceCredentialResult } from '../../shared/serviceCredentials'
 async function outcome<T>(fn: () => T | Promise<T>): Promise<ServiceCredentialResult<T>> {
   try { userActivation.requireActivated(); return { ok: true, value: await fn() } }
@@ -27,6 +28,8 @@ export function registerServiceCredentialHandlers(): void {
   ipcHandle('service-credentials:set-attachments', (_, id: string, group: string, refs: string[]) => outcome(() => service.setAttachments(id, group, refs)))
   ipcHandle('service-credentials:attach', (_, id: string, group: string, ref: string) => outcome(() => service.attach(id, group, ref)))
   ipcHandle('service-credentials:setup-state', (_, id: string) => outcome(() => service.setupState(id)))
+  // The accounts the agent's credentials come from that cannot supply them now (the composer's warning rows).
+  ipcHandle('service-credentials:unavailable-accounts', (_, id: string) => outcome(() => agentAccountsService.unavailable(id)))
   ipcHandle('service-credentials:setup-skills', (_, id: string) => outcome(() => service.autoAttachSkills(id)))
   // Google OAuth connect: the flow lives in main; refusals come back as `{ok: false, code}`.
   ipcHandle('service-credentials:create-oauth', (_, id: string, group: string, type: string) => outcome(() => service.createOAuth(id, group, type)))

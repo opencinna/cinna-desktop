@@ -53,7 +53,7 @@ import { marketplaceSkillService } from '../marketplaceSkillService'
 import { marketplacePluginService } from '../marketplacePluginService'
 import { beginTeamBehindRead, noteTeamBehind } from '../catalogSkillUpdates'
 import { createLogger } from '../../logger/logger'
-import { AGENTS_SUBDIR, LOCAL_AGENT_CHANGED_CHANNEL, folderAgentId } from '../../../shared/localAgents'
+import { AGENTS_SUBDIR, LOCAL_AGENT_CHANGED_CHANNEL, folderAgentId, missingCredentialSlots } from '../../../shared/localAgents'
 import { MANIFEST_FILE, SLUG_PATTERN } from '../../../shared/kit/manifest'
 import {
   SHARING_CHANGED_CHANNEL,
@@ -215,12 +215,14 @@ const refused = (refusal: ShareRefusal, detail: string | null = null): AgentShar
 
 /**
  * The required credential slots the agent is missing, by name; null when it
- * cannot be read. An optional slot always reads as satisfied.
+ * cannot be read. An optional slot always reads as satisfied, and one an
+ * unavailable Cinna account holds is not missing (`missingCredentialSlots`).
  */
 function missingSlots(userId: string, agentId: string): Set<string> | null {
   try {
     return new Set(
-      localAgentService.get(userId, agentId).credentials.filter((slot) => !slot.satisfied).map((slot) => slot.name)
+      // A slot an unavailable account holds is not missing: Finish setup would only offer a duplicate.
+      missingCredentialSlots(localAgentService.get(userId, agentId).credentials).map((slot) => slot.name)
     )
   } catch (err) {
     logger.warn('could not read credential readiness around a team library action', {

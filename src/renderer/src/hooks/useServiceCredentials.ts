@@ -5,17 +5,20 @@ import { useFinishSetupStore } from '../stores/finishSetup.store'
 import { skillsLackingCredentials, useSkillCredentialPromptStore } from '../stores/skillCredentialPrompt.store'
 import { LOCAL_AGENTS_KEY, localAgentKey, type LocalAgentsSnapshot } from './useLocalAgents'
 import type { LocalAgentDto } from '../../../shared/localAgents'
-import type { ServiceCredentialResult } from '../../../shared/serviceCredentials'
+import type { AgentCredentialAccounts, ServiceCredentialResult } from '../../../shared/serviceCredentials'
+import { useProviders } from './useProviders'
+import { useAppSettings } from './useAppSettings'
+import { useDefaultRuntime } from './useEngine'
 export function credentialResult<T>(result: ServiceCredentialResult<T>): T {
   if (!result.ok) throw new Error(result.message)
   return result.value
 }
-/** Refetch every credential query when main reports a change (sync, save, attach, account set). */
-function useCredentialsChanged() {
+/** Refetch every credential query when main reports a change (sync, save, attach, account set); `listen` false subscribes to nothing. */
+function useCredentialsChanged(listen = true) {
   const queryClient = useQueryClient()
-  useEffect(() => window.api.serviceCredentials.onChanged(() => {
+  useEffect(() => listen ? window.api.serviceCredentials.onChanged(() => {
     void queryClient.invalidateQueries({ queryKey: ['service-credentials'] })
-  }), [queryClient])
+  }) : undefined, [queryClient, listen])
 }
 /**
  * Remember the skill slots main filled without asking in the background (after Add to agent or
@@ -71,10 +74,46 @@ export function useCredentialAttachOptions(agentId: string, enabled = true) {
     queryFn: async () => credentialResult(await window.api.serviceCredentials.attachOptions(agentId)) })
 }
 /** Each credential slot of one agent, its state and what the active account offers for it (Finish setup). */
-export function useCredentialSetup(agentId: string, enabled = true) {
-  useCredentialsChanged()
+export function useCredentialSetup(agentId: string, enabled = true, options: { listen?: boolean } = {}) {
+  // A surface that asks only now and then (a held slot's label) listens only while it asks.
+  useCredentialsChanged(options.listen ?? true)
   return useQuery({ queryKey: ['service-credentials', 'setup', agentId], enabled,
     queryFn: async () => credentialResult(await window.api.serviceCredentials.setupState(agentId)) })
+}
+/**
+ * The Cinna accounts a folder agent's credentials come from that cannot supply them now (main's
+ * answer, counts only), for the composer's account rows. Refetched when main reports a credential
+ * or account change (sign-out, unlock, lock, deletion, renewal, attach), and keyed by what the AI
+ * credential's lookup reads here (the providers, the machine pin, Claude's API Token choice, the
+ * default runtime, the agent's own runtime) so a change to any of those asks again. The previous
+ * answer for the same agent stays on screen while it does, so a row never blinks out and back.
+ */
+export function useAgentCredentialAccounts(folder: Pick<LocalAgentDto, 'id' | 'runtime'> | null) {
+  const queryClient = useQueryClient()
+  const agentId = folder?.id ?? null
+  // Subscribed only while there is an agent to ask about: a surface that asks conditionally (the
+  // Runs with summary) listens for nothing otherwise.
+  useEffect(() => agentId === null ? undefined : window.api.serviceCredentials.onChanged(() => {
+    void queryClient.invalidateQueries({ queryKey: ['service-credentials'] })
+  }), [queryClient, agentId])
+  const userId = useAuthStore(s => s.currentUser?.id)
+  const { data: providers } = useProviders()
+  const { data: settings } = useAppSettings()
+  const { data: defaultRuntime } = useDefaultRuntime()
+  const inputs = JSON.stringify([
+    folder?.runtime ?? null,
+    (providers ?? []).map(p => `${p.id}:${p.enabled ? 1 : 0}`).sort(),
+    settings?.localAgentsDefaultCredentialId ?? null, settings?.claudeAuthMode ?? null, settings?.claudeApiCredentialId ?? null,
+    defaultRuntime?.engine ?? null
+  ])
+  return useQuery<AgentCredentialAccounts>({
+    queryKey: ['service-credentials', 'unavailable-accounts', agentId, userId, inputs],
+    enabled: agentId !== null,
+    // Only the same agent's earlier answer in the same profile: another agent's rows, or another
+    // profile's view of the accounts, must never stand in for this one's.
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === agentId && previousQuery?.queryKey[3] === userId ? previous : undefined,
+    queryFn: async () => credentialResult(await window.api.serviceCredentials.unavailableAccounts(agentId!))
+  })
 }
 export const oauthFlowKey = (agentId: string) => ['service-credential-oauth-flow', agentId] as const
 /**

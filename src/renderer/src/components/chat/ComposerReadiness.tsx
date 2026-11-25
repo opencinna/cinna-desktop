@@ -9,12 +9,13 @@ import { useCheckAgentReadiness } from '../../hooks/useAgents'
 import { useProviders } from '../../hooks/useProviders'
 import { useLocalAgents, useOpenAgentPath } from '../../hooks/useLocalAgents'
 import { isSkillFinding } from '../../../../shared/kit/findings'
-import { folderReadinessBlocksTurn, missingCredentialsReason, type LocalAgentDto, type LocalAgentSkill, type LocalAgentSkillCredential } from '../../../../shared/localAgents'
+import { folderReadinessBlocksTurn, missingCredentialSlots, missingCredentialsReason, type LocalAgentDto, type LocalAgentSkill, type LocalAgentSkillCredential } from '../../../../shared/localAgents'
 import { useFinishSetup } from '../agents/local/FinishSetupDialog'
 import { useSlotAuthorize, type SlotAuthorizeState } from '../../hooks/useSlotAuthorize'
 import { credentialTypeName } from '../settings/LocalCredentialForm'
 import { isGoogleOAuthType, type CredentialSetupDto, type SlotOAuthAction } from '../../../../shared/serviceCredentials'
 import { useCredentialSetup } from '../../hooks/useServiceCredentials'
+import { useAccountNotices } from './composerAccountNotices'
 import { useAgentAiCredentialIssue, type AiCredentialIssue } from '../../hooks/useAgentAiCredential'
 import { useUIStore } from '../../stores/ui.store'
 import { skillsLackingCredentials, useSkillCredentialPromptStore } from '../../stores/skillCredentialPrompt.store'
@@ -437,7 +438,8 @@ export interface GoogleSlot { slotKey: string; type: string }
 
 /** The folder's missing slot when it is exactly one, and a Google OAuth one; null otherwise. */
 export function folderGoogleSlot(folder: LocalAgentDto | null): GoogleSlot | null {
-  const missing = folder?.credentials.filter((slot) => !slot.satisfied) ?? []
+  // A slot an unavailable account holds is not missing: authorizing it here would duplicate it.
+  const missing = folder ? missingCredentialSlots(folder.credentials) : []
   return missing.length === 1 && isGoogleOAuthType(missing[0].type) ? { slotKey: missing[0].name, type: missing[0].type } : null
 }
 
@@ -539,7 +541,9 @@ function authorizeNotice(key: string, skill: string | null, authorize: ComposerA
  * instead, with no dialog.
  */
 export function folderCredentialsNotice(folder: LocalAgentDto | null, onFinishSetup: () => void, authorize: ComposerAuthorize | null = null): ComposerNotice | null {
-  const missing = folder?.credentials.filter((slot) => !slot.satisfied) ?? []
+  // Slots an account that cannot supply them now holds are the account row's to tell
+  // (`useAccountNotices`): Finish setup would attach a duplicate under the current account.
+  const missing = folder ? missingCredentialSlots(folder.credentials) : []
   if (!folder || missing.length === 0) return null
   if (authorize && authorize.slot.slotKey === folderGoogleSlot(folder)?.slotKey) return authorizeNotice('folder-credentials', null, authorize)
   const text = folder.readiness === 'credentials_needed' && folder.readinessReason
@@ -728,23 +732,78 @@ export function useDropSettledPrompts(folder: LocalAgentDto | null, prompted: re
   }, [folder, prompted])
 }
 
+/** The rows {@link useComposerNotices} has gathered, before it puts them in order. */
+export interface NoticeRowParts {
+  folder: LocalAgentDto | null
+  readinessItem: ComposerNotice | null
+  readiness: AgentReadiness | null
+  reasonId: string
+  credentials: ComposerNotice | null
+  /** `failed`: main's answer failed, so no account row stands in for anything. */
+  accounts: { rows: ComposerNotice[]; loaded: boolean; failed?: boolean; aiCredentialCovered: boolean }
+  skillCredentials: ComposerNotice | null
+  aiCredential: ComposerNotice | null
+  staleModel: ComposerNotice | null
+  findings: ComposerNotice | null
+}
+
+/**
+ * The panel's rows in order, with each row the folder states itself standing in for the readiness
+ * row that says the same thing (and taking over its id, so Send's `aria-describedby` still names a
+ * line on screen).
+ */
+export function assembleNoticeRows(parts: NoticeRowParts): ComposerNotice[] {
+  const { folder, readinessItem, readiness, reasonId, credentials, accounts, findings } = parts
+  const state = readiness?.state
+  // Every unsatisfied slot is held by an account that cannot supply it now: the readiness row's
+  // sentence is the account row's to say, and until main has named the account, nobody's. Only
+  // while an account row can still say it: when main answered with none, or failed to answer,
+  // the readiness row stays, so the panel is never left empty for an agent that cannot run.
+  const heldOnly = !!folder && state === 'credentials_needed' && !credentials
+    && missingCredentialSlots(folder.credentials).length === 0 && folder.credentials.some((slot) => !slot.satisfied)
+    && !accounts.failed && (!accounts.loaded || accounts.rows.length > 0)
+  const replacedBy = credentials && state === 'credentials_needed' ? credentials
+    : heldOnly ? accounts.rows[0] ?? null
+    // Only when the driver's `invalid` *is* the folder's check: an `invalid`
+    // for another cause (folder not found, unsupported engine) is a refusal
+    // the findings row does not describe, and keeps its own row.
+    : findings && state === 'invalid' && readiness?.reason === folder?.readinessReason ? findings
+    : null
+  const rows = [
+    replacedBy || heldOnly ? null : readinessItem,
+    credentials,
+    ...accounts.rows,
+    parts.skillCredentials,
+    // Held back until main has said whose it is: an AI credential another profile provisioned is
+    // the account row's to tell, and a "No AI credential" row shown first would go again.
+    accounts.loaded && !accounts.aiCredentialCovered ? parts.aiCredential : null,
+    parts.staleModel,
+    findings
+  ].filter((row): row is ComposerNotice => row !== null)
+  return rows.map((row) => (row === replacedBy ? { ...row, textId: reasonId } : row))
+}
+
 /**
  * Every row of the composer's notice panel, in one order: the driver's
- * readiness answer, the folder's missing credentials, what a just added or
+ * readiness answer, the folder's missing credentials, one row per account its
+ * credentials come from that cannot supply them now, what a just added or
  * updated skill still lacks, its AI credential, a
  * declared model its CLI runtime no longer offers, its findings. A row the folder states itself replaces the readiness row that
- * says the same thing (`credentials_needed` by the credentials row, a
+ * says the same thing (`credentials_needed` by the credentials row, or by the
+ * first account row when unavailable accounts hold every unsatisfied slot, a
  * non-blocking `invalid` by the findings row), and takes over its id so Send's
  * `aria-describedby` still names a line on screen.
  *
  * Finish setup is owned here, so by the composer (which outlives the click),
  * and opens only when clicked: the agent page answers team library requests.
  */
-export function useComposerNotices(target: AgentData | null, readiness: ComposerReadiness, reasonId: string): ComposerNotices {
+export function useComposerNotices(target: AgentData | null, readiness: ComposerReadiness, reasonId: string, draftKey: string | null = null): ComposerNotices {
   const folder = useComposerFolder(target)
   const findings = useFolderFindingsNotice(folder)
-  const finishSetup = useFinishSetup(folder?.id ?? null, folder?.name ?? '', { followRequests: false })
+  const finishSetup = useFinishSetup(folder?.id ?? null, folder?.name ?? '', { followRequests: false, draftKey })
   const aiIssue = useAgentAiCredentialIssue(folder)
+  // A Switch to <name> carries what is typed in this composer to the profile switched to.
+  const accounts = useAccountNotices(folder, draftKey)
   const staleModel = useStaleModelNotice(folder)
   const { data: providers } = useProviders()
   const folderId = folder?.id ?? null
@@ -772,25 +831,21 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
     ? skillCredentialsNotice(folder, prompted, finishSetup.open, () => useSkillCredentialPromptStore.getState().dismiss(folderId), authorizeOf(skillGoogle))
     : null
   const { credentials, skillCredentials } = credentialRows(folderCredentialsNotice(folder, finishSetup.open, authorizeOf(folderGoogle)), skillPrompt)
-  const readinessItem = readinessNoticeItem(readiness, reasonId)
-  const state = readiness.notice?.state
-  const replacedBy = credentials && state === 'credentials_needed' ? credentials
-    // Only when the driver's `invalid` *is* the folder's check: an `invalid`
-    // for another cause (folder not found, unsupported engine) is a refusal
-    // the findings row does not describe, and keeps its own row.
-    : findings && state === 'invalid' && readiness.notice?.reason === folder?.readinessReason ? findings
-    : null
-  const rows = [
-    replacedBy ? null : readinessItem,
+  const notices = assembleNoticeRows({
+    folder,
+    readinessItem: readinessNoticeItem(readiness, reasonId),
+    readiness: readiness.notice,
+    reasonId,
     credentials,
+    accounts,
     skillCredentials,
-    aiCredentialNotice(folder, aiIssue, providers?.length === 0),
+    aiCredential: aiCredentialNotice(folder, aiIssue, providers?.length === 0),
     staleModel,
     findings
-  ].filter((row): row is ComposerNotice => row !== null)
+  })
   return {
-    notices: rows.map((row) => (row === replacedBy ? { ...row, textId: reasonId } : row)),
-    dialog: finishSetup.dialog
+    notices,
+    dialog: <>{finishSetup.dialog}{accounts.prompt}</>
   }
 }
 

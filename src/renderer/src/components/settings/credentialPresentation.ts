@@ -18,7 +18,8 @@ const attachmentHealth: Record<ServiceCredentialAttachmentState, CredentialHealt
   not_cached: { tone: 'warning', label: 'Values not downloaded yet' },
   missing: { tone: 'error', label: 'This credential no longer exists' },
   local_use_not_allowed: { tone: 'error', label: 'The owner must allow use on your computer' },
-  account_unavailable: { tone: 'error', label: 'Account not signed in' },
+  // Where the account is known, its reason-first label stands in ("Alice is signed out", composerAccountNotices).
+  account_unavailable: { tone: 'warning', label: 'Account unavailable' },
   // The detail comes from the record's key status; this stands in when it is unknown.
   key_unavailable: { tone: 'error', label: 'Unavailable — open it on the remote for details' },
   pending_authorization: { tone: 'warning', label: 'Waiting for Google sign-in' },

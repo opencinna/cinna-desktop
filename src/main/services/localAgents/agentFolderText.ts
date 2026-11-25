@@ -7,7 +7,7 @@
  */
 import type { ServiceCredentialDto } from '../../../shared/serviceCredentials'
 import { slotEnvPrefix, type CinnaAgentManifest, type CredentialSlot } from '../../../shared/kit/manifest'
-import type { LocalAgentCredentialState, LocalAgentStatusSummary } from '../../../shared/localAgents'
+import { ACCOUNT_UNAVAILABLE, type LocalAgentCredentialState, type LocalAgentStatusSummary } from '../../../shared/localAgents'
 import { parseFrontmatter } from '../../kit/miniYaml'
 import { pySplitLines, pyStrip } from './envFile'
 
@@ -100,10 +100,18 @@ export function credentialStates(
       const optional = slot.optional === true
       // The tiers `serviceCredentials/slotMatch.ts` attaches and offers by; change both together.
       const sameType = attached.filter(c => c.type === slot.type)
-      const matching = typeof slot.service_uri === 'string' && slot.service_uri
-        ? sameType.filter(c => c.serviceUri === slot.service_uri)
-        : [sameType.filter(c => c.name === slot.name), sameType.filter(c => c.serviceUri === slot.name)].find(group => group.length) ?? []
-      const attachment = matching.find(c => c.state === 'ready') ?? matching[0]
+      const tiers = (records: typeof sameType) => typeof slot.service_uri === 'string' && slot.service_uri
+        ? records.filter(c => c.serviceUri === slot.service_uri)
+        : [records.filter(c => c.name === slot.name), records.filter(c => c.serviceUri === slot.name)].find(group => group.length) ?? []
+      const envFilled = fieldless ? presentKeys.length > 0 : presentKeys.length === expectedKeys.length
+      // A record of an account that cannot supply it now (`account_unavailable`) is never delivered,
+      // so it decides nothing over a live attachment or a filled `.env`: the tiers are chosen over
+      // live records first, so a held record matching by name never hides a live one matching by
+      // Service URI. Alone, it holds the slot: unsatisfied, but not missing, since attaching
+      // another would duplicate it.
+      const live = tiers(sameType.filter(c => c.state !== ACCOUNT_UNAVAILABLE))
+      const held = tiers(sameType.filter(c => c.state === ACCOUNT_UNAVAILABLE))
+      const attachment = live.find(c => c.state === 'ready') ?? live[0] ?? (envFilled ? undefined : held[0])
       return {
         name: typeof slot.name === 'string' ? slot.name : '(unnamed)',
         type: typeof slot.type === 'string' ? slot.type : 'unknown',
@@ -112,14 +120,14 @@ export function credentialStates(
         serviceUri: typeof slot.service_uri === 'string' && slot.service_uri ? slot.service_uri : null,
         expectedKeys,
         presentKeys,
-        overlappingKeys: attachment ? presentKeys : [],
+        overlappingKeys: attachment && attachment.state !== ACCOUNT_UNAVAILABLE ? presentKeys : [],
         attachment: attachment ? { credentialId: attachment.id, state: attachment.state } : null,
         // A matching attachment decides; without one, `.env` must hold every
         // expected name, or — for a slot with no `fields` — any name under its
         // prefix. A slot whose name yields no prefix can only be filled by an
         // attachment, so with none it is missing (a warning, not a block).
         satisfied:
-          optional || (attachment ? attachment.state === 'ready' : fieldless ? presentKeys.length > 0 : presentKeys.length === expectedKeys.length)
+          optional || (attachment ? attachment.state === 'ready' : envFilled)
       }
     })
 }

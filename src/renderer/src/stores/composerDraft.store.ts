@@ -60,6 +60,46 @@ export function composerDraftSurface(key: string): string | null {
   }
 }
 
+/** The surface a profile switch lands on: a chat's id means nothing in another profile, so its draft goes to the new-chat screen. */
+function landingSurface(surface: string): string {
+  return surface.startsWith('chat:') ? NEW_CHAT_DRAFT_SURFACE : surface
+}
+
+/**
+ * Moves the message typed under `fromKey` to the same surface of the profile switched to (a chat's
+ * to the new-chat screen, where the switch lands), so a Switch to <name> from the composer does not
+ * leave it behind. Only the message travels — its text, pasted blocks and path chips; notes and
+ * uploads belong to the old profile and stay. Joined after what the target already holds, and taken
+ * out of the old draft so it is not sent twice. Nothing moves while the old draft is sending.
+ *
+ * Landing on the new-chat screen, the agent it was addressed to goes along as that screen's agent
+ * pick (`pendingAgentIds`), so Send there reaches the agent and not the default mode: a chat's
+ * `agentIds` (the composer's direct target), or the new-chat draft's own pick. It replaces what the
+ * target had picked, since the message was written for this agent; mode and MCP picks stay as they
+ * are. It goes even when nothing is typed, since the switch was made for this agent.
+ */
+export function carryComposerDraft(fromKey: string, toProfileId: string, options: { agentIds?: readonly string[] } = {}): void {
+  const surface = composerDraftSurface(fromKey)
+  if (surface === null) return
+  const store = useComposerDraftStore.getState()
+  const from = store.drafts[fromKey]
+  if (from?.sending) return
+  const landing = landingSurface(surface)
+  const toKey = composerDraftKey(toProfileId, landing)
+  if (toKey === fromKey) return
+  const picked = landing !== NEW_CHAT_DRAFT_SURFACE ? []
+    : surface === NEW_CHAT_DRAFT_SURFACE ? from?.pendingAgentIds ?? options.agentIds ?? []
+      : options.agentIds ?? []
+  if (picked.length > 0) store.update(toKey, () => ({ pendingAgentIds: [...picked] }))
+  if (!from || (from.text.trim() === '' && from.pastes.length === 0 && from.pathRefs.length === 0)) return
+  store.update(toKey, (to) => ({
+    text: to.text.trim() === '' ? from.text : from.text.trim() === '' ? to.text : `${to.text.replace(/\s+$/, '')}\n\n${from.text}`,
+    pastes: [...to.pastes, ...from.pastes],
+    pathRefs: [...to.pathRefs, ...from.pathRefs.filter((ref) => !to.pathRefs.some((own) => own.path === ref.path))]
+  }))
+  store.update(fromKey, () => ({ text: '', pastes: [], pathRefs: [] }))
+}
+
 export const useComposerDraftStore = create<{
   drafts: Record<string, ComposerDraft>
   beginSend: (key: string) => boolean

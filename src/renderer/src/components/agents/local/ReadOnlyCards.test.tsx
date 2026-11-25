@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
-import { CommandsCard } from './ReadOnlyCards'
+import { CommandsCard, CredentialsCard } from './ReadOnlyCards'
 
 /**
  * The Commands card's "Run" button — the agent page's half of Phase 7a's
@@ -33,6 +33,13 @@ vi.mock('../../../stores/ui.store', () => ({
       setSidebarTab: typeof setSidebarTab
     }) => unknown
   ) => selector({ setActiveView, setSidebarTab })
+}))
+
+/** Main's per-slot setup answer, which names the account a held slot comes from. */
+const setup = vi.hoisted(() => ({ value: undefined as unknown }))
+vi.mock('../../../hooks/useServiceCredentials', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useCredentialSetup: (_id: string, enabled: boolean) => ({ data: enabled ? setup.value : undefined })
 }))
 
 // `useOpenAgentPath` is a real react-query mutation calling `window.api` —
@@ -126,5 +133,29 @@ describe('CommandsCard — Run', () => {
     renderCard(agent({ commands: [] }))
     expect(screen.queryByRole('button', { name: /run/i })).toBeNull()
     expect(screen.getByText(/no commands yet/i)).toBeTruthy()
+  })
+})
+
+describe('CredentialsCard — a slot an unavailable account holds', () => {
+  const slot = (over: Record<string, unknown> = {}) => ({
+    name: 'Vendor Portal', type: 'api_token', optional: false, envPrefix: 'VENDOR_', expectedKeys: ['VENDOR_TOKEN'], presentKeys: [], satisfied: false, attachment: null, ...over
+  })
+  const card = (credentials: unknown[]) => render(createElement(QueryClientProvider, { client: new QueryClient() },
+    createElement(CredentialsCard, { agent: agent({ credentials } as never), env: null })))
+
+  it('says whose it is in the warning tone, not a missing dash', () => {
+    setup.value = { slots: [{ name: 'Vendor Portal', state: 'account_unavailable', account: { key: 'k', userId: 'u', name: 'Alice Whitfield', email: 'a@corp.com', host: 'core.corp', reason: 'signed_out', current: false, credentials: 1, aiCredential: false } }] }
+    try {
+      card([slot({ attachment: { credentialId: 'r', state: 'account_unavailable' } })])
+      const label = screen.getByTestId('held-slot-label')
+      expect(label.textContent).toBe('Alice is signed out')
+      expect(label.className).toContain('--color-warning')
+      expect(label.getAttribute('title')).toBe('Alice is signed out: its credential comes from that account. (Alice Whitfield <a@corp.com> core.corp)')
+    } finally { setup.value = undefined }
+  })
+
+  it('says nothing of an account for a slot that is simply missing', () => {
+    card([slot()])
+    expect(screen.queryByTestId('held-slot-label')).toBeNull()
   })
 })

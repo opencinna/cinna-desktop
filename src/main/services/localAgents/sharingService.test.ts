@@ -109,7 +109,8 @@ const { clearContractCache } = await import('../../kit/contractStore')
 const { manifestPath, readManifest } = await import('../../kit/manifestIo')
 const { validateAgentFolder } = await import('../../kit/validator')
 const { scaffoldService } = await import('./scaffoldService')
-const { scannerService } = await import('./scannerService')
+const scannerModule = await import('./scannerService')
+const { scannerService } = scannerModule
 const { turnLock } = await import('./turnLock')
 const { libraryService, toLibraryEntry } = await import('../libraryService')
 const { sharingService, commitIdentity, parseRemote, fromCoreGrants, toCoreGrants } = await import('./sharingService')
@@ -336,6 +337,30 @@ describe('credentials after the team\'s files arrive', () => {
     writeFileSync(join(agentDir, 'credentials', '.env'), 'MAPS_API_KEY=x\n')
     teamPushes(['weather', 'maps'], 'four\n')
     expect((await sharingService.update(USER, agentId)).setupNeeded).toBe(false)
+  }, 60_000)
+
+  it('an Update does not open Finish setup for a slot an unavailable account holds', async () => {
+    const team = join(workshop, '.team.git')
+    mkdirSync(team)
+    git(team, 'init', '--bare', '-q', '-b', 'main', '.')
+    makeOwnRepo(team)
+    git(agentDir, 'push', '-q', '-u', 'origin', 'main')
+    const mate = join(workshop, '.mate')
+    git(workshop, 'clone', '-q', team, mate)
+    const manifest = JSON.parse(readFileSync(join(mate, 'cinna-agent.json'), 'utf8'))
+    manifest.credentials = [{ name: 'weather', type: 'api_token', env_prefix: 'WEATHER_', fields: ['api_key'] }]
+    writeFileSync(join(mate, 'cinna-agent.json'), JSON.stringify(manifest, null, 2))
+    git(mate, 'commit', '-q', '-am', 'needs weather')
+    git(mate, 'push', '-q')
+    // The slot's record is attached under a signed-out account: held, not missing.
+    scannerModule.installCredentialReadiness(() => [{ id: 'row-held', name: 'weather', type: 'api_token', serviceUri: null, state: 'account_unavailable' } as never])
+    try {
+      const result = await sharingService.update(USER, agentId)
+      expect(result.done).toBe(true)
+      expect(result.setupNeeded).toBe(false)
+    } finally {
+      scannerModule.installCredentialReadiness(() => [])
+    }
   }, 60_000)
 
   it('Update with no signed-in account attaches nothing and still lands', async () => {

@@ -3,11 +3,11 @@ import { createPortal } from 'react-dom'
 import { User, ChevronDown, Plus, LogOut, Cloud, AlertTriangle, Settings } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUIStore } from '../../stores/ui.store'
-import { useUsers, useLogin, useDeleteUser } from '../../hooks/useAuth'
+import { useUsers, useDeleteUser } from '../../hooks/useAuth'
 import { useSyncState } from '../../hooks/useSync'
 import { usePopover } from '../ui/usePopover'
 import { RegisterForm } from './RegisterForm'
-import { LoginPrompt } from './LoginPrompt'
+import { useSwitchProfile } from './useSwitchProfile'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 interface UserMenuProps {
@@ -21,7 +21,6 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
   const [signOutPassword, setSignOutPassword] = useState('')
   const [signOutError, setSignOutError] = useState('')
-  const [loginUserId, setLoginUserId] = useState<string | null>(null)
   const signOutModalRef = useRef<HTMLDivElement>(null)
   const currentUser = useAuthStore((s) => s.currentUser)
   const isCinnaUser = currentUser?.type === 'cinna_user'
@@ -48,7 +47,6 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
   const activeView = useUIStore((s) => s.activeView)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const { data: users } = useUsers()
-  const login = useLogin()
   const deleteUser = useDeleteUser()
   const {
     open,
@@ -58,10 +56,14 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
     style: dropdownStyle
   } = usePopover<HTMLButtonElement>(compact ? 'above-left' : 'below-right')
 
+  // The same switch the composer's account rows offer: try without a password, prompt when main asks.
+  const switcher = useSwitchProfile({ onSwitched: () => setOpen(false) })
+  const { cancelPrompt } = switcher
+
   // Close the password-prompt when the popover closes.
   useEffect(() => {
-    if (!open) setLoginUserId(null)
-  }, [open])
+    if (!open) cancelPrompt()
+  }, [open, cancelPrompt])
 
   const modalRef = useRef<HTMLDivElement>(null)
 
@@ -91,16 +93,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
 
   const handleSwitchUser = async (userId: string, hasPassword: boolean): Promise<void> => {
     setOpen(false)
-    if (!hasPassword) {
-      login.mutate({ userId })
-      return
-    }
-    // Main-process tracks whether the user has unlocked this session.
-    // Try without a password — if main says one is required, prompt for it.
-    const result = await login.mutateAsync({ userId })
-    if (!result.success) {
-      setLoginUserId(userId)
-    }
+    await switcher.switchTo(userId, hasPassword)
   }
 
   const handleSignOut = (): void => {
@@ -172,18 +165,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
         )}
       </button>
 
-      {loginUserId && createPortal(
-        <LoginPrompt
-          userId={loginUserId}
-          userName={users?.find((u) => u.id === loginUserId)?.displayName ?? ''}
-          onSuccess={() => {
-            setLoginUserId(null)
-            setOpen(false)
-          }}
-          onCancel={() => setLoginUserId(null)}
-        />,
-        document.body
-      )}
+      {switcher.prompt}
 
       {open && dropdownStyle && createPortal(
         <div
@@ -335,7 +317,9 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
               <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
                 This will remove the account from this device. All{' '}
                 <strong className="text-[var(--color-text)]">local</strong> chat history, providers,
-                agents, and settings for this account will be permanently erased.
+                agents, and settings for this account will be permanently erased. Only its name,
+                email and server, and the names of its credentials, stay while a local agent still
+                uses them, so that agent can say which account to sign in to.
               </p>
             )}
 

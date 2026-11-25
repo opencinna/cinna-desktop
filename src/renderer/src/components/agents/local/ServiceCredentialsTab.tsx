@@ -2,8 +2,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { Plus, Unlink } from 'lucide-react'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
-import type { OAuthConnectFlow, ServiceCredentialAttachmentDto } from '../../../../../shared/serviceCredentials'
-import { credentialResult, oauthFlowKey, useCredentialAttachOptions, useCredentialAttachments, useOAuthConnectFlow } from '../../../hooks/useServiceCredentials'
+import type { OAuthConnectFlow, ServiceCredentialAttachmentDto, UnavailableCredentialAccount } from '../../../../../shared/serviceCredentials'
+import { credentialResult, oauthFlowKey, useAgentCredentialAccounts, useCredentialAttachOptions, useCredentialAttachments, useOAuthConnectFlow } from '../../../hooks/useServiceCredentials'
+import { useUsers } from '../../../hooks/useAuth'
+import { accountFailureSentence, accountFailureTitle, unavailableAccountLabel, unavailableAccountName, unavailableAccountReference, UnavailableAccountButton, useUnavailableAccountActions } from '../../chat/composerAccountNotices'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { CredentialAttachModal } from './CredentialAttachModal'
 import { credentialTypeName, credentialTypeTitle } from '../../settings/LocalCredentialForm'
@@ -15,7 +17,8 @@ import { accountReference, credentialHealth, credentialManageUrl, credentialOwne
 
 /** The row's name: the record's, or what stands in for a record that cannot be read. */
 function attachmentName(a: ServiceCredentialAttachmentDto): string {
-  if (a.state === 'account_unavailable') return 'Account not signed in — unlock or sign in to that profile to use it'
+  // An unavailable account's credential names stay in main; its group heading says whose it is.
+  if (a.state === 'account_unavailable') return 'Hidden until its account is available'
   return a.credential?.name ?? 'Missing credential'
 }
 export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
@@ -24,6 +27,11 @@ export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
   const helper = useQuery({ queryKey: ['credential-helper', agent.id], queryFn: async () => credentialResult(await window.api.serviceCredentials.helper(agent.id)), enabled: agent.kind === 'kit' })
   const [picking, setPicking] = useState(false), [pending, setPending] = useState(false), [error, setError] = useState('')
   const queryClient = useQueryClient()
+  // The accounts its credentials come from that cannot supply them now: each such group is headed by
+  // the account, with the composer's label as its rows' status and its action (Switch, Re-authenticate).
+  const unavailable = useAgentCredentialAccounts(agent)
+  const { actions: accountActions, prompt: switchPrompt } = useUnavailableAccountActions()
+  const { data: users } = useUsers()
   // Reconnect starts the flow here and opens the attach modal on it: the modal shows a waiting flow.
   const reconnect = async (group: string, ref: string) => {
     setPending(true); setError('')
@@ -72,11 +80,15 @@ export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
     <SettingsButton disabled={pending} aria-label={`Cancel ${name} sign-in`} onClick={() => void cancelFlow(f)}>Cancel</SettingsButton>
   </>
 
-  const groups: { key: string; label: string; reference: AccountReference | null; detail?: string; items: ServiceCredentialAttachmentDto[]; flow?: OAuthConnectFlow }[] = []
+  const groups: { key: string; label: string; reference: AccountReference | null; detail?: string; items: ServiceCredentialAttachmentDto[]; flow?: OAuthConnectFlow; held?: UnavailableCredentialAccount }[] = []
   for (const a of attached.data ?? []) {
     const found = groups.find(g => g.key === a.group)
     if (found) found.items.push(a)
-    else groups.push({ key: a.group, label: a.groupLabel, reference: a.account && a.serverUrl ? accountReference({ ...a.account, serverUrl: a.serverUrl }) : null, items: [a] })
+    else {
+      const held = a.state === 'account_unavailable' ? unavailable.data?.accounts.find(u => u.key === a.group) : undefined
+      const reference = a.account && a.serverUrl ? accountReference({ ...a.account, serverUrl: a.serverUrl }) : held ? unavailableAccountReference(held, users) : null
+      groups.push({ key: a.group, label: held?.name ? unavailableAccountName(held) : a.groupLabel, reference, items: [a], held })
+    }
   }
   const flowRecord = flow?.reconnect ? (attached.data ?? []).find(a => a.group === flow.group && a.ref === flow.credentialId) : undefined
   const flowGroupKnown = !!flow && groups.some(g => g.key === flow.group)
@@ -102,8 +114,15 @@ export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
       </SettingsInfoTip>} action={<SettingsButton disabled={pending} onClick={() => setPicking(true)}><Plus size={14} />Attach</SettingsButton>}>
     {attached.data?.length === 0 && !flow && <p className="text-[var(--color-text-muted)]">No credentials attached.</p>}
     {groups.map(group => <section key={group.key} aria-label={group.label} className="space-y-2">
-      <h4 className="flex text-[12px] font-semibold text-[var(--color-text-muted)]">{group.reference ? <AccountReferenceLabel reference={group.reference} onError={setError} />
-        : group.detail ? <span className="min-w-0 truncate"><span className="text-[var(--color-text-secondary)]">{group.label}</span> {group.detail}</span> : group.label}</h4>
+      <h4 className="flex items-center gap-2 text-[12px] font-semibold text-[var(--color-text-muted)]">{(() => {
+        // An unavailable account's action's failure stands in for its heading until the next try (rule 6).
+        const failure = group.held ? accountActions.failure(group.held) : null
+        if (failure && group.held) return <span role="alert" className="min-w-0 flex-1 truncate text-[var(--color-danger)]" title={accountFailureTitle(group.held, failure)}>{accountFailureSentence(group.held, failure)}</span>
+        return group.reference ? <AccountReferenceLabel reference={group.reference} onError={setError} className="flex-1" />
+          : group.detail ? <span className="min-w-0 flex-1 truncate"><span className="text-[var(--color-text-secondary)]">{group.label}</span> {group.detail}</span>
+          : <span className="min-w-0 flex-1 truncate">{group.label}</span>
+      })()}
+      {group.held && <UnavailableAccountButton account={group.held} actions={accountActions} Button={SettingsButton} iconSize={14} />}</h4>
       <ul className="space-y-2">{group.items.map(a => {
         const name = attachmentName(a), unavailable = a.state === 'account_unavailable'
         const manage = unavailable ? null : credentialManageUrl(a.credential?.cloudId, a.serverUrl)
@@ -112,7 +131,8 @@ export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
         // Only the owner can sign a record in again: a shared one's health names whom to ask instead.
         const canReconnect = !reconnecting && (a.state === 'pending_authorization' || a.state === 'reauth_required') && a.credential?.relation === 'owned'
         return <li key={`${a.group}:${a.ref}`}><CredentialRow name={name} type={a.credential?.type} typeTitle={a.credential ? credentialTypeTitle(a.credential) : undefined} serviceUri={a.credential?.serviceUri}
-          account={a.credential?.grantedUserEmail} health={reconnecting ? oauthFlowHealth(reconnecting) : credentialHealth(a.credential, a.state)}
+          account={a.credential?.grantedUserEmail} health={reconnecting ? oauthFlowHealth(reconnecting)
+            : group.held ? { tone: 'warning', label: unavailableAccountLabel(group.held) } : credentialHealth(a.credential, a.state)}
           ownership={a.credential ? credentialOwnership(a.credential) : a.origin === 'local' ? credentialOwnership({ origin: 'local', relation: 'owned', ownerEmail: null }) : null}
           actions={<>
             {reconnecting && a.credential && flowActions(reconnecting, a.credential.name)}
@@ -136,6 +156,7 @@ export function ServiceCredentialsTab({ agent }: { agent: LocalAgentDto }) {
       try { credentialResult(await window.api.serviceCredentials.updateHelper(agent.id, helper.data.stamp)); await helper.refetch() } catch (e) { setError(unwrapIpcError(e)) } finally { setPending(false) }
     }}>Update credential helper</SettingsButton><p className="text-[var(--color-text-muted)]">Replaces the older kit reader with support for attached credentials and Agent API keys.</p></div>}
     <CredentialAttachModal open={picking} agentId={agent.id} onClose={() => setPicking(false)} onAttach={attach} />
+    {switchPrompt}
   </div>
 }
 

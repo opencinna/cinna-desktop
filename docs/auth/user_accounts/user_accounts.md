@@ -51,11 +51,15 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 
 ### Sign Out (Account Removal)
 1. User clicks "Sign Out" in the dropdown (only shown for non-default users)
-2. Centered confirmation modal appears with warning: all **local** chat history, providers, agents, and settings for this account will be permanently erased. Chats shared from the guest profile are not the account's and survive
+2. Centered confirmation modal appears with warning: all **local** chat history, providers, agents, and settings for this account will be permanently erased, except its name, email and server and its credentials' names, which stay while a local agent still uses them (see What sign-out keeps). Chats shared from the guest profile are not the account's and survive
 3. For Cinna accounts: modal notes that the cloud account will not be affected
 4. If the account has a password set, the user must enter it to confirm
 5. On confirmation: account is fully deleted (same cascade-delete flow as Settings → Delete Account), session falls back to default user
 6. All data refetches for the default user's context
+
+#### What sign-out keeps
+
+"Erased" is true of the profile's own rows, not of every trace of the account. When a local folder agent has Core credentials attached under the account, the app keeps, in installation-wide settings that outlive the profile: the account key's name (profile, name, email, server) and each attached reference's type, Service URI and name. Without them the agent's slot would read as missing, and Finish setup would offer a duplicate, as soon as the profile that held it was gone. They hold no token, secret or credential value, and are kept only while some agent still references the account key and pruned once none does, when every agent root can be listed. A signed-out profile therefore leaves the agent a warning ("*Alice* was removed: its credentials come from that account") rather than nothing, and **Detach** is how the user lets go of them. See [Unavailable accounts](../../agents/service_credentials/README.md#unavailable-accounts).
 
 ### Manage Accounts (Settings)
 1. User navigates to Settings → "User Accounts" (last menu item in the main settings block, after MCP Providers)
@@ -100,6 +104,8 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 - Password verification uses PBKDF2 (100k iterations, SHA-512) — no plaintext storage
 - Session persistence stores only the last user ID, not credentials
 - Per-session unlock tracking resets on app restart or sign-out (password required again)
+- Deleting an account is not a promise that no trace of it remains: the retention above is the one deliberate exception, and holds names and references only
+- **Switch** is one hook (`useSwitchProfile`) shared by the profile menu and the composer's account rows: try without a password, prompt when main asks; the composer's passes a callback that carries its draft once the profile is current
 
 ## Architecture Overview
 

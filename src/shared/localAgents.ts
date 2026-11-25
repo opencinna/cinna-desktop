@@ -266,6 +266,34 @@ export function missingCredentialsReason(missing: readonly { name: string }[]): 
   return `Add the credentials for ${names} by attaching them or configuring credentials/.env.`
 }
 
+/**
+ * The attachment state of a credential stored under a Cinna account that cannot supply it now
+ * (signed out, locked, session expired, removed). The slot it fills is not satisfied, but it is not
+ * missing either: attaching another credential would duplicate it under the current account.
+ */
+export const ACCOUNT_UNAVAILABLE = 'account_unavailable'
+
+/** Whether a slot's only matching attachment is held by an unavailable account. */
+export function heldByUnavailableAccount(slot: { attachment?: { state: string } | null }): boolean {
+  return slot.attachment?.state === ACCOUNT_UNAVAILABLE
+}
+
+/**
+ * The required slots nothing fills and that no unavailable account holds: what Finish setup,
+ * Authorize and the `credentials_needed` reason ask for. A slot an unavailable account holds is
+ * told by the composer's account row instead.
+ */
+export function missingCredentialSlots<T extends { satisfied: boolean; attachment?: { state: string } | null }>(slots: readonly T[]): T[] {
+  return slots.filter((slot) => !slot.satisfied && !heldByUnavailableAccount(slot))
+}
+
+/** The scanner's `credentials_needed` reason when every unsatisfied slot is held by an unavailable account. */
+export function unavailableCredentialsReason(count: number): string {
+  return count === 1
+    ? 'A credential this agent uses comes from a Cinna account that isn’t available right now.'
+    : `${count} credentials this agent uses come from a Cinna account that isn’t available right now.`
+}
+
 /** A validator finding, flattened for the renderer. */
 export interface LocalAgentFinding {
   /** Stable dotted identifier — key messages off this, not the text. */
@@ -678,6 +706,12 @@ export interface AgentRootDto {
   kind: AgentRootKind
   /** False when the directory has gone missing since it was registered. */
   exists: boolean
+  /**
+   * Set by the agent list only: false when the last scan could not list the root's agents (EPERM, or
+   * its `Local/` gone for the moment of a git branch switch) though the directory is there, so the
+   * listing is missing whatever agents it holds.
+   */
+  listable?: boolean
   agentCount: number
   /**
    * External roots only: the walk stopped at its cap, so this root's agents are

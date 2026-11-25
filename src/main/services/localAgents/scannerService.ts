@@ -57,7 +57,9 @@ import {
   externalFolderAgentId,
   folderAgentId,
   legacyFolderAgentId,
+  missingCredentialSlots,
   missingCredentialsReason,
+  unavailableCredentialsReason,
   type FileStamp,
   type LocalAgentIdentity,
   type LocalAgentCommand,
@@ -257,9 +259,16 @@ function readiness(
           : `${unreadableCommands} commands in docs/CLI_COMMANDS.yaml could not be read.`
     }
   }
-  const missing = credentials.filter((c) => !c.satisfied)
+  // A slot held by an account that cannot supply it now (signed out, locked, removed) is
+  // unsatisfied but not missing: asking to attach it again would duplicate it under the
+  // current account. The composer names that account in its own row.
+  const missing = missingCredentialSlots(credentials)
   if (missing.length > 0) {
     return { readiness: 'credentials_needed', reason: missingCredentialsReason(missing) }
+  }
+  const held = credentials.filter((c) => !c.satisfied)
+  if (held.length > 0) {
+    return { readiness: 'credentials_needed', reason: unavailableCredentialsReason(held.length) }
   }
   return { readiness: 'ok', reason: null }
 }

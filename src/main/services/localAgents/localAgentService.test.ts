@@ -99,7 +99,7 @@ const { appSettingsRepo } = await import('../../db/appSettings')
 const { clearContractCache } = await import('../../kit/contractStore')
 const { manifestPath, readManifest } = await import('../../kit/manifestIo')
 const { scaffoldService } = await import('./scaffoldService')
-const { scannerService } = await import('./scannerService')
+const { markAllRootsDirty, scannerService } = await import('./scannerService')
 const { desktopStatePath, desktopStateService } = await import('./desktopStateService')
 const { installFolderMovedListener, localAgentService } = await import('./localAgentService')
 const { sharingService } = await import('./sharingService')
@@ -709,6 +709,25 @@ describe('a home that does not exist yet', () => {
 
   it('is not missing once registered', () => {
     expect(localAgentService.list(USER).homeMissing).toBe(false)
+  })
+})
+
+describe('a root that is there but cannot be listed', () => {
+  it('is reported not listable, so nothing reads its missing agents as gone', () => {
+    const root = () => localAgentService.list(USER).roots.find((r) => r.isDefault)
+    expect(root()).toMatchObject({ exists: true, listable: true })
+    // `Local/` this app may not read (EACCES): the root itself is still there.
+    const local = join(workshop, 'Local')
+    chmodSync(local, 0o000)
+    try {
+      // The watcher marks the root dirty; an unlistable scan is not cached, so it is asked again.
+      markAllRootsDirty()
+      expect(root()).toMatchObject({ exists: true, listable: false })
+    } finally {
+      chmodSync(local, 0o755)
+    }
+    markAllRootsDirty()
+    expect(root()).toMatchObject({ exists: true, listable: true })
   })
 })
 

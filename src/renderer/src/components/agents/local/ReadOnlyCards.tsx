@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Check, Circle, Minus } from 'lucide-react'
+import { AlertTriangle, Check, Circle, Minus } from 'lucide-react'
 import { markdownComponents } from '../../../utils/markdownComponents'
 import { useOpenAgentCredentials, useOpenAgentPath } from '../../../hooks/useLocalAgents'
 import { useNewChatFlow } from '../../../hooks/useNewChatFlow'
 import { useUIStore } from '../../../stores/ui.store'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
-import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import { heldByUnavailableAccount, type LocalAgentDto } from '../../../../../shared/localAgents'
+import { heldSlotLabel, heldSlotTitle, useHeldSlotAccounts } from '../../chat/composerAccountNotices'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { AgentCard } from './AgentCard'
 
@@ -125,6 +126,8 @@ export function CredentialsCard({
    */
   env: OpenCredentialsFile | null
 }): React.JSX.Element {
+  // A slot held by an account that cannot supply it now is not missing: it says whose it is.
+  const heldAccount = useHeldSlotAccounts(agent)
   return (
     <AgentCard
       title="Credentials"
@@ -146,6 +149,8 @@ export function CredentialsCard({
             <li key={slot.name} className="flex items-start gap-2">
               {slot.satisfied ? (
                 <Check size={12} className="mt-0.5 shrink-0 text-[var(--color-success)]" />
+              ) : heldByUnavailableAccount(slot) ? (
+                <AlertTriangle size={12} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
               ) : (
                 <Minus
                   size={12}
@@ -160,6 +165,12 @@ export function CredentialsCard({
                   {slot.optional && (
                     <span className="ml-1.5 text-[10px] text-[var(--color-text-muted)]">
                       optional
+                    </span>
+                  )}
+                  {!slot.satisfied && heldByUnavailableAccount(slot) && (
+                    <span data-testid="held-slot-label" className="ml-1.5 text-[10px] text-[var(--color-warning)]"
+                      title={heldSlotTitle(heldAccount(slot.name))}>
+                      {heldSlotLabel(heldAccount(slot.name))}
                     </span>
                   )}
                 </div>

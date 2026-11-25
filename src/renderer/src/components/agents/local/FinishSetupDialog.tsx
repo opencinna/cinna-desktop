@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Circle, Loader2 } from 'lucide-react'
-import type { CredentialSetupOption, CredentialSetupSkillSlot, CredentialSetupSlot, ServiceCredentialDto, SlotOAuthAction } from '../../../../../shared/serviceCredentials'
+import type { CredentialSetupOption, CredentialSetupSkillSlot, CredentialSetupSlot, ServiceCredentialDto, SlotOAuthAction, UnavailableCredentialAccount } from '../../../../../shared/serviceCredentials'
 import { unwrapLocalAgentOutcome } from '../../../../../shared/localAgents'
 import { credentialResult, useCredentialSetup } from '../../../hooks/useServiceCredentials'
 import { useSlotAuthorize, type SlotAuthorizeState } from '../../../hooks/useSlotAuthorize'
 import { LOCAL_AGENTS_KEY, localAgentKey } from '../../../hooks/useLocalAgents'
 import { autoAttachedKey, useFinishSetupStore } from '../../../stores/finishSetup.store'
 import { unwrapIpcError } from '../../../utils/ipcError'
-import { CredentialRow } from '../../settings/CredentialRow'
+import { useUsers } from '../../../hooks/useAuth'
+import {
+  accountFailureSentence, accountFailureTitle, heldSlotSentence, unavailableAccountName, unavailableAccountReason, unavailableAccountReference,
+  UnavailableAccountButton, useUnavailableAccountActions, type AccountButtonProps, type AccountRowHandlers
+} from '../../chat/composerAccountNotices'
+import { AccountReferenceLabel, CredentialRow } from '../../settings/CredentialRow'
 import { credentialHealth, credentialOwnership } from '../../settings/credentialPresentation'
 import { CANCEL, DIALOG_TEXT, DialogFooter, DialogShell, FIELD_BASE, PRIMARY, SECONDARY } from './sharing/ShareDialogs'
 
@@ -46,25 +51,37 @@ import { CANCEL, DIALOG_TEXT, DialogFooter, DialogShell, FIELD_BASE, PRIMARY, SE
  * Cancel, and a failure's reason goes under it, last in the card. The slot
  * turns Connected through the scan once main attached the record; the dialog
  * stays open.
+ *
+ * A slot whose only credential is stored under a Cinna account that cannot
+ * supply it now (signed out, locked, session expired, removed) is held, not
+ * missing: its status is only why ("Signed out", "Locked"), its line names
+ * the account ("From Name <email> host", the email truncated first) with the
+ * composer's action for it (Switch to <name>, Re-authenticate, Open accounts),
+ * and that action's short failure ("Switch failed: <cause>") replaces the line. The records, `.env` names and Authorize wait
+ * behind "Use another credential instead", since one attached here would
+ * duplicate it under the current account; what was typed there is dropped
+ * when it is folded away, and never saved while hidden.
  */
 
-export type FinishSetupStatus = 'Connected automatically' | 'Connected' | 'Set on this computer' | 'Missing' | 'Optional'
+export type FinishSetupStatus = 'Connected automatically' | 'Connected' | 'Set on this computer' | 'Account unavailable' | 'Missing' | 'Optional'
 
 export function finishSetupStatus(slot: CredentialSetupSlot, autoAttached: readonly string[]): FinishSetupStatus {
   if (slot.state === 'connected') return autoAttached.includes(slot.name) ? 'Connected automatically' : 'Connected'
   if (slot.state === 'env') return 'Set on this computer'
+  if (slot.state === 'account_unavailable') return 'Account unavailable'
   return slot.optional ? 'Optional' : 'Missing'
 }
 
 /** A skill slot's status: never `.env`, and remembered under `skill:<slot>` when attached without asking. */
 export function skillSlotStatus(slot: CredentialSetupSkillSlot, autoAttached: readonly string[]): FinishSetupStatus {
   if (slot.state === 'connected') return autoAttached.includes(autoAttachedKey({ slot: slot.slot, skill: true })) ? 'Connected automatically' : 'Connected'
+  if (slot.state === 'account_unavailable') return 'Account unavailable'
   return 'Missing'
 }
 
 /** A skill slot drawn by the agent slot's row: records only, no `.env` names. */
 function asSlotRow(slot: CredentialSetupSkillSlot): CredentialSetupSlot {
-  return { name: slot.slot, type: slot.type, optional: false, envPrefix: null, state: slot.state, attached: slot.attached, expectedKeys: [], presentKeys: [], options: slot.options, notReady: slot.notReady, oauth: slot.oauth }
+  return { name: slot.slot, type: slot.type, optional: false, envPrefix: null, state: slot.state, attached: slot.attached, expectedKeys: [], presentKeys: [], options: slot.options, notReady: slot.notReady, account: slot.account, oauth: slot.oauth }
 }
 
 /** A not-ready record that fits a Google slot and that only its owner can reconnect: its note stays beside Authorize. */
@@ -115,6 +132,16 @@ function skillSlotNote(slot: CredentialSetupSkillSlot): string | null {
   return notReadyNote(slot.notReady) ?? `None of your credentials fits it: it needs a credential of type ${slot.type} whose Service URI is ${slot.slot}.`
 }
 
+export { heldSlotSentence }
+
+/** What a held slot's account line can do, wired by `useFinishSetup` (which outlives the click). */
+export type HeldAccountActions = AccountRowHandlers
+
+/** `.env` names of held slots whose "Use another credential instead" is folded: never saved, never "unsaved". */
+function hiddenKeys(slots: readonly CredentialSetupSlot[], another: Readonly<Record<string, boolean>>): Set<string> {
+  return new Set(slots.filter((slot) => slot.state === 'account_unavailable' && !another[slot.name]).flatMap(keysOf))
+}
+
 /** An offered record by its group and ref: a local record's id and Core's id share no namespace. */
 function optionKey(option: CredentialSetupOption): string {
   return `${option.group}:${option.ref}`
@@ -144,6 +171,8 @@ export interface FinishSetupOptions {
    * off, so one request does not open two dialogs; it opens only when clicked.
    */
   followRequests?: boolean
+  /** The composer draft a held slot's Switch to <name> carries to the profile switched to. */
+  draftKey?: string | null
 }
 
 /**
@@ -163,6 +192,9 @@ export function useFinishSetup(agentId: string | null, agentName: string, option
   /** Done is saving what was typed; it closes when that lands. */
   const [finishing, setFinishing] = useState(false)
   const requested = useFinishSetupStore((s) => followRequests && agentId !== null && s.pending.includes(agentId))
+  // A held slot's Switch to <name> and Re-authenticate, owned here so the password prompt and the
+  // answer outlive the click; a failure shows on the held line that ran it.
+  const { actions: held, prompt: switchPrompt, dismissFailure } = useUnavailableAccountActions({ draftKey: options.draftKey, agentId })
   const autoAttached = useFinishSetupStore((s) => (agentId ? s.autoAttached[agentId] : undefined))
 
   // A dialog opened by hand, and anything typed into it, belongs to the agent it was opened for.
@@ -172,6 +204,9 @@ export function useFinishSetup(agentId: string | null, agentName: string, option
     setNotice(null)
     setDrafts({})
     setFinishing(false)
+    dismissFailure()
+    // `dismissFailure` is a fresh closure each render; only the agent decides.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId])
 
   const refresh = (id: string): Promise<unknown> =>
@@ -231,6 +266,7 @@ export function useFinishSetup(agentId: string | null, agentName: string, option
     setNotice(null)
     setDrafts({})
     setFinishing(false)
+    dismissFailure()
   }
   const report = (next: string | null, nextNotice: string | null = null): void => {
     setError(next)
@@ -247,6 +283,7 @@ export function useFinishSetup(agentId: string | null, agentName: string, option
         onDraft={(key, value) => setDrafts((current) => ({ ...current, [key]: value }))}
         error={error}
         notice={notice}
+        held={held}
         busy={busy}
         unsaved={unsaved}
         attachingKey={attach.isPending && attach.variables ? optionKey(attach.variables.option) : null}
@@ -303,22 +340,28 @@ export function useFinishSetup(agentId: string | null, agentName: string, option
       report(null)
       setOpenedHere(true)
     },
-    dialog
+    dialog: (
+      <>
+        {dialog}
+        {switchPrompt}
+      </>
+    )
   }
 }
 
-function StatusMark({ status }: { status: FinishSetupStatus }): React.JSX.Element {
+function StatusMark({ status, label = status }: { status: FinishSetupStatus; label?: string }): React.JSX.Element {
   const ok = status === 'Connected automatically' || status === 'Connected' || status === 'Set on this computer'
-  const Icon = ok ? CheckCircle2 : status === 'Missing' ? AlertTriangle : Circle
+  const warn = status === 'Missing' || status === 'Account unavailable'
+  const Icon = ok ? CheckCircle2 : warn ? AlertTriangle : Circle
   const tone = ok
     ? 'text-[var(--color-severity-ok-text)]'
-    : status === 'Missing'
+    : warn
       ? 'text-[var(--color-severity-warning-text)]'
       : 'text-[var(--color-text-muted)]'
   return (
-    <span className={`flex shrink-0 items-center gap-1 text-[13px] ${tone}`}>
-      <Icon size={14} aria-hidden="true" />
-      {status}
+    <span className={`flex min-w-0 max-w-[60%] shrink-0 items-center gap-1 text-[13px] ${tone}`} title={label}>
+      <Icon size={14} className="shrink-0" aria-hidden="true" />
+      <span className="truncate">{label}</span>
     </span>
   )
 }
@@ -331,6 +374,7 @@ export function FinishSetupDialog({
   onDraft,
   error,
   notice,
+  held,
   busy,
   unsaved,
   attachingKey,
@@ -351,6 +395,8 @@ export function FinishSetupDialog({
   error: string | null
   /** A note that is not an error (Open credentials/.env revealed the file instead). */
   notice: string | null
+  /** A held slot's account actions; without them its account line has no button. */
+  held?: HeldAccountActions
   busy: boolean
   /** Something typed is not saved: the backdrop and Escape then close nothing. */
   unsaved: boolean
@@ -372,14 +418,23 @@ export function FinishSetupDialog({
   const oauthAccount = setup.data?.oauthAccount ?? false
   const slots = setup.data?.slots ?? []
   const skillSlots = setup.data?.skillSlots ?? []
-  const allKeys = slots.flatMap(keysOf)
+  /** Held slots whose "Use another credential instead" is open, by slot name. */
+  const [another, setAnother] = useState<Record<string, boolean>>({})
+  const hidden = hiddenKeys(slots, another)
+  const allKeys = slots.flatMap(keysOf).filter((key) => !hidden.has(key))
+  // Only what is on screen guards Escape: a folded slot's fields are cleared as it folds, and never count.
+  const guarded = unsaved && Object.entries(drafts).some(([key, value]) => value !== '' && !hidden.has(key))
   const shownError = error ?? (setup.error ? unwrapIpcError(setup.error) : null)
+  const toggleAnother = (slot: CredentialSetupSlot): void => {
+    if (another[slot.name]) for (const key of keysOf(slot)) if ((drafts[key] ?? '') !== '') onDraft(key, '')
+    setAnother((current) => ({ ...current, [slot.name]: !current[slot.name] }))
+  }
 
   return (
     <DialogShell
       title={`Finish setting up ${name}`}
       pending={busy}
-      onDismiss={unsaved ? () => undefined : onLater}
+      onDismiss={guarded ? () => undefined : onLater}
       initialFocusRef={laterRef}
       width="w-[36rem]"
       align="top"
@@ -402,6 +457,9 @@ export function FinishSetupDialog({
             authorize={slot.oauth ? { action: slot.oauth, account: oauthAccount, state: google.stateOf(slot.name),
               onAuthorize: () => google.authorize(slot.name), onReopen: () => google.reopen(slot.name), onCancel: () => google.cancel(slot.name) } : null}
             status={finishSetupStatus(slot, autoAttached)}
+            held={held}
+            another={!!another[slot.name]}
+            onAnother={() => toggleAnother(slot)}
             drafts={drafts}
             onDraft={onDraft}
             busy={busy}
@@ -428,6 +486,9 @@ export function FinishSetupDialog({
                 authorize={skillSlot.oauth ? { action: skillSlot.oauth, account: oauthAccount, state: google.stateOf(`skill:${skillSlot.slot}`),
                   onAuthorize: () => google.authorize(`skill:${skillSlot.slot}`), onReopen: () => google.reopen(`skill:${skillSlot.slot}`), onCancel: () => google.cancel(`skill:${skillSlot.slot}`) } : null}
                 status={skillSlotStatus(skillSlot, autoAttached)}
+                held={held}
+                another={!!another[`skill:${skillSlot.slot}`]}
+                onAnother={() => setAnother((current) => ({ ...current, [`skill:${skillSlot.slot}`]: !current[`skill:${skillSlot.slot}`] }))}
                 drafts={drafts}
                 onDraft={onDraft}
                 busy={busy}
@@ -544,6 +605,44 @@ function AuthorizeLine({ authorize, offered }: { authorize: AuthorizeProps; offe
   )
 }
 
+/** The dialog's secondary button, as {@link UnavailableAccountButton} draws its action in a held slot. */
+function HeldButton({ children, ...props }: AccountButtonProps): React.JSX.Element {
+  return <button type="button" className={`${SECONDARY} !py-1`} {...props}>{children}</button>
+}
+
+/**
+ * A held slot's account line, one button tall in every state: where the credential comes from, the
+ * account in its standard "Name <email> host" form (the slot's status above already says why), then
+ * the composer's action for it. A failure of that action replaces the line until the next try, so
+ * it lands where it was taken and moves nothing (rules 1, 6).
+ */
+function HeldAccountLine({ account, actions }: { account: UnavailableCredentialAccount | null; actions?: HeldAccountActions }): React.JSX.Element {
+  const { data: users } = useUsers()
+  const [linkError, setLinkError] = useState<string | null>(null)
+  const failure = account && actions ? actions.failure(account) : null
+  const reference = account ? unavailableAccountReference(account, users) : null
+  // Who, in the standard form; the host is a link once the profile's server is known. Nothing names
+  // a removed or unknown account: its line is the sentence ("A removed account held its credential.").
+  const sentence = failure && account ? accountFailureSentence(account, failure)
+    : linkError ?? (account?.name ? `From ${unavailableAccountName(account)}` : heldSlotSentence(account))
+  return (
+    <div data-testid="held-account-line" className="flex h-9 items-center gap-2">
+      {failure || linkError || !reference ? (
+        <span role={failure || linkError ? 'alert' : undefined} title={failure && account ? accountFailureTitle(account, failure) : sentence}
+          className={`min-w-0 flex-1 truncate text-[13px] ${failure || linkError ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'}`}>
+          {sentence}
+        </span>
+      ) : (
+        <span className="flex min-w-0 flex-1 items-baseline gap-1 text-[13px] text-[var(--color-text-secondary)]">
+          <span className="shrink-0">From</span>
+          <AccountReferenceLabel reference={reference} onError={setLinkError} squeezeEmail />
+        </span>
+      )}
+      {account && actions && <UnavailableAccountButton account={account} actions={actions} Button={HeldButton} iconSize={13} />}
+    </div>
+  )
+}
+
 function SlotRow({
   slot,
   testId,
@@ -551,6 +650,9 @@ function SlotRow({
   emptyNote,
   authorize = null,
   status,
+  held,
+  another = false,
+  onAnother,
   drafts,
   onDraft,
   busy,
@@ -571,6 +673,10 @@ function SlotRow({
   /** A missing Google OAuth slot's authorize line; null for any other slot. */
   authorize?: AuthorizeProps | null
   status: FinishSetupStatus
+  held?: HeldAccountActions
+  /** A held slot's "Use another credential instead" is open (owned by the dialog, which saves only what is shown). */
+  another?: boolean
+  onAnother?: () => void
   drafts: Record<string, string>
   onDraft: (key: string, value: string) => void
   busy: boolean
@@ -582,9 +688,12 @@ function SlotRow({
   onSave: (keys: string[], onSaved: () => void) => void
 }): React.JSX.Element {
   const rowRef = useRef<HTMLDivElement>(null)
-  const keys = keysOf(slot)
+  /** Held by an account that cannot supply it now: what would attach another waits behind "Use another credential instead". */
+  const heldSlot = slot.state === 'account_unavailable'
+  const alternatives = !heldSlot || another
+  const keys = alternatives ? keysOf(slot) : []
   /** No `fields`: the kit reads any `<prefix><FIELD>`, so there is no name to ask for. */
-  const fieldless = slot.state !== 'connected' && slot.expectedKeys.length === 0 && slot.envPrefix !== null
+  const fieldless = alternatives && slot.state !== 'connected' && slot.expectedKeys.length === 0 && slot.envPrefix !== null
   /** Set names the user chose to replace: they show a field again until saved or cancelled. */
   const [replacing, setReplacing] = useState<string[]>([])
   /**
@@ -634,7 +743,7 @@ function SlotRow({
         <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-[var(--color-text)]" title={slot.name}>
           {slot.name}
         </span>
-        <StatusMark status={status} />
+        <StatusMark status={status} label={heldSlot && slot.account ? unavailableAccountReason(slot.account) : status} />
       </div>
       {detail && (
         <div className="h-5 truncate text-[13px] leading-5 text-[var(--color-text-muted)]" title={detail}>
@@ -652,7 +761,22 @@ function SlotRow({
         />
       )}
 
-      {slot.options.map((option) => (
+      {heldSlot && <HeldAccountLine account={slot.account} actions={held} />}
+      {/* One line in both states: opening it lengthens the card below and moves nothing above (rule 1). */}
+      {heldSlot && (slot.options.length > 0 || slot.expectedKeys.length > 0 || slot.envPrefix !== null || !!authorize) && (
+        <div className="flex h-5 items-center">
+          <button
+            type="button"
+            aria-expanded={another}
+            className="text-[13px] leading-5 text-[var(--color-accent)] underline underline-offset-2 hover:text-[var(--color-accent-hover)]"
+            onClick={onAnother}
+          >
+            {another ? 'Keep the account’s credential' : 'Use another credential instead'}
+          </button>
+        </div>
+      )}
+
+      {alternatives && slot.options.map((option) => (
         <CredentialRow
           key={optionKey(option)}
           name={option.credential.name}
@@ -780,9 +904,9 @@ function SlotRow({
         </div>
       )}
 
-      {authorize && slot.state === 'missing' && <AuthorizeLine authorize={authorize} offered={slot.options.length > 0} />}
+      {authorize && (slot.state === 'missing' || (heldSlot && another)) && <AuthorizeLine authorize={authorize} offered={slot.options.length > 0} />}
       {/* Only when there is one, last in the card: it lengthens the card and moves nothing above it (rule 1). */}
-      {authorize && slot.state === 'missing' && authorize.account && authorize.state.error && (
+      {authorize && (slot.state === 'missing' || (heldSlot && another)) && authorize.account && authorize.state.error && (
         <p role="alert" className="text-[13px] text-[var(--color-danger)]">{authorize.state.error}</p>
       )}
     </div>

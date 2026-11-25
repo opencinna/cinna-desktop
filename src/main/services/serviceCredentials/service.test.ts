@@ -1,11 +1,11 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import type { ServiceCredentialRow } from '../../db/serviceCredentials'
-const world = vi.hoisted(() => ({ user: '__default__', home: '', secure: true, agents: [] as any[], rows: new Map<string, any>(), metadata: [] as any[], byUser: {} as Record<string, any[]>, identity: false, users: new Map<string, any>(), unlocked: new Set<string>(), token: 'fixture-cloud-token-123', allowed: true, fetch: vi.fn(), list: vi.fn(), provision: vi.fn(), open: vi.fn(), oauthCreate: vi.fn(), oauthAuthorize: vi.fn(), accessToken: vi.fn() }))
+const world = vi.hoisted(() => ({ user: '__default__', home: '', secure: true, agents: [] as any[], rows: new Map<string, any>(), metadata: [] as any[], byUser: {} as Record<string, any[]>, identity: false, users: new Map<string, any>(), unlocked: new Set<string>(), token: 'fixture-cloud-token-123', allowed: true, fetch: vi.fn(), list: vi.fn(), provision: vi.fn(), open: vi.fn(), oauthCreate: vi.fn(), oauthAuthorize: vi.fn(), accessToken: vi.fn(), recorded: new Map<string, any>(), refs: new Map<string, Map<string, any>>(), noTokens: new Set<string>(), roots: [] as { exists: boolean; listable?: boolean }[], hold: new Map<string, Promise<void>>() }))
 vi.mock('../../host/runtimeHost', () => ({ runtimeHost: { getPath: () => world.home, shell: { openExternal: (url: string) => world.open(url) }, keystore: {
   isEncryptionAvailable: () => true,
   isSecureStorageAvailable: () => world.secure,
@@ -14,12 +14,15 @@ vi.mock('../../host/runtimeHost', () => ({ runtimeHost: { getPath: () => world.h
 } } }))
 vi.mock('../../host/events', () => ({ publishEvent: vi.fn() }))
 vi.mock('../../auth/scope', () => ({ getProfileScopeUserId: () => world.user }))
-vi.mock('../../auth/cinna-tokens', () => ({ getStoredCinnaSubject: async (id: string) => id.replace('new-', '') }))
+vi.mock('../../auth/cinna-tokens', () => ({ getStoredCinnaSubject: async (id: string) => { await world.hold.get(id); if (world.noTokens.has(id)) throw new Error('No Cinna access token stored'); return id.replace('new-', '') } }))
+vi.mock('../../db/credentialAccounts', () => ({ credentialAccountRepo: { list: () => new Map(world.recorded), set: (key: string, record: any) => world.recorded.set(key, record), remove: (key: string) => world.recorded.delete(key) },
+  // A copy each way, as the app_settings rows are: the service's own map never aliases the store.
+  credentialRefRepo: { list: () => new Map([...world.refs].map(([k, v]) => [k, new Map(v)])), set: (key: string, refs: Map<string, any>) => { if (refs.size) world.refs.set(key, new Map(refs)); else world.refs.delete(key) } } }))
 vi.mock('../../db/users', () => ({ userRepo: { get: (id: string) => world.users.get(id) ?? ({ id, type: id === '__default__' ? 'local_user' : 'cinna_user', cinnaServerUrl: 'http://localhost:8000', displayName: id, username: id, passwordHash: null }), list: () => [...world.users.values()] } }))
 vi.mock('../../db/serviceCredentials', () => ({ credentialDto: (r: ServiceCredentialRow) => { const { keyStub: _stub, ...m } = JSON.parse(r.metadata); return { ...m, keyStatus: m.keyStatus ?? null, agentApi: m.agentApi ?? null, keyBlocked: m.keyBlocked ?? null, oauthStatus: m.oauthStatus ?? null, grantedUserEmail: m.grantedUserEmail ?? null, id: r.id, origin: r.origin, cloudId: r.cloud_id, hasValues: !!r.payload_enc, expiresAt: r.expires_at } }, serviceCredentialRepo: {
   list: (id: string) => [...world.rows.values()].filter(r => r.user_id === id), get: (id: string) => world.rows.get(id), put: (r: any) => world.rows.set(r.id, r), remove: (id: string) => world.rows.delete(id), clearProfile: (id: string) => { for (const [key, row] of world.rows) if (row.user_id === id && row.origin === 'cloud') world.rows.delete(key) }
 } }))
-vi.mock('../localAgents/localAgentService', () => ({ localAgentService: { list: () => ({ agents: world.agents }), get: (_: string, id: string) => { const a = world.agents.find(a => a.id === id); if (!a) throw new Error('Agent missing'); return a } } }))
+vi.mock('../localAgents/localAgentService', () => ({ localAgentService: { list: () => ({ agents: world.agents, roots: world.roots, homeAccess: 'ready', homeMissing: false }), get: (_: string, id: string) => { const a = world.agents.find(a => a.id === id); if (!a) throw new Error('Agent missing'); return a } } }))
 vi.mock('../localAgents/scannerService', () => ({ markAllRootsDirty() {} }))
 vi.mock('../../shell/env', () => ({ getShellEnv: async () => process.env, usableTool: async (bin: string) => bin }))
 vi.mock('./cloud', () => ({ serviceCredentialCloud: { list: (...args: unknown[]) => world.list(...args), materialize: (...args: unknown[]) => world.fetch(...args), provisionLocal: (...args: unknown[]) => world.provision(...args),
@@ -36,9 +39,11 @@ import { turnLock } from '../localAgents/turnLock'
 import { desktopStateService } from '../localAgents/desktopStateService'
 import { clearCredentialRedaction, redactCredentialText } from '../../security/serviceCredentialRedaction'
 import { getLogEntries } from '../../logger/logger'
+import { localAgentService } from '../localAgents/localAgentService'
+import { credentialAccountRepo } from '../../db/credentialAccounts'
 const sleep = () => new Promise(resolve => setTimeout(resolve, 30))
 beforeEach(async () => {
-  world.home = mkdtempSync(join(tmpdir(), 'cinna-credentials-')); world.user = '__default__'; world.rows.clear(); world.secure = true; world.agents = []; world.metadata = []; world.byUser = {}; world.identity = false; world.users.clear(); world.unlocked.clear(); world.allowed = true
+  world.home = mkdtempSync(join(tmpdir(), 'cinna-credentials-')); world.user = '__default__'; world.rows.clear(); world.secure = true; world.agents = []; world.metadata = []; world.byUser = {}; world.identity = false; world.users.clear(); world.unlocked.clear(); world.allowed = true; world.recorded.clear(); world.refs.clear(); world.noTokens.clear(); world.roots = []; world.hold.clear()
   world.list.mockImplementation(async (user: string) => ({ items: world.byUser[user] ?? world.metadata }))
   world.provision.mockReset(); world.provision.mockResolvedValue({ slots: [] })
   world.fetch.mockImplementation(async (user: string, ids: string[]) => ({ items: world.allowed ? ids.map(id => ({ id, revision: 'r1', entry: { id, name: 'Cloud', type: 'api_token', notes: null, service_uri: 'api', is_placeholder: false, credential_data: { http_header_name: 'Authorization', http_header_value: `Bearer ${world.token}` } }, service_account_file: null, ssh_key: null })) : [], refused: world.allowed ? [] : ids.map(id => ({ id, reason: 'no_access' })),
@@ -887,6 +892,50 @@ describe('auto-attach and the Finish setup state', () => {
     expect(setup.setupNeeded).toBe(true)
   })
 
+  it('holds a slot a logged-out account fills: matched by what was recorded, never auto-attached over, named in the setup state', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    world.metadata = [rec('acme-a', 'Acme API', 'acme-api')]
+    register('account-a', { cinnaFullName: 'Alice Smith', username: 'alice@corp.com' })
+    await login('account-a')
+    expect(await service.autoAttach(a.id)).toEqual([{ slot: 'acme', credentialName: 'Acme API' }])
+    world.byUser['account-b'] = [rec('acme-b', 'Acme API (B)', 'acme-api')]
+    await login('account-b')
+    service.signOut('account-a'); await sleep()
+    // The logout cleared the cache, as before: the slot is matched by the recorded type and Service URI.
+    expect([...world.rows.values()].filter(r => r.user_id === 'account-a')).toEqual([])
+    expect(a.credentials[0]).toMatchObject({ satisfied: false, attachment: { state: 'account_unavailable' } })
+    // Held is filled for auto-attach: B's record that fits is not attached beside it.
+    expect(await service.autoAttach(a.id)).toEqual([])
+    expect(group(a, 'account-b')).toEqual([])
+    const setup = service.setupState(a.id), [s] = setup.slots
+    // Held is not missing: Finish setup does not open for it on its own.
+    expect(setup.setupNeeded).toBe(false)
+    expect(s).toMatchObject({ name: 'acme', state: 'account_unavailable', attached: null,
+      account: { key: key('account-a'), userId: 'account-a', name: 'Alice Smith', email: 'alice@corp.com', reason: 'signed_out', current: false, credentials: 1 } })
+    // Another credential stays the user's explicit choice: B's record is still offered.
+    expect(s.options.map(o => [o.ref, o.group])).toEqual([['acme-b', key('account-b')]])
+    // What the record was is never sent: only the account and the counts.
+    expect(JSON.stringify(s.account)).not.toMatch(/Acme|acme-a|acme-api/)
+    expect(JSON.stringify(service.attachments(a.id))).not.toMatch(/Acme|acme-api/)
+  })
+
+  it('keeps the recorded references to what agents attach, and drops them once nothing references them', async () => {
+    const a = kitAgent([slot('acme', 'acme-api')])
+    world.metadata = [rec('acme-a', 'Acme API', 'acme-api'), rec('spare', 'Spare', 'spare-api')]
+    await login('account-a')
+    // Synced but never attached: nothing recorded.
+    expect(world.refs.size).toBe(0)
+    await service.setAttachments(a.id, key('account-a'), ['acme-a'])
+    expect([...world.refs.get(key('account-a'))!]).toEqual([['acme-a', { type: 'api_token', serviceUri: 'acme-api', name: 'Acme API' }]])
+    await login('account-b'); service.signOut('account-a'); await sleep()
+    expect(world.refs.has(key('account-a'))).toBe(true)
+    // Detached while signed out (the inert group only shrinks): its record goes, and the slot reads missing.
+    await service.setAttachments(a.id, key('account-a'), [])
+    expect(world.refs.has(key('account-a'))).toBe(false)
+    expect(a.credentials[0]).toMatchObject({ satisfied: false, attachment: null })
+    expect(service.setupState(a.id).slots[0]).toMatchObject({ state: 'missing', account: null })
+  })
+
   it('attaches nothing when no record fits, or two do, and offers both to pick from', async () => {
     const a = kitAgent([slot('acme', 'acme-api')])
     world.metadata = [rec('x', 'Unrelated', 'elsewhere')]
@@ -1110,6 +1159,19 @@ describe('skill slots: auto-attach, provision-local and the Finish setup state',
     const [s] = service.setupState(a.id).skillSlots
     expect(s).toMatchObject({ slot: 'erp-api', type: 'api_token', skills: ['erp-orders'], state: 'connected', attached: { state: 'ready', credential: { name: 'ERP' } }, options: [] })
     expect(s.attached!.credential).not.toHaveProperty('state')
+  })
+
+  it('treats a skill slot a logged-out account fills as claimed, and names the account in the setup state', async () => {
+    const a = skillAgent([skill('erp-orders', [{ slot: 'erp-api' }])])
+    world.metadata = [rec('erp-a', 'ERP', 'erp-api')]
+    await login('account-a')
+    expect(await service.autoAttachSkills(a.id)).toEqual([{ slot: 'erp-api', credentialName: 'ERP', skill: true }])
+    world.byUser['account-b'] = [rec('erp-b', 'ERP (B)', 'erp-api')]
+    await login('account-b'); service.signOut('account-a'); await sleep()
+    expect(await service.autoAttachSkills(a.id)).toEqual([])
+    expect(group(a, 'account-b')).toEqual([])
+    expect(service.setupState(a.id).skillSlots[0]).toMatchObject({ state: 'account_unavailable', attached: null, typeMismatch: null,
+      account: { userId: 'account-a', reason: 'signed_out' }, options: [{ ref: 'erp-b' }] })
   })
 
   it('matches strictly: never by name, never another type', async () => {
@@ -1553,7 +1615,7 @@ describe('Google OAuth credentials (core-brokered)', () => {
       world.oauthCreate.mockResolvedValue(authorized('g-new'))
       await service.createOAuth(a.id, acc, 'gmail_oauth_readonly')
       await sleep()
-      const events = vi.mocked(publishEvent), locks = vi.spyOn(turnLock, 'withQueuedLock')
+      const events = vi.mocked(publishEvent), locks = vi.spyOn(turnLock, 'withQueuedLock'), listings = vi.spyOn(localAgentService, 'list')
       try {
         events.mockClear(); world.fetch.mockClear()
         const calls = world.list.mock.calls.length
@@ -1561,7 +1623,9 @@ describe('Google OAuth credentials (core-brokered)', () => {
         expect(events).not.toHaveBeenCalled()
         expect(locks).not.toHaveBeenCalled()
         expect(world.fetch).not.toHaveBeenCalled()
-      } finally { locks.mockRestore() }
+        // Nor are the recorded references walked: every agent's state, every 2 s, for nothing.
+        expect(listings).not.toHaveBeenCalled()
+      } finally { locks.mockRestore(); listings.mockRestore() }
       world.metadata = [plain(), gmail('g-new', { revision: 'g2' })]
       await vi.waitFor(() => expect(flowState(a.id)).toBe('attached'), { timeout: 3000 })
       expect(events.mock.calls.some(([name]) => name === SERVICE_CREDENTIALS_CHANGED)).toBe(true)
@@ -1933,5 +1997,175 @@ except CredentialRefreshError as e:
         expect(file((await prepare(a.id)).path!).find(e => e.id === 'g-1').credential_data.access_token).toBe('ya29.newer-JJJ000')
       } finally { release({ items: [], refused: [], current_user: null, owner_identity: null }); turn.release() }
     })
+  })
+})
+
+describe('accounts that cannot supply an agent’s credentials', () => {
+  const alice = { displayName: 'alice', cinnaFullName: 'Alice Smith', username: 'alice@corp.com' }
+  async function attachedUnder(user: string, extra: Record<string, unknown> = {}) {
+    const a = addAgent('kit'); world.metadata = [metadata()]; register(user, extra); await login(user)
+    await service.setAttachments(a.id, key(user), ['cloud-fixture'])
+    return a
+  }
+  it('lists nothing while the account is eligible, then names a signed-out one, and a deleted one by its recorded name', async () => {
+    const a = await attachedUnder('account-a', alice); await login('account-b')
+    expect(service.unavailableAccounts(a.id)).toEqual([])
+    service.signOut('account-a'); await sleep()
+    expect(service.unavailableAccounts(a.id)).toEqual([{ key: key('account-a'), userId: 'account-a', name: 'Alice Smith', email: 'alice@corp.com', host: 'localhost:8000', reason: 'signed_out', current: false, credentials: 1, aiCredential: false }])
+    // Logout drops the cache; the slot is still matched by what was recorded while the account was eligible.
+    expect([...world.rows.values()].filter(r => r.user_id === 'account-a')).toEqual([])
+    expect(service.metadataForPath(a.path)).toMatchObject([{ cloudId: 'cloud-fixture', name: 'Cloud', type: 'api_token', serviceUri: 'api', state: 'account_unavailable' }])
+    world.users.delete('account-a'); await service.refreshAccounts()
+    expect(service.unavailableAccounts(a.id)).toMatchObject([{ userId: 'account-a', name: 'Alice Smith', email: 'alice@corp.com', host: 'localhost:8000', reason: 'removed', current: false }])
+  })
+  it('says locked for a password profile not unlocked, and matches its cached records as unavailable without naming them', async () => {
+    world.unlocked.add('account-a')
+    const a = await attachedUnder('account-a', { ...alice, passwordHash: 'hash' }); await login('account-b')
+    expect(service.unavailableAccounts(a.id)).toEqual([])
+    world.unlocked.clear(); await service.refreshAccounts()
+    const [account] = service.unavailableAccounts(a.id)
+    expect(account).toMatchObject({ key: key('account-a'), reason: 'locked', current: false, credentials: 1 })
+    expect(JSON.stringify(account)).not.toMatch(/cloud-fixture|"Cloud"|api_token/)
+    expect(service.metadataForPath(a.path)).toMatchObject([{ cloudId: 'cloud-fixture', type: 'api_token', serviceUri: 'api', state: 'account_unavailable' }])
+    // Attachments still say only "Signed-out account": the locked profile's metadata stays hidden there.
+    expect(service.attachments(a.id)).toMatchObject([{ state: 'account_unavailable', credential: null }])
+  })
+  it('says the session expired when the token names no account, and asks the current profile to re-authenticate', async () => {
+    const a = await attachedUnder('account-a', alice)
+    world.noTokens.add('account-a'); await service.refreshAccounts()
+    expect(service.unavailableAccounts(a.id)).toMatchObject([{ userId: 'account-a', reason: 'session_expired', current: true }])
+    await login('account-b')
+    expect(service.unavailableAccounts(a.id)).toMatchObject([{ userId: 'account-a', name: 'Alice Smith', reason: 'session_expired', current: false }])
+  })
+  it('answers unknown for a key no profile is known to hold', async () => {
+    const a = addAgent('kit')
+    desktopStateService.patch(a.path, 'kit', { serviceCredentials: { local: [], accounts: { '0123456789abcdef': [{ ref: 'x' }, { ref: 'y' }] } } })
+    expect(service.unavailableAccounts(a.id)).toEqual([{ key: '0123456789abcdef', userId: null, name: null, email: null, host: null, reason: 'unknown', current: false, credentials: 2, aiCredential: false }])
+  })
+  it('keeps a signed-out account’s references and name while a root is not there, and never prunes them one by one', async () => {
+    world.metadata = [metadata(), { ...metadata(), id: 'cloud-2', name: 'Cloud 2', service_uri: 'api2' }]
+    const a = addAgent('kit'), b = addAgent('bare')
+    register('account-a', alice); await login('account-a')
+    await service.setAttachments(a.id, key('account-a'), ['cloud-fixture'])
+    await service.setAttachments(b.id, key('account-a'), ['cloud-2'])
+    await login('account-b'); service.signOut('account-a'); await sleep()
+    expect([...world.refs.get(key('account-a'))!.keys()]).toEqual(['cloud-fixture', 'cloud-2'])
+    // The volume holding both agents is unmounted: the listing has neither, and nothing is forgotten.
+    world.roots = [{ exists: false }]; world.agents = []
+    await service.refreshAccounts(); await service.sync(); await sleep()
+    expect([...world.refs.get(key('account-a'))!.keys()]).toEqual(['cloud-fixture', 'cloud-2'])
+    expect(world.recorded.get(key('account-a'))).toMatchObject({ userId: 'account-a', name: 'Alice Smith' })
+    // Back, but one agent is missing from the listing (in a vault): the signed-out account's cache is
+    // gone, so its other reference could never be recorded again, and it stays.
+    world.roots = [{ exists: true }]; world.agents = [a]
+    await service.refreshAccounts(); await service.sync(); await sleep()
+    expect([...world.refs.get(key('account-a'))!.keys()]).toEqual(['cloud-fixture', 'cloud-2'])
+    world.agents = [a, b]
+    expect(service.metadataForPath(a.path)).toMatchObject([{ cloudId: 'cloud-fixture', state: 'account_unavailable' }])
+  })
+  it('names only the accounts agents attach under, and forgets a name and its references once nothing does', async () => {
+    const a = await attachedUnder('account-a', alice)
+    register('account-b', { cinnaFullName: 'Bob' }); await login('account-b')
+    // Account B has nothing attached: no name of it is kept.
+    expect([...world.recorded.keys()]).toEqual([key('account-a')])
+    // A name left from before (a profile deleted since) that nothing references goes at the next refresh.
+    world.recorded.set('feedfacefeedface', { userId: 'gone', name: 'Gone', email: 'gone@corp.com', serverUrl: 'http://localhost:8000' })
+    service.retire(); await service.activate('account-b'); await sleep()
+    expect(world.recorded.has('feedfacefeedface')).toBe(false)
+    // The profile is deleted: its name stays, since the agent still attaches under it.
+    service.signOut('account-a'); world.users.delete('account-a'); await service.refreshAccounts()
+    expect(world.recorded.get(key('account-a'))).toMatchObject({ name: 'Alice Smith' })
+    // Detached: references and name both go.
+    await service.setAttachments(a.id, key('account-a'), [])
+    expect(world.refs.has(key('account-a'))).toBe(false)
+    expect(world.recorded.has(key('account-a'))).toBe(false)
+  })
+  it('keeps a signed-out account’s references and name while a root is there but cannot be listed, or a listed folder is gone', async () => {
+    const a = await attachedUnder('account-a', alice); await login('account-b')
+    service.signOut('account-a'); await sleep()
+    // EPERM, or `Local/` gone mid branch switch: the root exists, its agents are missing from the listing.
+    world.roots = [{ exists: true, listable: false }]; world.agents = []
+    await service.refreshAccounts(); await service.sync(); await sleep()
+    expect(world.refs.has(key('account-a'))).toBe(true)
+    expect(world.recorded.get(key('account-a'))).toMatchObject({ name: 'Alice Smith' })
+    // A cached listing that still names the agent, whose folder is gone for the moment.
+    world.roots = [{ exists: true, listable: true }]; world.agents = [a]
+    const aside = `${a.path}-aside`; renameSync(a.path, aside)
+    try {
+      await service.refreshAccounts(); await service.sync(); await sleep()
+      expect(world.refs.has(key('account-a'))).toBe(true)
+      expect(world.recorded.get(key('account-a'))).toMatchObject({ name: 'Alice Smith' })
+    } finally { renameSync(aside, a.path) }
+  })
+  it('does not forget a name while a root is not there', async () => {
+    await attachedUnder('account-a', alice); await login('account-b')
+    world.roots = [{ exists: false }]; world.agents = []
+    service.signOut('account-a'); world.users.delete('account-a'); await service.refreshAccounts()
+    expect(world.recorded.get(key('account-a'))).toMatchObject({ name: 'Alice Smith' })
+    expect(world.refs.has(key('account-a'))).toBe(true)
+  })
+  it('answers unknown, named as recorded, for an account whose profile was signed in again elsewhere', async () => {
+    const a = await attachedUnder('account-a', alice); await login('account-b')
+    // Rebound to another server: same profile id, another account key.
+    world.users.get('account-a').cinnaServerUrl = 'http://other.test:9000'
+    await service.refreshAccounts()
+    const expected = { key: key('account-a'), userId: null, name: 'Alice Smith', email: 'alice@corp.com', host: 'localhost:8000', reason: 'unknown', current: false, credentials: 1, aiCredential: false }
+    expect(service.unavailableAccounts(a.id)).toEqual([expected])
+    // Current, too: re-authenticating it would not bring the old account back.
+    await login('account-a')
+    expect(service.unavailableAccounts(a.id)).toEqual([expected])
+    // With no token to compare, the server it was recorded on decides.
+    world.noTokens.add('account-a'); await service.refreshAccounts()
+    expect(service.unavailableAccounts(a.id)).toEqual([expected])
+    // The rebound profile's cache is not the old account's: the slot is matched by what was recorded.
+    expect(service.metadataForPath(a.path)).toMatchObject([{ cloudId: 'cloud-fixture', name: 'Cloud', state: 'account_unavailable' }])
+  })
+  it('keeps one name for a key two unavailable profiles derive, instead of rewriting it each refresh', async () => {
+    const a = await attachedUnder('account-a', alice)
+    // A recreated profile derives the same key; signed in, it holds it and names it.
+    register('new-account-a', { cinnaFullName: 'Alice Again', username: 'alice@corp.com' }); await login('new-account-a')
+    expect(world.recorded.get(key('account-a'))).toMatchObject({ userId: 'new-account-a', name: 'Alice Again' })
+    service.signOut('account-a'); await sleep()
+    await login('account-b'); service.signOut('new-account-a'); await sleep()
+    const writes = vi.spyOn(credentialAccountRepo, 'set')
+    try {
+      await service.refreshAccounts(); await service.refreshAccounts()
+      expect(writes).not.toHaveBeenCalled()
+    } finally { writes.mockRestore() }
+    expect(world.recorded.get(key('account-a'))).toMatchObject({ userId: 'new-account-a', name: 'Alice Again' })
+    expect(service.unavailableAccounts(a.id)).toMatchObject([{ userId: 'new-account-a', name: 'Alice Again' }])
+  })
+  it('applies the eligible set without waiting for other profiles’ tokens, read only to name accounts', async () => {
+    world.unlocked.add('account-a')
+    const a = await attachedUnder('account-a', { ...alice, passwordHash: 'hash' }); await login('account-b')
+    world.unlocked.clear(); await service.refreshAccounts()
+    expect(service.attachments(a.id)[0].state).toBe('account_unavailable')
+    // Another, ineligible profile whose keystore read does not answer yet.
+    register('account-c'); service.signOut('account-c')
+    let release!: () => void
+    world.hold.set('account-c', new Promise<void>(resolve => { release = resolve }))
+    world.unlocked.add('account-a')
+    const refreshed = service.refreshAccounts(); await sleep()
+    expect(service.attachments(a.id)[0].state).not.toBe('account_unavailable')
+    release(); await refreshed
+  })
+  it('says a rebound profile no longer holds its old account at once, not after the other profiles’ tokens are read', async () => {
+    const a = await attachedUnder('account-a', alice)
+    // Another, ineligible profile whose keystore read does not answer yet.
+    register('account-c'); service.signOut('account-c')
+    let release!: () => void
+    world.hold.set('account-c', new Promise<void>(resolve => { release = resolve }))
+    // Signed in again to another server: same profile id, another account key.
+    world.users.get('account-a').cinnaServerUrl = 'http://other.test:9000'
+    const refreshed = service.refreshAccounts(); await sleep()
+    // Open accounts from the first answer on, never Re-authenticate for the old account first.
+    expect(service.unavailableAccounts(a.id)).toMatchObject([{ key: key('account-a'), userId: null, reason: 'unknown', current: false }])
+    release(); await refreshed
+    expect(service.unavailableAccounts(a.id)).toMatchObject([{ key: key('account-a'), userId: null, reason: 'unknown', current: false }])
+  })
+  it('names the profile an AI credential was provisioned to: not the current one, or none for the current one', async () => {
+    register('account-b', { cinnaFullName: 'Bob' }); await login('account-b'); await login('account-a')
+    expect(service.profileAccount('account-b')).toMatchObject({ key: key('account-b'), userId: 'account-b', name: 'Bob', reason: 'other_profile', aiCredential: true, credentials: 0 })
+    expect(service.profileAccount('account-a')).toBeNull()
   })
 })

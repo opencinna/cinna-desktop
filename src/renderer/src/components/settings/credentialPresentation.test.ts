@@ -27,7 +27,8 @@ describe('credentialHealth', () => {
     expect(credentialHealth(dto, 'incomplete')).toMatchObject({ tone: 'warning' })
     expect(credentialHealth(null, 'missing')).toMatchObject({ tone: 'error' })
     expect(credentialHealth(dto, 'local_use_not_allowed')).toEqual({ tone: 'error', label: 'The owner must allow use on your computer' })
-    expect(credentialHealth(null, 'account_unavailable')).toMatchObject({ tone: 'error' })
+    // A warning, as the composer and Finish setup tell an account that cannot supply it now.
+    expect(credentialHealth(null, 'account_unavailable')).toEqual({ tone: 'warning', label: 'Account unavailable' })
     expect(credentialHealth(dto, 'pending_authorization')).toEqual({ tone: 'warning', label: 'Waiting for Google sign-in' })
     expect(credentialHealth(dto, 'reauth_required')).toEqual({ tone: 'error', label: 'Google access expired' })
   })

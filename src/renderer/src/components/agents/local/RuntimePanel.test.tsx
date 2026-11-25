@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import type { WorkComplexity } from '../../../../../shared/modelFamilies'
@@ -97,6 +97,23 @@ vi.mock('../../../hooks/useModels', () => ({
   useModels: () => ({ data: models, isError: modelsFailed })
 }))
 vi.mock('../../../hooks/useProviders', () => ({ useProviders: () => ({ data: providers }) }))
+/** Main's account answer for the summary badge; `asked` records whether the panel asked for it. */
+const accountAnswer = vi.hoisted(() => ({ data: undefined as unknown, isError: false, asked: [] as (string | null)[], setup: undefined as unknown }))
+vi.mock('../../../hooks/useServiceCredentials', () => ({
+  useAgentCredentialAccounts: (folder: { id: string } | null) => {
+    accountAnswer.asked.push(folder?.id ?? null)
+    return folder ? { data: accountAnswer.data, isError: accountAnswer.isError } : { data: undefined, isError: false }
+  },
+  /** Main's per-slot setup answer, which names the account a held secret comes from. */
+  useCredentialSetup: (_id: string, enabled: boolean) => ({ data: enabled ? accountAnswer.setup : undefined })
+}))
+/** The account line's action: the shared profile switch, refused here so its failure can be seen. */
+const switchLogin = vi.hoisted(() => vi.fn(async (): Promise<unknown> => ({ success: false, error: 'The profile could not be opened here.' })))
+vi.mock('../../../hooks/useAuth', () => ({
+  useUsers: () => ({ data: [{ id: 'u-a', hasPassword: false }] }),
+  useLogin: () => ({ mutateAsync: switchLogin, isPending: false }),
+  useCinnaReauth: () => ({ mutate: vi.fn(), isPending: false, error: null, data: undefined })
+}))
 /**
  * Detection decides whether the Claude Agent option is offered at all, so it is
  * a fixture rather than a constant: an absent `claude` must mean an absent
@@ -953,6 +970,23 @@ describe('RuntimePanel', () => {
       } as unknown as LocalAgentDto
     }
 
+    it('draws a secret an unavailable account holds with that account’s label, and leaves it out of "Add them"', () => {
+      const alice = { key: 'k-a', userId: 'u-a', name: 'Alice Whitfield', email: 'alice@corp.com', host: 'core.corp', reason: 'locked', current: false, credentials: 1, aiCredential: false }
+      accountAnswer.setup = { slots: [{ name: 'Vendor Portal', state: 'account_unavailable', account: alice }] }
+      try {
+        const held = withSecret()
+        held.credentials[0] = { ...held.credentials[0], attachment: { credentialId: 'r', state: 'account_unavailable' } }
+        render(<RuntimePanel agent={held} />)
+        const label = screen.getByTestId('held-slot-label')
+        expect(label.textContent).toBe('Alice is locked')
+        expect(label.className).toContain('--color-warning')
+        expect(label.parentElement!.getAttribute('title')).toBe('Alice is locked: its credential comes from that account. (Alice Whitfield <alice@corp.com> core.corp)')
+        // Nothing to add in the file: the only unsatisfied secret is held.
+        expect(screen.queryByText('Add them in credentials/.env')).toBeNull()
+        expect(screen.getByText('Edit credentials/.env')).toBeTruthy()
+      } finally { accountAnswer.setup = undefined }
+    })
+
     it('opens credentials/.env itself, not the folder it sits in', () => {
       render(<RuntimePanel agent={withSecret()} />)
       fireEvent.click(screen.getByText('Add them in credentials/.env'))
@@ -1637,6 +1671,52 @@ describe('runtime badges on the agent chat page', () => {
     expect(screen.getByText('OpenCode with Anthropic')).toBeTruthy()
     expect(screen.getByTitle('Model: Claude Sonnet 4.5')).toBeTruthy()
     expect(screen.queryByRole('combobox')).toBeNull()
+  })
+  describe('an AI credential another profile provisioned', () => {
+    const alice = { key: 'k-a', userId: 'u-a', name: 'Alice Smith', email: 'alice@corp.com', host: 'core.corp', reason: 'signed_out', current: false, credentials: 0, aiCredential: true }
+    beforeEach(() => { accountAnswer.data = undefined; accountAnswer.isError = false; accountAnswer.asked = [] })
+    it('names that account, as the composer does, instead of "AI credential needed"', () => {
+      accountAnswer.data = { accounts: [alice] }
+      render(<RuntimePanel agent={agent({ credential: 'Team key' })} compact />)
+      const badge = screen.getByText('Alice is signed out')
+      expect(badge.getAttribute('title')).toBe('Alice is signed out: its AI credential comes from that account. (Alice Smith <alice@corp.com> core.corp)')
+      expect(screen.queryByText('AI credential needed')).toBeNull()
+    })
+    it('says the same on the full panel’s status line, with the same action, instead of "not configured"', async () => {
+      accountAnswer.data = { accounts: [alice] }
+      render(<RuntimePanel agent={agent({ credential: 'Team key' })} />)
+      const line = screen.getByText('Alice is signed out')
+      expect(line.className).toContain('--color-warning')
+      expect(screen.queryByText(/not configured on this machine|No AI credential/)).toBeNull()
+      // The composer's button, whose refusal stands in for the label, cause first.
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to Alice' }))
+      await waitFor(() => expect(switchLogin).toHaveBeenCalledWith({ userId: 'u-a' }))
+      const alert = await screen.findByRole('alert')
+      expect(alert.textContent).toBe('Switch failed: The profile could not be opened here.')
+      expect(alert.getAttribute('title')).toBe('Couldn’t switch to Alice Smith <alice@corp.com> core.corp: The profile could not be opened here.')
+    })
+    it('keeps the full panel’s status line silent until main has answered', () => {
+      const view = render(<RuntimePanel agent={agent({ credential: 'Team key' })} />)
+      expect(screen.queryByText(/not configured on this machine/)).toBeNull()
+      accountAnswer.data = { accounts: [] }
+      view.rerender(<RuntimePanel agent={agent({ credential: 'Team key' })} />)
+      expect(screen.getByText(/not configured on this machine/)).toBeTruthy()
+    })
+    it('waits for main’s answer, and says "needed" once it names no account or fails', () => {
+      const view = render(<RuntimePanel agent={agent({ credential: 'Team key' })} compact />)
+      expect(screen.queryByText('AI credential needed')).toBeNull()
+      accountAnswer.data = { accounts: [] }
+      view.rerender(<RuntimePanel agent={agent({ credential: 'Team key' })} compact />)
+      expect(screen.getByText('AI credential needed')).toBeTruthy()
+      accountAnswer.data = undefined
+      accountAnswer.isError = true
+      view.rerender(<RuntimePanel agent={agent({ credential: 'Team key' })} compact />)
+      expect(screen.getByText('AI credential needed')).toBeTruthy()
+    })
+    it('asks only when the summary would say the credential is needed', () => {
+      render(<RuntimePanel agent={agent({ credential: 'Anthropic' })} compact />)
+      expect(accountAnswer.asked.every((id) => id === null)).toBe(true)
+    })
   })
 })
 

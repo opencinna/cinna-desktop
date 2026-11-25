@@ -693,19 +693,21 @@ export const localAgentService = {
     const homePath = agentsHomeService.homePath()
     const roots = agentsHomeService.rootRows(userId)
     const agents: LocalAgentDto[] = []
+    const unlisted = new Set<string>()
     for (const root of roots) {
       // Cached: the watcher is what notices a change, and it marks the root
       // dirty. Re-walking every folder on every call blocked the main thread
       // for as long as the user's largest workshop took to validate — and the
       // renderer refetches on every change push, so the bursts compounded.
       const result = scannerService.scanRootCached(userId, root)
+      if (result.rootMissing) unlisted.add(root.id)
       // A vault agent's host copy (still there after Move to vault…) is not
       // an agent of its own: same manifest id, and the vault owns the row.
       agents.push(...result.agents.filter((agent) => !isVaultAgent(agent.id)))
       watcherService.watchRoot(root)
     }
     return {
-      roots: agentsHomeService.rootDtos(userId),
+      roots: agentsHomeService.rootDtos(userId).map((root) => ({ ...root, listable: !unlisted.has(root.id) })),
       // Vault agents come from their rows: they have no folder to scan.
       agents: options.includeVault
         ? [...this.overlayEnabled(userId, agents), ...vaultAgentDtos(userId, roots)]

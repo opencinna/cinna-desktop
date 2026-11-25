@@ -14,7 +14,7 @@
  *
  * Pure: skill rows and attachment metadata in, states out. No values.
  */
-import type { LocalAgentSkill, LocalAgentSkillCredential } from '../../../shared/localAgents'
+import { ACCOUNT_UNAVAILABLE, type LocalAgentSkill, type LocalAgentSkillCredential } from '../../../shared/localAgents'
 import type { ServiceCredentialDto } from '../../../shared/serviceCredentials'
 import type { SlotSpec } from './slotMatch'
 
@@ -80,8 +80,11 @@ export function judgeSkillSlot<T extends AttachedMetadata>(
   attached: readonly T[]
 ): { attachment: T | null; filled: boolean; typeMismatch: T | null } {
   const matching = attached.filter((record) => strictlyMatches(slot, record))
-  const attachment = matching.find((record) => record.state === 'ready') ?? matching[0] ?? null
-  const typeMismatch = matching.length === 0 ? attached.find((record) => record.serviceUri === slot.slot) ?? null : null
+  // A record of an account that cannot supply it now (`account_unavailable`, scan only) is judged
+  // last: it never fills the slot, and it names the slot as held rather than missing.
+  const attachment = matching.find((record) => record.state === 'ready')
+    ?? matching.find((record) => record.state !== ACCOUNT_UNAVAILABLE) ?? matching[0] ?? null
+  const typeMismatch = matching.length === 0 ? attached.find((record) => record.serviceUri === slot.slot && record.state !== ACCOUNT_UNAVAILABLE) ?? null : null
   return { attachment, filled: attachment?.state === 'ready', typeMismatch }
 }
 

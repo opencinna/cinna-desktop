@@ -1,4 +1,4 @@
-import type { AutoAttachedCredential, CredentialSetupDto, GoogleOAuthType, OAuthConnectFlow, ServiceCredentialsChangedPayload, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
+import type { AgentCredentialAccounts, AutoAttachedCredential, CredentialSetupDto, GoogleOAuthType, OAuthConnectFlow, ServiceCredentialsChangedPayload, ServiceCredentialDto, ServiceCredentialInput, ServiceCredentialAttachmentDto, ServiceCredentialAttachOptions, ServiceCredentialResult } from '../shared/serviceCredentials'
 import type { RuntimeModelCatalog, RuntimeModelCatalogRefresh } from '../shared/runtimeModelCatalog'
 import type { AiFunctionsBackendStatus } from '../shared/aiFunctions'
 import type { ChatModeRuntime } from '../shared/chatModeRuntime'
@@ -694,6 +694,11 @@ const api = {
     attach: (id: string, group: string, ref: string): Promise<ServiceCredentialResult<ServiceCredentialAttachmentDto[]>> => ipcRenderer.invoke('service-credentials:attach', id, group, ref),
     /** Each credential slot's state and the active account's records that fit it, for the Finish setup dialog. */
     setupState: (id: string): Promise<ServiceCredentialResult<CredentialSetupDto>> => ipcRenderer.invoke('service-credentials:setup-state', id),
+    /**
+     * The Cinna accounts the agent's credentials come from (attached Core credentials, its provisioned AI credential)
+     * that cannot supply them now: signed out, locked, session expired, removed, or not the current profile. Counts only.
+     */
+    unavailableAccounts: (id: string): Promise<ServiceCredentialResult<AgentCredentialAccounts>> => ipcRenderer.invoke('service-credentials:unavailable-accounts', id),
     /** Fill the agent's skill slots exactly one record fits, after `provision-local` (Finish setup opening). Answers what it attached. */
     setupSkills: (id: string): Promise<ServiceCredentialResult<AutoAttachedCredential[]>> => ipcRenderer.invoke('service-credentials:setup-skills', id),
     /**

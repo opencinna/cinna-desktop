@@ -36,6 +36,7 @@
 | AuthGate | `src/renderer/src/App.tsx` | Startup auth check, wraps app with login gate |
 | UserMenu | `src/renderer/src/components/auth/UserMenu.tsx` | Title bar dropdown — "Guest" badge on default user |
 | LoginScreen | `src/renderer/src/components/auth/LoginScreen.tsx` | Full-screen password prompt on restart — wraps `PasswordUnlockForm` |
+| useSwitchProfile | `src/renderer/src/components/auth/useSwitchProfile.tsx` | The one profile switch (`login({userId})`, then `LoginPrompt` when main refuses without a password), shared by `UserMenu` and the composer's account rows; `switchTo(userId, hasPassword, onSwitched?)` |
 | LoginPrompt | `src/renderer/src/components/auth/LoginPrompt.tsx` | Full-screen login overlay for user switching — wraps `PasswordUnlockForm` |
 | PasswordUnlockForm | `src/renderer/src/components/auth/PasswordUnlockForm.tsx` | Shared OS-style centered avatar + password form (used by both LoginScreen and LoginPrompt) |
 | RegisterForm | `src/renderer/src/components/auth/RegisterForm.tsx` | Multi-step account creation modal with horizontal type-selection cards (local + Cinna) — see [Cinna Accounts Tech](../cinna_accounts/cinna_accounts_tech.md) |
@@ -98,6 +99,7 @@ Added to: `llm_providers`, `mcp_providers`, `chats`, `chat_modes`, `agents`
 - `authService.logout()` — `clearUnlocks()` + `activate('__default__')`
 - `authService.updateUser(input)` — display name + password set/change/remove (rejects `__default__`)
 - `authService.deleteAccount(input)` — verifies password, deactivates if current, clears Cinna tokens, `userRepo.deleteWithCascade()`, re-activates `__default__` if was current
+  - Does **not** clear `db/credentialAccounts.ts`' rows (`__credentialAccount:<key>`, `__credentialAccountRefs:<key>`): they outlive the profile while any folder agent references the account key, and `serviceCredentialService` prunes them ([Service Credentials](../../agents/service_credentials/README.md#unavailable-accounts))
 - `authService.getStartup(lastUserId)` — resolves "needs login vs auto-activate" based on user existence + password
 
 ### `src/main/db/users.ts`

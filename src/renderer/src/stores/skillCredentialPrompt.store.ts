@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { LocalAgentDto, LocalAgentSkill, LocalAgentSkillCredential } from '../../../shared/localAgents'
+import { heldByUnavailableAccount, type LocalAgentDto, type LocalAgentSkill, type LocalAgentSkillCredential } from '../../../shared/localAgents'
 
 /**
  * The skills the composer should prompt for, per agent, after Add to agent or
@@ -74,7 +74,8 @@ export function skillsLackingCredentials(
 ): { skill: LocalAgentSkill; missing: LocalAgentSkillCredential[] }[] {
   return names.flatMap((name) => {
     const skill = folder.skills?.find((s) => s.name === name && s.deliverable)
-    const missing = skill?.credentials.filter((slot) => slot.filled === false) ?? []
+    // A slot an account that cannot supply it now holds is the composer's account row's to tell.
+    const missing = skill?.credentials.filter((slot) => slot.filled === false && !heldByUnavailableAccount(slot)) ?? []
     return skill && missing.length > 0 ? [{ skill, missing }] : []
   })
 }
