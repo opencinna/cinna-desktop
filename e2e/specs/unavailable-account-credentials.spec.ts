@@ -13,15 +13,18 @@ import type { AgentRootDto, LocalAgentDto } from '../../src/shared/localAgents'
  * `docs/agents/service_credentials/README.md` "Unavailable accounts"), against the
  * **real** local cinna-core, model-free: the one turn runs on the scripted ACP engine.
  *
+ * Part of `make e2e` whenever `CINNA_E2E_SERVER_URL` / `_EMAIL` / `_PASSWORD` are set, in the
+ * environment or in the repo's `.env` (which `e2e/playwright.config.ts` loads; the environment
+ * wins), like the other core-backed specs; without them, or when the server is not usable, every
+ * test skips with the reason. One spec:
+ *
  * ```
  * npx electron-vite build
- * set -a; source <file holding the local admin credentials>; set +a
- * CINNA_UNAVAILABLE_ACCOUNT_LIVE=1 CINNA_E2E_SERVER_URL=http://localhost:8000 \
- *   CINNA_E2E_EMAIL="$CINNA_LOCAL_ADMIN_EMAIL" CINNA_E2E_PASSWORD="$CINNA_LOCAL_ADMIN_PASSWORD" \
- *   make e2e-one SPEC=e2e/specs/unavailable-account-credentials.spec.ts
+ * make e2e-one SPEC=e2e/specs/unavailable-account-credentials.spec.ts
  * ```
  *
- * The `CINNA_E2E_*` account must be a **superuser**, used only to create one
+ * The `CINNA_E2E_*` account must be a **superuser** (checked first: the tests skip, saying so,
+ * when it is not), used only to create one
  * throwaway user (`e2e-unavailable-<time>-<hex>@example.com`, full name `Alicia E2E
  * unavailable account (delete me)`, so the app calls it "Alicia") and to delete
  * exactly that id afterwards (`DELETE /users/{id}`, then `GET` must answer 404).
@@ -42,7 +45,6 @@ import type { AgentRootDto, LocalAgentDto } from '../../src/shared/localAgents'
  * and vault agents.
  */
 
-const enabled = process.env.CINNA_UNAVAILABLE_ACCOUNT_LIVE === '1'
 const config = liveCinnaConfig()
 
 const FIRST = 'Alicia'
@@ -187,7 +189,7 @@ const rendererView = (cinna: CinnaApp, agentId: string) => cinna.page.evaluate(a
 ]), agentId)
 
 test.describe('credentials from an unavailable Cinna account (real cinna-core)', () => {
-  test.skip(!enabled || !config, 'set CINNA_UNAVAILABLE_ACCOUNT_LIVE=1 and CINNA_E2E_SERVER_URL / _EMAIL / _PASSWORD (a superuser on a local cinna-core)')
+  test.skip(!config, 'no live cinna-core configured: set CINNA_E2E_SERVER_URL / _EMAIL / _PASSWORD in .env (a superuser on a local cinna-core)')
   test.describe.configure({ mode: 'serial' })
 
   let fake: ScriptAcpEngine
@@ -197,8 +199,10 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
   test.beforeAll(async () => {
     const live = config as LiveCinnaConfig
     const ready = await preflight(live)
-    if (!ready.ok) throw new Error(`live cinna-core not usable: ${ready.reason}`)
+    test.skip(!ready.ok, ready.ok ? '' : `live cinna-core not usable: ${ready.reason}`)
     const admin = await signIn(live)
+    const me = await api(admin, '/users/me')
+    test.skip(me.body?.is_superuser !== true, `CINNA_E2E_EMAIL must be a superuser on ${live.serverUrl}: this spec creates a throwaway user and deletes it by id`)
     const tag = `${Date.now()}-${randomBytes(3).toString('hex')}`
     const email = `e2e-unavailable-${tag}@example.com`
     const password = `${randomBytes(18).toString('base64url')}Aa1!`
