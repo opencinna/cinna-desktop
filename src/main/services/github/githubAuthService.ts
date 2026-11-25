@@ -29,6 +29,8 @@ export const COVERAGE_MISS_REFRESH_MS = 60_000
 export const VISIBILITY_REFRESH_MS = COVERAGE_MISS_REFRESH_MS
 /** At most this many repositories' visibility are kept per profile (the oldest go first). */
 export const VISIBILITY_CACHE_MAX = 500
+/** A device-flow poll that fails (unreachable, 5xx) is logged at most this often, with a count. */
+export const DEVICE_POLL_FAILURE_LOG_MS = 30_000
 /** Both mean the refresh token is dead (rotated out, revoked or expired): Reconnect GitHub. */
 const DEAD_REFRESH = new Set(['bad_refresh_token', 'incorrect_client_credentials'])
 
@@ -87,6 +89,8 @@ interface Profile {
   refreshing?: Promise<GithubTokenResult>
   coverage: { installs: GithubCoverage[]; fetchedAt: number } | null
   coverageFlight?: Promise<boolean>
+  /** Bumped whenever the cached coverage is thrown away: a read started before it never lands, and is never joined, after it. */
+  coverageEpoch?: number
   lastMissRefresh: number
   /**
    * Per repository (lowercased), whether it is public: a definite answer is kept for
@@ -187,6 +191,17 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
   function clearCoverage(p: Profile): void {
     p.coverage = null
     p.visibility = new Map()
+    p.coverageEpoch = (p.coverageEpoch ?? 0) + 1
+    p.coverageFlight = undefined
+  }
+
+  /**
+   * The installations cache, after the read in flight when the cache is empty (just after a
+   * sign-in, while its first read runs): an empty cache must not answer "not installed".
+   */
+  async function settledCoverage(p: Profile): Promise<Profile['coverage']> {
+    if (!p.coverage && p.coverageFlight) await p.coverageFlight
+    return p.coverage
   }
 
   function grantOf(a: Account & { accessToken: string }): GithubTokenGrant {
@@ -273,6 +288,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     const p = profile(userId)
     if (p.coverageFlight) return p.coverageFlight
     const gen = p.gen
+    const epoch = p.coverageEpoch ?? 0
     const flight = (async (): Promise<boolean> => {
       const t = await token(userId)
       if (t.kind !== 'token') return false
@@ -282,8 +298,11 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
         logger.warn('GitHub installations could not be read', { userId, status: (error as { status?: unknown }).status ?? null })
         return false
       }
-      if (p.gen !== gen) return false
+      // Another account signed in (or this one out) while the read ran: its answer is not this account's.
+      if (p.gen !== gen || (p.coverageEpoch ?? 0) !== epoch) return false
       p.coverage = { installs, fetchedAt: now() }
+      // Just read: a miss within the window answers from it instead of reading again.
+      p.lastMissRefresh = now()
       needs.clearCovered(userId, repo => coverageOf(installs, repo).answer === 'covered')
       publish(userId)
       return true
@@ -321,6 +340,8 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     flow.abort.abort()
     p.device = null
     clearCoverage(p)
+    // A new sign-in: its installations were never read, so the first lookup may read them.
+    p.lastMissRefresh = -Infinity
     needs.clearAccount(userId)
     logger.info('Signed in to GitHub', { userId })
     publish(userId)
@@ -332,13 +353,23 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     const p = profile(userId)
     const current = (): boolean => p.device === flow && p.gen === flow.gen && !flow.abort.signal.aborted
     let delay = interval * 1000
+    let failures = 0, lastFailureLog = -Infinity
     while (true) {
       await wait(delay, flow.abort.signal)
       if (!current()) return
       if (now() >= flow.dto.expiresAt) { endDevice(userId, flow, 'expired'); return }
       let body: Record<string, unknown>
       try { body = await pollDeviceToken(deps.fetch, deviceCode) }
-      catch { continue /* Not reachable now: the code is still valid until it expires. */ }
+      catch (error) {
+        // Not reachable now: the code is still valid until it expires. Logged with the HTTP status
+        // and the error's class only (never a code or token), the first time and then at most every 30 s.
+        failures++
+        if (now() - lastFailureLog >= DEVICE_POLL_FAILURE_LOG_MS) {
+          lastFailureLog = now()
+          logger.warn('A GitHub sign-in poll failed; still polling', { userId, status: (error as { status?: unknown }).status ?? null, error: error instanceof Error ? error.constructor.name : typeof error, failures })
+        }
+        continue
+      }
       if (!current()) return
       if (typeof body.access_token === 'string') { await completeDevice(userId, flow, body); return }
       const code = safeCode(body.error)
@@ -453,12 +484,14 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     token,
     /**
      * Whether the profile's installations cover `owner/repo`: from the cache, refreshed when it has
-     * never been read or, at most once a minute, when it does not cover the repo. Null when it could
-     * not be read at all.
+     * never been read or, at most once a minute, when it does not cover the repo. An empty cache
+     * with a read in flight (just after a sign-in) waits for that read. Null when it could not be
+     * read at all.
      */
     async coverageFor(userId: string, repo: string): Promise<{ answer: CoverageAnswer; installUrl: string } | null> {
       const p = profile(userId)
-      let cached = p.coverage ? coverageOf(p.coverage.installs, repo) : null
+      const settled = await settledCoverage(p)
+      let cached = settled ? coverageOf(settled.installs, repo) : null
       if (cached?.answer !== 'covered' && now() - p.lastMissRefresh >= COVERAGE_MISS_REFRESH_MS) {
         p.lastMissRefresh = now()
         await refreshCoverage(userId)
@@ -516,7 +549,8 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
       } else if (kind === 'install') {
         const repo = parseRepo(repoValue)
         if (!repo) return
-        const c = p.coverage ? coverageOf(p.coverage.installs, repo) : { answer: 'not_installed' as const }
+        const coverage = await settledCoverage(p)
+        const c = coverage ? coverageOf(coverage.installs, repo) : { answer: 'not_installed' as const }
         if (c.answer === 'covered') return
         changed = needs.recordInstall(userId, repo, installUrlFor(c.answer, c.install), agentId, chatless !== null)
       }

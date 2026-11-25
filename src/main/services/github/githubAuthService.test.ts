@@ -87,6 +87,32 @@ describe('device flow', () => {
     expect((await t.service.status(U)).device).toBeNull()
   })
 
+  it('logs a failed poll with its status and class only, the first one and then at most every 30 s with a count', async () => {
+    let clock = 1_000_000_000_000
+    const t = makeService({ now: () => clock })
+    const signedIn = vi.fn()
+    t.service.setOnSignedIn(signedIn)
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', new Error('ECONNRESET'), { status: 502, json: {} }, new Error('ECONNRESET'), { status: 503, json: {} }, { json: TOKENS })
+    t.github.on('/user', { json: USER })
+    t.github.on('/user/installations?per_page=100', { json: { installations: [] } })
+    const inner = t.github.fetch.getMockImplementation()!
+    let polls = 0
+    t.github.fetch.mockImplementation(async (input: string, init?: RequestInit) => {
+      // The third and later polls come 31 s apart.
+      if (input.endsWith('/login/oauth/access_token') && ++polls >= 3) clock += 31_000
+      return inner(input, init)
+    })
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(() => expect(signedIn).toHaveBeenCalledWith(U))
+    const logged = (t.log.text().match(/A GitHub sign-in poll failed; still polling/g) ?? []).length
+    // Poll 1 logs, poll 2 (same instant) does not, polls 3 and 4 (31 s apart) do.
+    expect(logged).toBe(3)
+    expect(t.log.text()).toContain('"status":null,"error":"GithubTransientError","failures":1')
+    expect(t.log.text()).toContain('"status":503,"error":"GithubTransientError","failures":4')
+    for (const secret of [DEVICE.device_code, DEVICE.user_code, TOKENS.access_token]) expect(t.log.text()).not.toContain(secret)
+  })
+
   it('refuses to start for a profile that cannot serve', async () => {
     const t = makeService({ access: { agentHolder: () => ({ userId: U, chatless: null }), available: () => false } })
     await expect(t.service.startDeviceFlow(U)).rejects.toThrow(/locked/)
@@ -314,6 +340,106 @@ describe('coverage', () => {
     clock += 61_000
     await t.service.coverageFor(U, 'carol/x')
     expect(t.github.count('/user/installations?per_page=100&page=2')).toBe(2)
+  })
+})
+
+describe('coverage just after a sign-in', () => {
+  /** Holds every installations read until the returned release is called. */
+  function holdInstallations(t: ReturnType<typeof makeService>): () => void {
+    const inner = t.github.fetch.getMockImplementation()!
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    t.github.fetch.mockImplementation(async (input: string, init?: RequestInit) => {
+      if (input.includes('/user/installations')) await gate
+      return inner(input, init)
+    })
+    return release
+  }
+
+  it('a lookup or an install need on the empty cache waits for the read in flight, even within a minute of a miss', async () => {
+    let clock = 1_000_000_000_000
+    const t = makeService({ now: () => clock })
+    t.storage.seed(U, connected({ expiresAt: clock + MIN_TOKEN_TTL_MS + 30_000 }))
+    t.github.on('/user/installations?per_page=100', { json: { installations: [install(1, 'alice', 'User', 'all')] } })
+    t.github.on('/login/oauth/access_token', { json: { error: 'bad_refresh_token' } })
+    // A miss starts the once-a-minute window, then the sign-in expires.
+    expect((await t.service.coverageFor(U, 'carol/x'))?.answer).toBe('not_installed')
+    clock += 31_000
+    expect(await t.service.token(U)).toEqual({ kind: 'needed', need: 'reconnect' })
+    // Reconnect GitHub: the first installations read after it is held.
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: TOKENS })
+    t.github.on('/user', { json: USER })
+    const release = holdInstallations(t)
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(async () => expect((await t.service.status(U)).account?.state).toBe('connected'))
+    expect((await t.service.status(U)).account?.coverageFetchedAt).toBeNull()
+    // Two lookups at once: the first starts the minute's refresh, the second must still wait.
+    const lookups = [t.service.coverageFor(U, 'alice/x'), t.service.coverageFor(U, 'alice/z')]
+    const need = t.service.recordNeed(U, 'install', 'alice/y', 'folder:a')
+    await new Promise(r => setTimeout(r, 20))
+    // No Allow access row from the empty cache while the read runs.
+    expect((await t.service.status(U)).needs).toEqual([])
+    release()
+    expect((await Promise.all(lookups)).map(c => c?.answer)).toEqual(['covered', 'covered'])
+    await need
+    expect((await t.service.status(U)).needs).toEqual([])
+  })
+
+  it('the first lookup after a sign-in whose installations read failed reads them again', async () => {
+    let clock = 1_000_000_000_000
+    const t = makeService({ now: () => clock })
+    t.storage.seed(U, connected({ expiresAt: clock + MIN_TOKEN_TTL_MS + 30_000 }))
+    t.github.on('/user/installations?per_page=100', { json: { installations: [] } })
+    t.github.on('/login/oauth/access_token', { json: { error: 'bad_refresh_token' } })
+    await t.service.coverageFor(U, 'alice/x')
+    clock += 31_000
+    await t.service.token(U)
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: TOKENS })
+    t.github.on('/user', { json: USER })
+    t.github.on('/user/installations?per_page=100', { status: 502, json: {} }, { json: { installations: [install(1, 'alice', 'User', 'all')] } })
+    const signedIn = vi.fn()
+    t.service.setOnSignedIn(signedIn)
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(() => expect(signedIn).toHaveBeenCalled())
+    expect((await t.service.coverageFor(U, 'alice/x'))?.answer).toBe('covered')
+  })
+
+  it('a lookup for an uncovered repo right after the sign-in read answers from it without reading again', async () => {
+    const t = makeService()
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: TOKENS })
+    t.github.on('/user', { json: USER })
+    t.github.on('/user/installations?per_page=100', { json: { installations: [install(1, 'alice', 'User', 'all')] } })
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(async () => expect((await t.service.status(U)).account?.coverageFetchedAt).toEqual(expect.any(Number)))
+    const reads = (): number => t.github.fetch.mock.calls.filter(([url]) => String(url).includes('/user/installations')).length
+    const before = reads()
+    expect((await t.service.coverageFor(U, 'carol/x'))?.answer).toBe('not_installed')
+    expect(reads()).toBe(before)
+  })
+
+  it('a read started for the previous account never lands as, or is joined by, the new sign-in', async () => {
+    const t = makeService()
+    t.storage.seed(U, connected())
+    t.github.on('/user/installations?per_page=100',
+      { json: { installations: [install(1, 'alice', 'User', 'all')] } },
+      { json: { installations: [install(2, 'bob', 'User', 'all')] } })
+    const release = holdInstallations(t)
+    const stale = t.service.coverageFor(U, 'alice/x')
+    await vi.waitFor(() => expect(t.github.fetch.mock.calls.some(([url]) => String(url).includes('/user/installations'))).toBe(true))
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: TOKENS })
+    t.github.on('/user', { json: { login: 'bob', id: 7, name: 'Bob' } })
+    const signedIn = vi.fn()
+    t.service.setOnSignedIn(signedIn)
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(async () => expect((await t.service.status(U)).account?.login).toBe('bob'))
+    release()
+    await stale
+    await vi.waitFor(() => expect(signedIn).toHaveBeenCalled())
+    expect((await t.service.status(U)).account?.coverage.map(c => c.owner)).toEqual(['bob'])
   })
 })
 
