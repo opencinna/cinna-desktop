@@ -85,7 +85,7 @@ Added to: `llm_providers`, `mcp_providers`, `chats`, `chat_modes`, `agents`
 | `auth:register` | `({ username?, displayName?, password?, accountType, cinnaHostingType?, cinnaServerUrl? }) → { success, user?, error? }` | Create local or Cinna account + auto-switch |
 | `auth:cinna-oauth-abort` | `() → { success }` | Abort in-progress Cinna OAuth flow |
 | `auth:login` | `({ userId, password? }) → { success, user?, error? }` | Authenticate + switch + reload providers |
-| `auth:logout` | `() → { success }` | Switch to default + reload providers |
+| `auth:logout` | `() → { success }` or `({ userId }) → { success, error? }` | No argument: session-only logout (switch to default + reload providers; tokens stay; what the E2E specs call, and it still throws on failure). `{ userId }`: Sign Out that keeps data. Refused as data (`not_current`, `not_found`, `invalid_user_type`) unless it names the current Cinna profile |
 | `auth:update-user` | `({ userId, displayName?, password?, removePassword? }) → { success, user?, error? }` | Update display name and/or password for an existing user |
 | `auth:delete-user` | `({ userId, password? }) → { success, error? }` | Verify password (if set) + cascade-delete all user data + fall back to default |
 
@@ -96,7 +96,7 @@ Added to: `llm_providers`, `mcp_providers`, `chats`, `chat_modes`, `agents`
 - `authService.register(input)` — local account creation; validates uniqueness + password strength, hashes via `hashPassword()`, then activates the new profile (`userActivation.activate()`, after `markUnlocked()` when a password was set) so main switches with the renderer
 - `authService.registerCinna(input)` — runs OAuth flow via `startCinnaOAuthFlow()`, inserts user, stores tokens, activates; rolls back user row if token store fails
 - `authService.login(input)` — verifies password (only if user is locked), `markUnlocked()` + `activate()`
-- `authService.logout()` — `clearUnlocks()` + `activate('__default__')`
+- `authService.logout(input?)` — no input: `serviceCredentialService.signOut` + `clearUnlocks()` + `activate('__default__')`. `{ userId }` (UserMenu's keep-data Sign Out): `syncService.flushBeforeSignOut` (one final cycle, only when the vault is unlocked; touches no cursor, tombstone, device key or sync state; failure logged and swallowed), `serviceCredentialService.signOut`, `clearUnlocks()`, `deactivate()`, `clearCinnaTokens`, `activate('__default__')`. The profile row and its data stay. `deleteAccount`'s `signOutCleanup` shares `flushBeforeSignOut` for its flush
 - `authService.updateUser(input)` — display name + password set/change/remove (rejects `__default__`)
 - `authService.deleteAccount(input)` — verifies password, deactivates if current, clears Cinna tokens, `userRepo.deleteWithCascade()`, re-activates `__default__` if was current
   - Does **not** clear `db/credentialAccounts.ts`' rows (`__credentialAccount:<key>`, `__credentialAccountRefs:<key>`): they outlive the profile while any folder agent references the account key, and `serviceCredentialService` prunes them ([Service Credentials](../../agents/service_credentials/README.md#unavailable-accounts))
@@ -147,9 +147,11 @@ Every list/get/create/update/delete handler in these IPC files calls `userActiva
 - Rendered in TitleBar top-right (replaces empty `w-[100px]` div)
 - Shows current user avatar (initial or guest icon) + name + chevron
 - Default user shows "Guest" badge (pill with muted bg) in the dropdown profile list
-- Dropdown contains: stable "Profiles" list of all users (active highlighted with accent color), "Add Account", "Sign Out"
+- Dropdown contains: stable "Profiles" list of all users (active highlighted with accent color), "Add Account", "Sign Out". A Cinna profile with `hasCinnaTokens === false` carries a "Signed out" tag in the list
 - List order never changes on profile switch — only the highlight moves
 - Checks `isUnlocked(userId)` before prompting password on switch
+- Sign Out dialog: `deleteLocalData` state (reset to `true` on each open) drives a `role="switch"` row for Cinna accounts; off → `useLogout().mutateAsync({ userId })` with no password field, on → `useDeleteUser` as before. Anchored `items-start pt-[18vh]`; the error line is always rendered (`min-h-[1lh]`). The switch is a deliberate exception to ux_rules rule 14
+- `useSwitchProfile` calls `promptSignInIfSignedOut` after a successful switch (directly or after the password prompt): a `cinna_user` with `hasCinnaTokens === false` calls `useReauthStore.promptSignIn(...)`, which sets `signIn: true`; `ReauthModal` then renders "Sign in to Cinna" / "Sign in" and runs `useCinnaReauth`. `dismiss` and `clearReauth` reset `signIn`; `requireReauth` keeps the sign-in info while `signIn` is set
 - "Add Account" opens wider modal (`w-96`) with `RegisterForm`
 
 ### `RegisterForm` in `src/renderer/src/components/auth/RegisterForm.tsx`

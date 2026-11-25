@@ -49,17 +49,22 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 3. User enters password or clicks "Continue as Guest" to use default account
 4. If last user was default or passwordless: app loads directly to new-chat page
 
-### Sign Out (Account Removal)
+### Sign Out
 1. User clicks "Sign Out" in the dropdown (only shown for non-default users)
-2. Centered confirmation modal appears with warning: all **local** chat history, providers, agents, and settings for this account will be permanently erased, except its name, email and server and its credentials' names, which stay while a local agent still uses them (see What sign-out keeps). Chats shared from the guest profile are not the account's and survive
-3. For Cinna accounts: modal notes that the cloud account will not be affected
-4. If the account has a password set, the user must enter it to confirm
-5. On confirmation: account is fully deleted (same cascade-delete flow as Settings → Delete Account), session falls back to default user
-6. All data refetches for the default user's context
+2. A confirmation modal appears. For a **Cinna account** it opens with a switch, **Delete data from this device**, **on every time the dialog opens** (the default is the destructive choice, so a keep-data sign-out is always a deliberate flip). The dialog is anchored from the top rather than centred, so flipping the switch moves only its bottom edge and never the title or the switch under the pointer. A local account has no switch and always takes the delete path
+3. **Switch on (delete).** The warning says all **local** chat history, providers, agents, and settings for this account will be permanently erased, except its name, email and server and its credentials' names, which stay while a local agent still uses them (see What sign-out keeps); chats shared from the guest profile are not the account's and survive. Cinna accounts add that the cloud account is not affected. If the account has a password, the user must enter it to confirm. On confirmation the account is fully deleted (same cascade-delete flow as Settings → Delete Account) and the session falls back to the default user
+4. **Switch off (keep data).** The text says the account is signed out, its chats, agents and settings stay on this device and it stays in the profile list. **No password is asked** — nothing is deleted, and a local password keeps locking the profile (the dialog says so). A passwordless profile gets a warning instead: anyone using the computer can open it, with a pointer to Settings → User Accounts to set one. On confirmation main (`auth:logout { userId }`) flushes one final sync push while the encryption key is still in memory, marks the account's credentials signed out, drops unlocks, clears the account's Cinna tokens and returns to Guest. The profile row, its data and this device's sync enrollment (cursors, device key, state) stay, so a later sign-in resumes sync on a still-trusted device instead of asking for a recovery key. A failed flush is logged and does not stop the sign-out. Main refuses (shown as a line under the switch, which is always reserved so the buttons do not move) unless the id is still the current Cinna profile, since a profile switch can race the dialog
+5. All data refetches for the default user's context
+
+Settings → User Accounts → **Delete Account** is unchanged: it always deletes.
+
+#### Signed out, and signing back in
+
+A Cinna profile with no stored tokens **is signed out**, and that survives a restart: nothing but the missing tokens is remembered. Such a profile carries a **"Signed out"** tag in the profile menu and on its Settings → User Accounts card (whose connection icon is muted, no longer the danger colour). Switching into it (profile menu or the composer's **Switch to** action) does not open the "Cinna session expired" prompt, since nothing expired: it opens the global prompt as **Sign in to Cinna** ("*Name* on *host* is signed out on this device. Sign in again to use this account's agents and credentials.") with a **Sign in** button. That runs the same OAuth as Re-authenticate ([Cinna Re-authentication](../cinna_accounts/reauthentication.md)) against the same profile and re-links it in place; no second profile appears. "Not now" dismisses it, and a later switch into the profile asks again. The prompt keeps its sign-in wording even if a reauth-required error arrives while it is open.
 
 #### What sign-out keeps
 
-"Erased" is true of the profile's own rows, not of every trace of the account. When a local folder agent has Core credentials attached under the account, the app keeps, in installation-wide settings that outlive the profile: the account key's name (profile, name, email, server) and each attached reference's type, Service URI and name. Without them the agent's slot would read as missing, and Finish setup would offer a duplicate, as soon as the profile that held it was gone. They hold no token, secret or credential value, and are kept only while some agent still references the account key and pruned once none does, when every agent root can be listed. A signed-out profile therefore leaves the agent a warning ("*Alice* was removed: its credentials come from that account") rather than nothing, and **Detach** is how the user lets go of them. See [Unavailable accounts](../../agents/service_credentials/README.md#unavailable-accounts).
+"Erased" is true of the profile's own rows, not of every trace of the account. When a local folder agent has Core credentials attached under the account, the app keeps, in installation-wide settings that outlive the profile: the account key's name (profile, name, email, server) and each attached reference's type, Service URI and name. Without them the agent's slot would read as missing, and Finish setup would offer a duplicate, as soon as the profile that held it was gone. They hold no token, secret or credential value, and are kept only while some agent still references the account key and pruned once none does, when every agent root can be listed. A deleted profile therefore leaves the agent a warning ("*Alice* was removed: its credentials come from that account") rather than nothing, and **Detach** is how the user lets go of them. A Sign Out that keeps the data keeps all of it, the profile row included, so nothing is retained *instead*: the agent reads "*Alice* is signed out: its credentials come from that account" and **Switch to Alice** is the way back. See [Unavailable accounts](../../agents/service_credentials/README.md#unavailable-accounts).
 
 ### Manage Accounts (Settings)
 1. User navigates to Settings → "User Accounts" (last menu item in the main settings block, after MCP Providers)
@@ -103,7 +108,7 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 - On account deletion: deactivate session → clear Cinna tokens → cascade-delete all profile-scope data (chats the profile owns, remote agents, `agent_overrides`, `agent_shortcuts`, `agent_colors`) → delete user row → re-activate as default user. Default-scope settings remain untouched.
 - Password verification uses PBKDF2 (100k iterations, SHA-512) — no plaintext storage
 - Session persistence stores only the last user ID, not credentials
-- Per-session unlock tracking resets on app restart or sign-out (password required again)
+- Per-session unlock tracking resets on app restart or sign-out (password required again). A keep-data Sign Out drops the unlocks too, so a password profile asks again on the next switch
 - Deleting an account is not a promise that no trace of it remains: the retention above is the one deliberate exception, and holds names and references only
 - **Switch** is one hook (`useSwitchProfile`) shared by the profile menu and the composer's account rows: try without a password, prompt when main asks; the composer's passes a callback that carries its draft once the profile is current
 
@@ -127,8 +132,13 @@ User Switch:
                      All data refetches for new user
 
 Sign Out (from UserMenu):
+  "Delete data from this device" ON (default; always for local accounts)
   UserMenu "Sign Out" ──→ confirmation modal ──→ auth:delete-user
                           (password if set)       verify password → cascade delete → activate __default__
+  Cinna account, switch OFF
+  UserMenu "Sign Out" ──→ confirmation modal ──→ auth:logout { userId }
+                          (no password)           final sync flush → credentials signed out → clear Cinna tokens
+                                                  → activate __default__ (row, data, sync enrollment stay)
 
 Account Management (Settings):
   UserAccountsSection ──→ auth:update-user ──→ update display name / password

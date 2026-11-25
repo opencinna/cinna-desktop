@@ -55,7 +55,7 @@ Every user-scoped handler calls `userActivation.requireActivated()` as its first
 | `auth:get-startup` (password user) | No activation — stays gated |
 | `auth:register` | `userActivation.activate(id)` |
 | `auth:login` | `userActivation.activate(user.id)` |
-| `auth:logout` | `userActivation.activate('__default__')` |
+| `auth:logout` | `userActivation.activate('__default__')`; with `{ userId }` (keep-data Sign Out) `userActivation.deactivate()` first, then tokens cleared, then the activate |
 | `auth:delete-user` (current user) | `userActivation.deactivate()` |
 
 ### Guard patterns

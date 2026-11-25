@@ -37,7 +37,7 @@
 |-------|------|---------|
 | Hook | `src/renderer/src/hooks/useAuth.ts` | `useCinnaReauth` — mutation + cache invalidation for `['users']`, `['auth','current']`, `['agents']`, `REMOTE_SYNC_STATUS_KEY` |
 | Hook (helper) | `src/renderer/src/hooks/useAgents.ts` | `REMOTE_SYNC_STATUS_KEY` + `RemoteSyncStatus` type exports (reused by the reauth hook) |
-| UI surface | `src/renderer/src/components/auth/UserMenu.tsx` | "Re-authenticate" menu entry; accent colour when `hasCinnaTokens === false`; inline error banner inside the dropdown |
+| UI surface | `src/renderer/src/components/auth/UserMenu.tsx` | "Re-authenticate" menu entry; accent colour when `hasCinnaTokens === false`; a "Signed out" tag on such profiles; inline error banner inside the dropdown |
 | UI surface | `src/renderer/src/components/settings/AgentsSettingsSection.tsx` | "Re-authenticate" button inside the `reauth_required` sync banner; kicks off `agent:sync-remote` on success |
 | UI surface | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | `ReauthErrorPanel` replaces the body when `error.code === 'reauth_required'` |
 | UI surface | `src/renderer/src/components/chat/MessageStream.tsx` | `SystemMessage` routes by `err.code`: generic errors render via `GenericErrorBubble` (danger styling); `CINNA_REAUTH_REQUIRED_CODE` renders via `ReauthErrorBubble`, which owns both pre-reauth (danger + "Re-authenticate" button) and post-reauth (success styling, `CheckCircle`, "Authenticated — you can resend your message now.") states. The whole bubble swaps on success — the danger headline is replaced, not appended to |
