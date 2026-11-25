@@ -32,6 +32,7 @@ import type {
   InboxAnswerResult,
   InboxEntry,
   InboxQueuedFor,
+  GithubNeedInboxItem,
   InboxSnapshot,
   SkillDisconnectedDismissal,
   SkillDisconnectedInboxItem,
@@ -332,6 +333,25 @@ async function skillDisconnectedItems(
     return items
   } catch (err) {
     logger.warn('catalog skill disconnected notices could not be read', { error: err instanceof Error ? err.message : String(err) })
+    return []
+  }
+}
+
+/**
+ * GitHub needs a run no chat shows hit, for this profile (`githubAuthService.chatlessNeeds`), with
+ * the agents named. Imported lazily like the skill cards; a failure is an empty list.
+ */
+async function githubNeedItems(userId: string): Promise<GithubNeedInboxItem[]> {
+  try {
+    const { githubAuthService } = await import('./github/githubAuthService')
+    const settingsUserId = getSettingsScopeUserId()
+    return githubAuthService.chatlessNeeds(userId).map((need) => ({
+      kind: 'github_need' as const,
+      need,
+      agents: (need.chatlessAgentIds ?? []).map((id) => ({ id, name: agentRepo.getOwned(settingsUserId, id)?.name ?? agentRepo.getOwned(userId, id)?.name ?? 'an agent' }))
+    }))
+  } catch (err) {
+    logger.warn('GitHub notices could not be read', { error: err instanceof Error ? err.message : String(err) })
     return []
   }
 }
@@ -693,6 +713,7 @@ export const inboxService = {
     const kitAgentsPending = kitAgentsForSkillCards()
     const skillUpdatesPending = skillUpdateItems(kitAgentsPending)
     const disconnectedPending = skillDisconnectedItems(userId, kitAgentsPending, desktopUpdatesPending)
+    const githubPending = githubNeedItems(userId)
     const remote = await pending
     const dispatch = await dispatchPending
     const updates = [...((await desktopUpdatesPending) ?? []), ...cloudUpdateItems(), ...(await skillUpdatesPending)]
@@ -701,7 +722,8 @@ export const inboxService = {
       unreadable: remote.unreadable,
       dispatch,
       updates,
-      disconnected: await disconnectedPending
+      disconnected: await disconnectedPending,
+      github: await githubPending
     }
   },
 

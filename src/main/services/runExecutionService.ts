@@ -998,7 +998,8 @@ function bindTurn(input: {
         ...(input.runScope ? { runScope: input.runScope } : {}),
         onEvent: io.onEvent
       }),
-    !!input.queueWhenBusy
+    !!input.queueWhenBusy,
+    input.runScope?.profileUserId
   )
 }
 

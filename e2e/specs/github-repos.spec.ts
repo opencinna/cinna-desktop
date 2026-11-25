@@ -121,6 +121,8 @@ function fakeOllama(): Server {
   })
 }
 
+/** The Repo Agent's id, set by {@link arrange}. */
+let repoAgentId = ''
 let githubServer: Server
 let ollamaServer: Server
 let ollamaHost = ''
@@ -193,6 +195,7 @@ async function arrange(cinna: CinnaApp): Promise<FakeAcpEngine> {
   }, { host: ollamaHost, model: MODEL })
   const root = await addAgentRoot(cinna)
   const agent = await createFolderAgent(cinna, root, AGENT, AGENT)
+  repoAgentId = agent.id
   writeFileSync(join(agent.path, 'scripts', 'gh-check.sh'), '#!/bin/sh\ngh repo view acme/shop 2>&1\necho "gh exit: $?"\n')
   // Beside the scaffold's own `status` entry, which its manifest's status_refresh_command names.
   appendFileSync(join(agent.path, 'docs', 'CLI_COMMANDS.yaml'),
@@ -366,5 +369,75 @@ test('Settings → User Accounts → GitHub shows the login and covered repos, a
     await expect(page.getByRole('button', { name: 'Sign in to GitHub' })).toBeVisible()
     const status = await page.evaluate(() => window.api.github.status())
     expect(status.ok && status.value.account).toBeNull()
+  })
+})
+
+/** Point the agent's `status_refresh_command` at `/run:gh-check`, through the manifest editor. */
+async function statusRunsGhCheck(cinna: CinnaApp): Promise<void> {
+  await cinna.page.evaluate(async (id) => {
+    const current = await window.api.localAgents.get(id)
+    if (!current.ok) throw new Error(current.message)
+    const stamp = current.value.stamps['cinna-agent.json']
+    if (!stamp) throw new Error('Fixture manifest has no stamp')
+    const changed = await window.api.localAgents.updateField({ agentId: id, update: { field: 'status_refresh_command', value: '/run:gh-check' }, expectedStamp: stamp })
+    if (!changed.ok) throw new Error(changed.message)
+  }, repoAgentId)
+}
+
+async function openInbox(cinna: CinnaApp): Promise<void> {
+  await cinna.page.getByRole('button', { name: /^Inbox/ }).click()
+  await expect(cinna.page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
+}
+
+/** Agents → the agent's page, on its chat side (the new-chat composer with its notice panel). */
+async function openAgentPage(cinna: CinnaApp): Promise<void> {
+  const page = cinna.page
+  await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await answerAgentsFolder(cinna)
+  await page.getByRole('button', { name: AGENT, exact: true }).click()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
+}
+
+test('a run with no chat (the status refresh) is refused: an Inbox card and the agent page row, both cleared by signing in', async ({ cinna }) => {
+  test.setTimeout(120_000)
+  github.installs = [{ id: 77, owner: 'acme', ownerId: 9001, type: 'Organization', repos: 'all' }]
+  await arrange(cinna)
+  await statusRunsGhCheck(cinna)
+  const card = cinna.page.getByRole('article', { name: 'GitHub isn’t connected for Repo Agent' })
+
+  await test.step('Refresh status runs /run:gh-check with no chat; its refused gh records a need a run with no chat hit', async () => {
+    const refreshed = await cinna.page.evaluate((agentId) => window.api.agentStatus.get({ agentId, intent: 'manual' }), repoAgentId)
+    expect(refreshed.success).toBe(true)
+    await expect.poll(async () => {
+      const status = await cinna.page.evaluate(() => window.api.github.status())
+      return status.ok ? status.value.needs : status.error
+    }).toEqual([{ key: 'account', kind: 'sign_in', agentIds: [repoAgentId], chatlessAgentIds: [repoAgentId] }])
+  })
+
+  await test.step('the Inbox has a card naming the agent, with Sign in to GitHub and Dismiss', async () => {
+    await openInbox(cinna)
+    await expect(card).toBeVisible()
+    await expect(card.getByRole('button', { name: 'Sign in to GitHub' })).toBeVisible()
+    await expect(card.getByRole('button', { name: 'Dismiss' })).toBeVisible()
+  })
+
+  await test.step('the agent’s page shows the composer’s own row', async () => {
+    await openAgentPage(cinna)
+    await expect(panel(cinna).getByTitle('GitHub isn’t connected. This agent’s gh and git commands need a GitHub sign-in.')).toHaveText('GitHub isn’t connected.')
+  })
+
+  await test.step('Sign in to GitHub from the row: the code, then approved; the row goes, with no Continue', async () => {
+    await panel(cinna).getByRole('button', { name: 'Sign in to GitHub' }).click()
+    await expect(panel(cinna).getByTitle(CODE_SENTENCE)).toHaveText(CODE_SENTENCE)
+    github.approve = true
+    await expect(cinna.page.getByRole('button', { name: 'Sign in to GitHub' })).toHaveCount(0)
+    await expect(cinna.page.getByTitle(RESOLVED_TITLE)).toHaveCount(0)
+    expect(await openedUrls(cinna)).toEqual(['https://github.com/login/device'])
+  })
+
+  await test.step('the Inbox card is gone too', async () => {
+    await openInbox(cinna)
+    await expect(cinna.page.getByText('Nothing is waiting on you.', { exact: true })).toBeVisible()
+    await expect(card).toHaveCount(0)
   })
 })

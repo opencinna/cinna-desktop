@@ -1012,11 +1012,11 @@ describe('remote inbox', () => {
     const { adapter } = remote()
     vi.mocked(adapter.listOpenAsks).mockRejectedValue(new Error('offline'))
     expect(await inboxService.list(USER)).toEqual({
-      entries: [], unreadable: [{ adapter: 'service', reason: 'offline' }], dispatch: [], updates: [], disconnected: []
+      entries: [], unreadable: [{ adapter: 'service', reason: 'offline' }], dispatch: [], updates: [], disconnected: [], github: []
     })
     adapter.availability = async () => ({ ready: false, reason: 'Sign in again.' })
     expect(await inboxService.list(USER)).toEqual({
-      entries: [], unreadable: [{ adapter: 'service', reason: 'Sign in again.' }], dispatch: [], updates: [], disconnected: []
+      entries: [], unreadable: [{ adapter: 'service', reason: 'Sign in again.' }], dispatch: [], updates: [], disconnected: [], github: []
     })
   })
 
@@ -1464,5 +1464,29 @@ describe('permissions in accepted follow-up chat turns', () => {
     const task = makeChatTask('chat-other')
     taskService.setStatus(USER, task.id, 'archived')
     expect(() => taskService.resumeFinishedChat(USER, task.id, 'chat-other')).toThrow()
+  })
+})
+
+describe('GitHub needs a run with no chat hit', () => {
+  it('lists one item per need with the agents named, and leaves when the need is dismissed', async () => {
+    const { githubAuthService } = await import('./github/githubAuthService')
+    const { agentRepo } = await import('../db/agents')
+    const agent = agentRepo.create(USER, { name: 'Repo Agent', protocol: 'a2a', cardUrl: 'https://x/card' })
+    // The registry is in memory and the service a singleton: start from nothing.
+    githubAuthService.dismiss(USER, 'account')
+    // A chat's hit alone is no Inbox item.
+    await githubAuthService.recordNeed(USER, 'sign_in', undefined, agent.id, null)
+    expect((await inboxService.list(USER)).github).toEqual([])
+    await githubAuthService.recordNeed(USER, 'sign_in', undefined, agent.id, 'schedule')
+    await githubAuthService.recordNeed(USER, 'sign_in', undefined, 'folder:gone', 'command')
+    expect((await inboxService.list(USER)).github).toEqual([{
+      kind: 'github_need',
+      need: { key: 'account', kind: 'sign_in', agentIds: [agent.id, 'folder:gone'], chatlessAgentIds: [agent.id, 'folder:gone'] },
+      agents: [{ id: agent.id, name: 'Repo Agent' }, { id: 'folder:gone', name: 'an agent' }]
+    }])
+    // Another profile sees none of it.
+    expect((await inboxService.list('someone-else')).github).toEqual([])
+    githubAuthService.dismiss(USER, 'account')
+    expect((await inboxService.list(USER)).github).toEqual([])
   })
 })

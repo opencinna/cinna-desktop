@@ -52,7 +52,7 @@ import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { localAgentService } from './localAgentService'
 import { engineCredentialEnv } from '../skillRuntime'
-import { turnLock } from './turnLock'
+import { turnLock, type HoldOrigin } from './turnLock'
 import type { RunAgentTurnResult, TurnRun } from '../a2aStreamingService'
 import type { AgentCapabilities } from '../../../shared/agentDrivers'
 import type { MessagePart } from '../../../shared/messageParts'
@@ -333,7 +333,7 @@ export interface YieldingAdmission {
  * caller is refused while one is held or queued.
  */
 async function executeForAgent(agentId: string, agentDir: string, localCommand: string, signal?: AbortSignal,
-  timeoutMs = COMMAND_TIMEOUT_MS, queueSignal?: AbortSignal | YieldingAdmission, onStart?: () => void): Promise<SpawnOutcome> {
+  timeoutMs = COMMAND_TIMEOUT_MS, queueSignal?: AbortSignal | YieldingAdmission, onStart?: () => void, origin?: HoldOrigin): Promise<SpawnOutcome> {
   const body = async (runSignal = signal): Promise<SpawnOutcome> => {
     // First statement under the lock: from here on the command may have had effects.
     onStart?.()
@@ -354,7 +354,7 @@ async function executeForAgent(agentId: string, agentDir: string, localCommand: 
     const forward = (): void => preempt.abort()
     if (signal?.aborted) preempt.abort()
     signal?.addEventListener('abort', forward, { once: true })
-    const handle = turnLock.tryAcquireSharedYielding(agentId, queueSignal.yieldingOwner, () => preempt.abort())
+    const handle = turnLock.tryAcquireSharedYielding(agentId, queueSignal.yieldingOwner, () => preempt.abort(), origin)
     if (!handle) {
       signal?.removeEventListener('abort', forward)
       throw new LocalAgentError('turn_in_progress', 'This agent is busy right now. Try again when the current run finishes.')
@@ -366,7 +366,7 @@ async function executeForAgent(agentId: string, agentDir: string, localCommand: 
       handle.release()
     }
   }
-  return queueSignal ? turnLock.withQueuedSharedLock(agentId, 'command', queueSignal, body) : turnLock.withSharedLock(agentId, 'command', body, signal)
+  return queueSignal ? turnLock.withQueuedSharedLock(agentId, 'command', queueSignal, body, origin) : turnLock.withSharedLock(agentId, 'command', body, signal, origin)
 }
 
 export interface CommandRunOutcome {
@@ -423,9 +423,12 @@ export const commandService = {
     return { localCommand, revision: createHash('sha256').update(JSON.stringify([source, localCommand])).digest('hex') }
   },
 
-  /** Run the captured reviewed command; never re-resolve an edited catalog here. */
+  /**
+   * Run the captured reviewed command; never re-resolve an edited catalog here.
+   * `profileUserId` owns the schedule: recorded with the hold (a run no chat shows).
+   */
   async runScheduled(userId: string, agentId: string, resolvedCommand: string, signal?: AbortSignal,
-    timeoutMs = COMMAND_TIMEOUT_MS): Promise<ScheduleCommandOutcome> {
+    timeoutMs = COMMAND_TIMEOUT_MS, profileUserId?: string): Promise<ScheduleCommandOutcome> {
     const startedAt = Date.now()
     // Set by the lock body itself, never inferred from an error message: a run
     // aborted while still queued for the turn lock never started.
@@ -436,7 +439,7 @@ export const commandService = {
       // A schedule waits behind a chat turn, editor save or another command on
       // this agent rather than failing its occurrence; the signal ends the wait.
       const { output: _output, ...outcome } = await executeForAgent(agentId, agentDir, resolvedCommand, signal, timeoutMs,
-        signal ?? new AbortController().signal, () => { started = true })
+        signal ?? new AbortController().signal, () => { started = true }, { userId: profileUserId ?? null, chatless: 'schedule' })
       return { ...outcome, started }
     } catch (error) {
       const { redactCredentialText } = await import('../../security/serviceCredentialRedaction')
@@ -482,7 +485,13 @@ export const commandService = {
      * `refresh.command`, which then comes back `busy`, and comes back
      * `aborted` when an exclusive write preempts it mid-run.
      */
-    queueWhenBusy: boolean | YieldingAdmission = false
+    queueWhenBusy: boolean | YieldingAdmission = false,
+    /**
+     * Recorded with the hold: the profile that started the command, and
+     * `chatless` for one no chat shows (a status refresh, a dashboard's
+     * refresh command). The GitHub loopback answers for it.
+     */
+    origin?: HoldOrigin
   ): Promise<CommandRunOutcome> {
     if (isVaultAgent(agentId)) {
       return { ok: false, name, localCommand: '', output: '', exitCode: null, aborted: false, busy: false,
@@ -544,7 +553,7 @@ export const commandService = {
 
     try {
       const outcome = await executeForAgent(agentId, agentDir, localCommand, signal, timeoutMs,
-        typeof queueWhenBusy === 'object' ? queueWhenBusy : queueWhenBusy ? signal ?? new AbortController().signal : undefined)
+        typeof queueWhenBusy === 'object' ? queueWhenBusy : queueWhenBusy ? signal ?? new AbortController().signal : undefined, undefined, origin)
 
       if (outcome.spawnError) {
         return {
@@ -639,9 +648,12 @@ export const commandService = {
     agentId: string,
     name: string,
     signal?: AbortSignal,
-    queueWhenBusy = false
+    queueWhenBusy = false,
+    /** The profile the chat's turn runs for, recorded with the hold. */
+    profileUserId?: string
   ): Promise<RunAgentTurnResult> {
-    const outcome = await this.run(userId, agentId, name, signal, COMMAND_TIMEOUT_MS, queueWhenBusy)
+    const outcome = await this.run(userId, agentId, name, signal, COMMAND_TIMEOUT_MS, queueWhenBusy,
+      profileUserId ? { userId: profileUserId } : undefined)
     const invocation = `/run:${name}`
     if (!outcome.ok) {
       return fail(outcome.error ?? `"${invocation}" failed.`, outcome.output || outcome.error)
@@ -674,10 +686,12 @@ export function resolveCommandRunner(
   agentOwnerId: string,
   agentId: string,
   fallback: TurnRun,
-  queueWhenBusy = false
+  queueWhenBusy = false,
+  /** The profile the chat's turn runs for (`RunScope.profileUserId`). */
+  profileUserId?: string
 ): TurnRun {
   if (commands !== 'catalog') return fallback
   const name = commandService.matchRunCommand(wireContent)
   if (!name) return fallback
-  return (io) => commandService.runForTurn(agentOwnerId, agentId, name, io.signal, queueWhenBusy)
+  return (io) => commandService.runForTurn(agentOwnerId, agentId, name, io.signal, queueWhenBusy, profileUserId)
 }

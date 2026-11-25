@@ -42,6 +42,7 @@ import { turnLock, type TurnLockHandle } from '../localAgents/turnLock'
 import { uvUnavailableReason } from '../localAgents/uvPrewarm'
 import type { ScheduleCommandOutcome } from '../../../shared/localSchedules'
 import { ENDPOINT_TIMEOUT_DEFAULT_S, ENDPOINT_TIMEOUT_MAX_S, type EndpointRuntime } from '../../kit/dashboardsProtocol'
+import { activatedProfileUserId } from '../../auth/activatedProfile'
 
 const logger = createLogger('dashboard-endpoint')
 
@@ -257,6 +258,8 @@ export const endpointRunner = createEndpointRunner({
     getLayoutView(rootPath).localizeCommand(localCommand, { hasPyproject: existsSync(join(agentDir, 'pyproject.toml')) }),
   resolveNode: (env) => resolveOnEnvPath('node', env),
   nodeRuntime: () => runtimeHost.nodeRuntime(),
-  tryLock: (agentId, onPreempt) => turnLock.tryAcquireSharedYielding(agentId, DASHBOARD_LOCK_OWNER, onPreempt),
+  // No chat shows an endpoint: it works for the profile active when it started (its gh's GitHub sign-in).
+  tryLock: (agentId, onPreempt) => turnLock.tryAcquireSharedYielding(agentId, DASHBOARD_LOCK_OWNER, onPreempt,
+    { userId: activatedProfileUserId(), chatless: 'command' }),
   uvReason: uvUnavailableReason
 })

@@ -54,8 +54,10 @@ import { vaultService } from '../vault/vaultService'
 import { githubAuthService, setGithubGhMissingHook, setGithubSignedInHook } from '../services/github/githubAuthService'
 import { managedGh } from '../shell/managedGh'
 import { which } from '../shell/env'
-import { githubLoopbackRoutes } from '../services/github/githubLoopback'
+import { githubHolderOf, githubLoopbackRoutes } from '../services/github/githubLoopback'
 import { userRepo } from '../db/users'
+import { turnLock } from '../services/localAgents/turnLock'
+import { activatedProfileUserId, installActivatedCheck } from '../auth/activatedProfile'
 
 /**
  * Whether this computer has local agents to pre-warm uv and Python for: an
@@ -94,10 +96,17 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   // so its credentials are withdrawn and its slots read as held, as they would after a restart.
   onCinnaTokensCleared(() => { void serviceCredentialService.refreshAccounts() })
   // GitHub (OpenCinna) sign-in: folder agents are shared by every profile, so an agent's loopback
-  // request works for the profile active now. A profile that is not activated, gone, or password
-  // protected and not unlocked this session serves no token (the eligible-account rule).
+  // request works for the profile of what holds the agent now — the profile a chat's turn runs
+  // for, or the one that started a kit command or owns a schedule — and only for a hold that
+  // recorded none, the profile active now. A switch of profile mid-turn therefore never hands the
+  // turn the new profile's account, and holds working for different profiles at once get nothing
+  // (`githubHolderOf`). Runs the app starts on the user's behalf record the activated profile
+  // (`activatedProfileUserId`, none before activation). A profile that is not
+  // activated, gone, or password protected and not unlocked this session serves no token (the
+  // eligible-account rule).
+  installActivatedCheck(() => userActivation.isActivated())
   githubAuthService.installProfileAccess({
-    agentProfile: () => (userActivation.isActivated() ? getProfileScopeUserId() : null),
+    agentHolder: (agentId) => githubHolderOf(turnLock.sharedOrigins(agentId), activatedProfileUserId),
     available: (userId) => {
       const user = userRepo.get(userId)
       if (!user) return false

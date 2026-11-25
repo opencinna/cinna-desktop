@@ -88,7 +88,7 @@ describe('device flow', () => {
   })
 
   it('refuses to start for a profile that cannot serve', async () => {
-    const t = makeService({ access: { agentProfile: () => U, available: () => false } })
+    const t = makeService({ access: { agentHolder: () => ({ userId: U, chatless: null }), available: () => false } })
     await expect(t.service.startDeviceFlow(U)).rejects.toThrow(/locked/)
     expect(t.github.requests).toHaveLength(0)
   })
@@ -196,7 +196,7 @@ describe('token and refresh', () => {
 
   it('answers sign_in for no record and for a profile that cannot serve', async () => {
     let available = true
-    const t = makeService({ access: { agentProfile: () => U, available: () => available } })
+    const t = makeService({ access: { agentHolder: () => ({ userId: U, chatless: null }), available: () => available } })
     expect(await t.service.token(U)).toEqual({ kind: 'needed', need: 'sign_in' })
     t.storage.seed(U, connected())
     available = false
@@ -330,6 +330,59 @@ describe('needs', () => {
     await t.service.startDeviceFlow(U)
     await vi.waitFor(async () => expect((await t.service.status(U)).account?.state).toBe('connected'))
     expect((await t.service.status(U)).needs).toEqual([])
+  })
+})
+
+describe('needs a run with no chat hit (the Inbox items)', () => {
+  it('one account item per profile and one install item per owner, however many runs and agents hit them', async () => {
+    const t = makeService()
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:a', 'schedule')
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:a', 'schedule')
+    await t.service.recordNeed(U, 'install', 'acme/shop', 'folder:b', 'command')
+    // A chat hit it too: listed among the agents, not among the chatless ones.
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:c', null)
+    expect(t.service.chatlessNeeds(U)).toEqual([{ key: 'account', kind: 'sign_in', agentIds: ['folder:a', 'folder:b', 'folder:c'], chatlessAgentIds: ['folder:a', 'folder:b'] }])
+
+    t.storage.seed('user-2', connected())
+    t.github.on('/user/installations?per_page=100', { json: { installations: [install(2, 'acme', 'Organization', 'selected', 900)] } })
+    t.github.on('/user/installations/2/repositories?per_page=100', { json: { repositories: [] } }, { json: { repositories: [{ full_name: 'acme/shop' }, { full_name: 'acme/docs' }] } })
+    await t.service.checkAgain('user-2')
+    await t.service.recordNeed('user-2', 'install', 'acme/shop', 'folder:a', 'schedule')
+    await t.service.recordNeed('user-2', 'install', 'acme/docs', 'folder:a', 'schedule')
+    await t.service.recordNeed('user-2', 'install', 'acme/shop', 'folder:b', 'command')
+    // A need only chats hit is no Inbox item.
+    await t.service.recordNeed('user-2', 'install', 'other/x', 'folder:a', null)
+    expect(t.service.chatlessNeeds('user-2')).toEqual([
+      { key: 'install:acme', kind: 'install', owner: 'acme', repos: ['acme/shop', 'acme/docs'], installUrl: 'https://github.com/organizations/acme/settings/installations/2', agentIds: ['folder:a', 'folder:b'], chatlessAgentIds: ['folder:a', 'folder:b'] }
+    ])
+    // A coverage read that covers both clears it, as it clears the composer row.
+    await t.service.checkAgain('user-2')
+    expect(t.service.chatlessNeeds('user-2')).toEqual([])
+  })
+
+  it('clears when the sign-in completes, and when dismissed (from any surface); comes back when hit again', async () => {
+    const t = makeService()
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:a', 'command')
+    t.service.dismiss(U, 'account')
+    expect(t.service.chatlessNeeds(U)).toEqual([])
+    expect((await t.service.status(U)).dismissed).toEqual(['account'])
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:a', 'command')
+    expect(t.service.chatlessNeeds(U)).toHaveLength(1)
+    t.github.on('/login/device/code', { json: DEVICE })
+    t.github.on('/login/oauth/access_token', { json: TOKENS })
+    t.github.on('/user', { json: USER })
+    t.github.on('/user/installations?per_page=100', { json: { installations: [] } })
+    await t.service.startDeviceFlow(U)
+    await vi.waitFor(async () => expect((await t.service.status(U)).account?.state).toBe('connected'))
+    expect(t.service.chatlessNeeds(U)).toEqual([])
+  })
+
+  it('none for a profile that cannot serve', async () => {
+    let available = true
+    const t = makeService({ access: { agentHolder: () => null, available: () => available } })
+    await t.service.recordNeed(U, 'sign_in', undefined, 'folder:a', 'command')
+    available = false
+    expect(t.service.chatlessNeeds(U)).toEqual([])
   })
 })
 

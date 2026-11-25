@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient, type QueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import type {
@@ -70,6 +70,13 @@ export function inboxWaitingCount(snapshot: InboxSnapshot | undefined): number {
 
 export function useInboxList(): UseQueryResult<InboxSnapshot> {
   const queryClient = useQueryClient()
+  // A GitHub need is in-memory state main pushes as `github:changed`: its card comes and goes
+  // with the next read rather than the next poll, and the status its card reads is re-read with it
+  // (whether or not a `useGithubStatus` elsewhere is listening).
+  useEffect(() => window.api.github?.onChanged(() => {
+    void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+    void queryClient.invalidateQueries({ queryKey: ['github'] })
+  }), [queryClient])
   return useQuery({
     queryKey: INBOX_QUERY_KEY,
     /**

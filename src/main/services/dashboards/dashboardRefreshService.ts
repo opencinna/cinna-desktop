@@ -71,6 +71,7 @@ import { extname, join, sep } from 'node:path'
 import { dashboardRepo } from '../../db/dashboards'
 import { publishEvent } from '../../host/events'
 import { getSettingsScopeUserId } from '../../auth/scope'
+import { activatedProfileUserId } from '../../auth/activatedProfile'
 import { createLogger } from '../../logger/logger'
 import { capabilityService } from '../capabilityService'
 import { isCredentialFilePath } from '../../../shared/agentFiles'
@@ -907,7 +908,9 @@ export const dashboardRefreshService = createDashboardRefreshService({
   dashboards: dashboardService,
   runner: endpointRunner,
   runCommand: (agentId, name, signal) =>
-    commandService.run(getSettingsScopeUserId(), agentId, name, signal, undefined, { yieldingOwner: DASHBOARD_LOCK_OWNER }),
+    // No chat shows it: started for the active profile, whose GitHub sign-in its gh uses.
+    commandService.run(getSettingsScopeUserId(), agentId, name, signal, undefined, { yieldingOwner: DASHBOARD_LOCK_OWNER },
+      { userId: activatedProfileUserId(), chatless: 'command' }),
   publish: (tileId) => publishEvent(DASHBOARDS_TILE_CHANGED_CHANNEL, { tileId }),
   enabled: () => capabilityService.isOn('dashboards')
 })

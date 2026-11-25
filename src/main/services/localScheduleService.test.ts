@@ -434,7 +434,8 @@ describe('scheduled shell commands', () => {
     check(); check()
     const receipt = await settled(binding.id)
     expect(receipt).toMatchObject({ status: 'completed', resultKind: 'quiet_ok', commandOutcome: outcome, taskId: null, chatId: null, runId: null, finishedAt: outcome.finishedAt })
-    expect(state.runScheduled).toHaveBeenCalledExactlyOnceWith(USER, AGENT, definition.command, expect.any(AbortSignal))
+    // The schedule's profile rides along: recorded with the hold for the GitHub loopback.
+    expect(state.runScheduled).toHaveBeenCalledExactlyOnceWith(USER, AGENT, definition.command, expect.any(AbortSignal), undefined, USER)
     expect(driverRun).not.toHaveBeenCalled()
     expect(taskRepo.list(USER)).toEqual([])
     expect(jobsRepo.list(USER)).toEqual([])

@@ -101,7 +101,12 @@ export interface GithubNoticeHandlers {
   allowAccess: (key: string) => void
   /** Why the last Allow access of that need did not open, or null. */
   allowError: (key: string) => string | null
+  /** Why the last × of that need was refused, or null: said in the row's sentence slot. */
+  dismissError?: (key: string) => string | null
 }
+
+/** The row's sentence when its × was refused. */
+export const GITHUB_DISMISS_FAILED = 'The row could not be dismissed.'
 
 /** One GitHub need as a composer row; null for a kind P1 never shows (`admin`). */
 export function githubNeedNotice(need: GithubNeedDto, handlers: GithubNoticeHandlers): ComposerNotice | null {
@@ -109,13 +114,15 @@ export function githubNeedNotice(need: GithubNeedDto, handlers: GithubNoticeHand
     key: `github:${need.key}`, tone: 'warning' as const, icon: LogIn,
     onDismiss: () => handlers.dismiss(need.key)
   }
+  const dismissFailure = handlers.dismissError?.(need.key) ?? null
   if (need.kind === 'sign_in' || need.kind === 'reconnect') {
-    return { ...base, ...accountRow(need.kind, handlers.signIn), dismissLabel: 'Dismiss GitHub sign-in' }
+    const row = accountRow(need.kind, handlers.signIn)
+    return { ...base, ...row, ...(dismissFailure && !row.actionBelow ? { text: dismissFailure, title: dismissFailure } : {}), dismissLabel: 'Dismiss GitHub sign-in' }
   }
   if (need.kind !== 'install') return null
   const repos = githubNeedRepos(need)
   const sentence = `Cinna’s GitHub app can’t reach ${repos} yet.`
-  const failure = handlers.allowError(need.key)
+  const failure = dismissFailure ?? handlers.allowError(need.key)
   return {
     ...base, icon: ExternalLink,
     text: failure ?? sentence,
@@ -143,19 +150,42 @@ export function githubResolvedNotice(onContinue: () => void, onDismiss: () => vo
   }
 }
 
+/** Opens the install page main stored for an install need; keeps a refusal for that need's row. */
+export function useGithubAllowAccess(): { allowAccess: (key: string) => void; allowError: (key: string) => string | null } {
+  const [allowFailure, setAllowFailure] = useState<{ key: string; error: string } | null>(null)
+  return {
+    allowAccess: (key) => {
+      setAllowFailure(null)
+      void window.api.github.openInstall(key)
+        .then((result) => { if (!result.ok) setAllowFailure({ key, error: result.error }) })
+        .catch((error) => setAllowFailure({ key, error: unwrapIpcError(error, 'Couldn’t open GitHub.') }))
+    },
+    allowError: (key) => (allowFailure?.key === key ? allowFailure.error : null)
+  }
+}
+
+/** Whether a run of `agentId` that no chat shows (a kit command, a scheduled run) hit the need. */
+export function githubNeedHitWithoutChat(need: GithubNeedDto, agentId: string): boolean {
+  return need.chatlessAgentIds?.includes(agentId) ?? false
+}
+
 /**
  * The GitHub rows of one chat whose answering agent is `agentId`: one per need whose `agentIds`
  * holds it, or, once a need this chat showed has cleared with the profile connected, "GitHub is
- * connected" + Continue, which `send`s {@link GITHUB_CONTINUE_MESSAGE} through the composer. None
- * on the new-chat screen (`chatId` null): there is no conversation to continue.
+ * connected" + Continue, which `send`s {@link GITHUB_CONTINUE_MESSAGE} through the composer. On
+ * the new-chat screen (`chatId` null: the agent's page) only the needs a run of the agent with no
+ * chat hit (a kit command, a scheduled run), with no Continue: there is no conversation to continue.
  */
 export function useGithubNotices(chatId: string | null, agentId: string | null, send: (text: string) => Promise<boolean> | boolean): ComposerNotice[] {
   const { data: status } = useGithubStatus()
   const signIn = useGithubSignIn(status)
-  const [allowFailure, setAllowFailure] = useState<{ key: string; error: string } | null>(null)
+  const allow = useGithubAllowAccess()
+  const [dismissFailure, setDismissFailure] = useState<string | null>(null)
   const [sendFailed, setSendFailed] = useState(false)
   const scope = chatId && agentId ? `${chatId}\n${agentId}` : null
-  const needs = scope && status ? status.needs.filter((n) => n.kind !== 'admin' && n.agentIds.includes(agentId as string)) : []
+  const needs = !status || !agentId ? []
+    : scope ? status.needs.filter((n) => n.kind !== 'admin' && n.agentIds.includes(agentId))
+    : status.needs.filter((n) => n.kind !== 'admin' && githubNeedHitWithoutChat(n, agentId))
   const keySignature = needs.map((n) => n.key).join('\n')
   // Keys the user put away with × (in any chat or window): their going is not GitHub getting connected.
   const dismissedSignature = (status?.dismissed ?? []).join('\n')
@@ -173,24 +203,22 @@ export function useGithubNotices(chatId: string | null, agentId: string | null, 
   useEffect(() => setSendFailed(false), [scope, resolved])
   useGithubCheckOnFocus(needs.some((n) => n.kind === 'install'))
 
-  if (!scope) return []
+  if (!agentId) return []
   const handlers: GithubNoticeHandlers = {
     signIn,
     dismiss: (key) => {
       // Put away by hand: its going is not GitHub getting connected.
-      useGithubNoticeStore.getState().forget(scope, key)
-      void window.api.github.dismiss(key).catch(() => undefined)
+      if (scope) useGithubNoticeStore.getState().forget(scope, key)
+      setDismissFailure(null)
+      void window.api.github.dismiss(key)
+        .then((result) => { if (!result.ok) setDismissFailure(key) })
+        .catch(() => setDismissFailure(key))
     },
-    allowAccess: (key) => {
-      setAllowFailure(null)
-      void window.api.github.openInstall(key)
-        .then((result) => { if (!result.ok) setAllowFailure({ key, error: result.error }) })
-        .catch((error) => setAllowFailure({ key, error: unwrapIpcError(error, 'Couldn’t open GitHub.') }))
-    },
-    allowError: (key) => (allowFailure?.key === key ? allowFailure.error : null)
+    dismissError: (key) => (dismissFailure === key ? GITHUB_DISMISS_FAILED : null),
+    ...allow
   }
   const rows = needs.flatMap((need) => githubNeedNotice(need, handlers) ?? [])
-  if (rows.length > 0 || !resolved) return rows
+  if (!scope || rows.length > 0 || !resolved) return rows
   const clear = (): void => useGithubNoticeStore.getState().clearResolved(scope)
   return [githubResolvedNotice(() => {
     void Promise.resolve(send(GITHUB_CONTINUE_MESSAGE)).then((sent) => {

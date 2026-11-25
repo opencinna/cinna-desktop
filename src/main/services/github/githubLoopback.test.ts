@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { request as httpRequest } from 'node:http'
 import { createCredentialTokenServer, type CredentialTokenServer } from '../serviceCredentials/tokenServer'
-import { githubLoopbackRoutes, GITHUB_MESSAGES } from './githubLoopback'
+import { githubHolderOf, githubLoopbackRoutes, GITHUB_MESSAGES } from './githubLoopback'
+import { turnLock } from '../localAgents/turnLock'
 import { API, WEB, connected, makeService } from './testSupport/fakeGithub'
 import { clearCredentialRedaction } from '../../security/serviceCredentialRedaction'
 
@@ -30,7 +31,7 @@ describe('GitHub loopback routes', () => {
     process.env.CINNA_GITHUB_WEB_URL = WEB
     process.env.CINNA_GITHUB_API_URL = API
     live.clear(); locked.clear()
-    t = makeService({ access: { agentProfile: id => profileOf[id] ?? null, available: id => !locked.has(id) } })
+    t = makeService({ access: { agentHolder: id => (profileOf[id] ? { userId: profileOf[id], chatless: null } : null), available: id => !locked.has(id) } })
     t.storage.seed('user-a', connected())
     t.github.on('/user/installations?per_page=100', { json: { installations: [{ id: 7, account: { login: 'acme', type: 'Organization', id: 70 }, repository_selection: 'selected' }] } })
     t.github.on('/user/installations/7/repositories?per_page=100', { json: { repositories: [{ full_name: 'acme/shop' }] } })
@@ -120,6 +121,127 @@ describe('GitHub loopback routes', () => {
   })
 
   it('every message is safe for the wrapper’s sed: no quote, backslash or newline', () => {
-    for (const message of [GITHUB_MESSAGES.sign_in, GITHUB_MESSAGES.reconnect, GITHUB_MESSAGES.unavailable, GITHUB_MESSAGES.install('a.b/c_d-e')]) expect(message).not.toMatch(/["\\\n\r]/)
+    for (const message of [GITHUB_MESSAGES.sign_in, GITHUB_MESSAGES.reconnect, GITHUB_MESSAGES.unavailable, GITHUB_MESSAGES.otherProfile, GITHUB_MESSAGES.install('a.b/c_d-e')]) expect(message).not.toMatch(/["\\\n\r]/)
+  })
+})
+
+/**
+ * Folder agents are shared by every profile: a request is served for the profile of what holds the
+ * agent now (the hub's wiring: `githubHolderOf(turnLock.sharedOrigins(id), active)`), never for a
+ * profile the user switched to while the turn or command was running.
+ */
+describe('GitHub loopback: the profile of what holds the agent', () => {
+  let server: CredentialTokenServer, port: number, t: ReturnType<typeof makeService>
+  let active: string | null
+  const locked = new Set<string>()
+  const A_TOKEN = 'ghu_access_OLD_0000000000', B_TOKEN = 'ghu_access_BOB_0000000000'
+  const auth = (agentId: string) => ({ authorization: `Bearer ${server.bearer(agentId)}` })
+  const token = async () => (await call(port, { headers: auth('folder:a') })).body
+
+  beforeEach(async () => {
+    turnLock.releaseAll()
+    active = 'user-a'
+    locked.clear()
+    t = makeService({ access: { agentHolder: id => githubHolderOf(turnLock.sharedOrigins(id), () => active), available: id => !locked.has(id) } })
+    t.storage.seed('user-a', connected())
+    t.storage.seed('user-b', connected({ accessToken: B_TOKEN, login: 'bob', id: 43, email: '43+bob@users.noreply.github.com' }))
+    // The listener's own held rule, as the credential service installs it.
+    server = createCredentialTokenServer({ live: id => turnLock.isLocked(id) && !turnLock.isExclusivelyLocked(id), issue: vi.fn() })
+    for (const [path, handle] of Object.entries(githubLoopbackRoutes(t.service))) server.route(path, handle)
+    port = Number(new URL(await server.start()).port)
+  })
+  afterEach(async () => {
+    turnLock.releaseAll()
+    await server.close()
+    clearCredentialRedaction()
+  })
+
+  it('a turn started in profile A keeps A’s account when the active profile switches to B mid-turn', async () => {
+    const answers = await turnLock.withSharedLock('folder:a', 'turn', async () => {
+      const before = await token()
+      active = 'user-b'
+      return [before, await token()]
+    }, undefined, { userId: 'user-a' })
+    expect(answers.map(a => a.token)).toEqual([A_TOKEN, A_TOKEN])
+    expect(answers.map(a => a.login)).toEqual(['alice', 'alice'])
+    expect(JSON.stringify(answers)).not.toContain(B_TOKEN)
+  })
+
+  it('a kit command started by A likewise; its need is recorded under A, as one a run with no chat hit', async () => {
+    const handle = turnLock.acquireShared('folder:a', 'command', { userId: 'user-a', chatless: 'command' })
+    active = 'user-b'
+    expect((await token()).token).toBe(A_TOKEN)
+    handle.release()
+    // Started by C, who never signed in: sign_in for C, never A’s (active) token; the need is C’s.
+    active = 'user-a'
+    const other = turnLock.acquireShared('folder:a', 'command', { userId: 'user-c', chatless: 'schedule' })
+    expect(await token()).toEqual({ needed: 'sign_in', message: GITHUB_MESSAGES.sign_in })
+    await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"sign_in"}' })
+    other.release()
+    expect((await t.service.status('user-c')).needs).toEqual([{ key: 'account', kind: 'sign_in', agentIds: ['folder:a'], chatlessAgentIds: ['folder:a'] }])
+    expect((await t.service.status('user-a')).needs).toEqual([])
+  })
+
+  it('a chat’s turn records its need with no chatless agent', async () => {
+    await turnLock.withSharedLock('folder:a', 'turn', async () => {
+      await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"sign_in"}' })
+    }, undefined, { userId: 'user-c' })
+    expect((await t.service.status('user-c')).needs).toEqual([{ key: 'account', kind: 'sign_in', agentIds: ['folder:a'] }])
+    expect(t.service.chatlessNeeds('user-c')).toEqual([])
+  })
+
+  it('a hold that recorded no profile answers for the active profile', async () => {
+    active = 'user-b'
+    const bare = turnLock.acquireShared('folder:a', 'command')
+    expect((await token()).token).toBe(B_TOKEN)
+    bare.release()
+    const unnamed = turnLock.acquireShared('folder:a', 'turn', { userId: null })
+    expect((await token()).token).toBe(B_TOKEN)
+    unnamed.release()
+  })
+
+  it('holds working for two profiles at once: the token is refused as unavailable, and no need is recorded', async () => {
+    t.storage.seed('user-a', connected({ state: 'expired', accessToken: null, refreshToken: null }))
+    const first = turnLock.acquireShared('folder:a', 'turn', { userId: 'user-a' })
+    const second = turnLock.acquireShared('folder:a', 'command', { userId: 'user-b', chatless: 'command' })
+    expect(await token()).toEqual({ unavailable: true, message: GITHUB_MESSAGES.otherProfile })
+    await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"reconnect"}' })
+    expect((await t.service.status('user-a')).needs).toEqual([])
+    expect((await t.service.status('user-b')).needs).toEqual([])
+    second.release()
+    // One profile again: its turn is served.
+    expect(await token()).toEqual({ needed: 'reconnect', message: GITHUB_MESSAGES.reconnect })
+    first.release()
+  })
+
+  it('a newest hold that recorded no origin works for the active profile, not an older hold’s', async () => {
+    const turn = turnLock.acquireShared('folder:a', 'turn', { userId: 'user-a' })
+    const plain = turnLock.acquireShared('folder:a', 'dashboard')
+    active = 'user-b'
+    expect((await token()).message).toBe(GITHUB_MESSAGES.otherProfile)
+    active = 'user-a'
+    expect((await token()).token).toBe(A_TOKEN)
+    plain.release(); turn.release()
+  })
+
+  it('several holds of one profile: served, and the newest says whether no chat shows the run', async () => {
+    t.storage.seed('user-a', connected({ state: 'expired', accessToken: null, refreshToken: null }))
+    const turn = turnLock.acquireShared('folder:a', 'turn', { userId: 'user-a' })
+    const command = turnLock.acquireShared('folder:a', 'command', { userId: 'user-a', chatless: 'schedule' })
+    active = 'user-b'
+    await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"reconnect"}' })
+    expect((await t.service.status('user-a')).needs).toEqual([{ key: 'account', kind: 'reconnect', agentIds: ['folder:a'], chatlessAgentIds: ['folder:a'] }])
+    command.release(); turn.release()
+  })
+
+  it('a recorded profile that cannot serve gets sign_in, never the active profile’s token', async () => {
+    locked.add('user-a')
+    active = 'user-b'
+    const handle = turnLock.acquireShared('folder:a', 'turn', { userId: 'user-a' })
+    expect(await token()).toEqual({ needed: 'sign_in', message: GITHUB_MESSAGES.sign_in })
+    // Nor is a need recorded for anyone.
+    await call(port, { path: '/github/needed', headers: auth('folder:a'), body: '{"kind":"sign_in"}' })
+    handle.release()
+    expect((await t.service.status('user-b')).needs).toEqual([])
   })
 })

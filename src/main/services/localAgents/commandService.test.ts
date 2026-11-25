@@ -728,3 +728,20 @@ describe('uv could not start', () => {
     expect(result.error).toBe('"cinna-test-definitely-not-a-real-binary-xyz run" exited with code 127.')
   })
 })
+
+describe('the hold records whom the command runs for (the GitHub loopback reads it)', () => {
+  it('a chat’s /run: records the turn’s profile; a scheduled run its owner, as a run no chat shows; run() what it is given', async () => {
+    writeCatalog('commands:\n  - name: slow\n    description: x\n    command: sleep 0.2\n')
+    const fallback = async () => ({ text: '', parts: [], notices: [] })
+    const inChat = resolveCommandRunner('catalog', '/run:slow', USER, AGENT_ID, fallback, false, 'profile-a')({ signal: new AbortController().signal, onEvent: () => {} })
+    await vi.waitFor(() => expect(turnLock.latestOrigin(AGENT_ID)).toEqual({ userId: 'profile-a' }))
+    await inChat
+    const scheduled = commandService.runScheduled(USER, AGENT_ID, 'sleep 0.2', new AbortController().signal, undefined, 'profile-b')
+    await vi.waitFor(() => expect(turnLock.latestOrigin(AGENT_ID)).toEqual({ userId: 'profile-b', chatless: 'schedule' }))
+    await scheduled
+    const status = commandService.run(USER, AGENT_ID, 'slow', undefined, undefined, false, { userId: 'profile-c', chatless: 'command' })
+    await vi.waitFor(() => expect(turnLock.latestOrigin(AGENT_ID)).toEqual({ userId: 'profile-c', chatless: 'command' }))
+    await status
+    expect(turnLock.latestOrigin(AGENT_ID)).toBeNull()
+  })
+})

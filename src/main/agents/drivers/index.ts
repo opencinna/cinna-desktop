@@ -1393,8 +1393,8 @@ export const acpDriver = createAcpDriver({
   resolveRequest,
   // Shared: turns on one agent run side by side (one per chat, which the run
   // service enforces); only the desktop's own exclusive folder writes keep them out.
-  withLock: (agentId, owner, fn, queuedSignal, signal) => queuedSignal
-    ? turnLock.withQueuedSharedLock(agentId, owner, queuedSignal, fn) : turnLock.withSharedLock(agentId, owner, fn, signal),
+  withLock: (agentId, owner, fn, queuedSignal, signal, origin) => queuedSignal
+    ? turnLock.withQueuedSharedLock(agentId, owner, queuedSignal, fn, origin) : turnLock.withSharedLock(agentId, owner, fn, signal, origin),
   // The title a Codex chat's root session gives its thread names the chat.
   sessionTitle: ({ profileUserId, chatId, agentId, title }) => {
     void import('../../services/chatTitleService')

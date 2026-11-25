@@ -3,6 +3,9 @@
  * profile. One sign-in/reconnect need per profile (key `account`), one install need per owner
  * (key `install:<owner lowercased>`, repositories merged). Each remembers the agents that hit it.
  *
+ * Agents that hit a need from a run no chat shows (`chatless`) are listed apart, in
+ * `chatlessAgentIds`: that need is also an Inbox item and an agent-page row.
+ *
  * The keys the user dismissed are remembered too (`dismissedKeys`), so the renderer can tell a row
  * the user closed from one that resolved: recording the same need again takes its key off the list,
  * and sign-out (`clear`) empties it.
@@ -23,29 +26,38 @@ export function createNeedsRegistry() {
     if (!needs) { needs = new Map(); byProfile.set(userId, needs) }
     return needs
   }
-  const addAgent = (need: GithubNeedDto, agentId?: string): boolean => {
-    if (!agentId || need.agentIds.includes(agentId)) return false
-    need.agentIds.push(agentId); return true
+  const addAgent = (need: GithubNeedDto, agentId?: string, chatless = false): boolean => {
+    if (!agentId) return false
+    let changed = false
+    if (!need.agentIds.includes(agentId)) { need.agentIds.push(agentId); changed = true }
+    if (chatless && !need.chatlessAgentIds!.includes(agentId)) { need.chatlessAgentIds!.push(agentId); changed = true }
+    return changed
   }
+  const firstAgents = (agentId?: string, chatless = false) => ({
+    agentIds: agentId ? [agentId] : [], chatlessAgentIds: agentId && chatless ? [agentId] : []
+  })
 
   return {
-    /** Sign in or reconnect. A recorded one of the other kind takes the new kind. Answers whether anything changed. */
-    recordAccount(userId: string, kind: 'sign_in' | 'reconnect', agentId?: string): boolean {
+    /**
+     * Sign in or reconnect. A recorded one of the other kind takes the new kind. `chatless`: the
+     * agent hit it from a run no chat shows. Answers whether anything changed.
+     */
+    recordAccount(userId: string, kind: 'sign_in' | 'reconnect', agentId?: string, chatless = false): boolean {
       const needs = of(userId), need = needs.get(ACCOUNT_NEED)
       const wasDismissed = undismiss(userId, ACCOUNT_NEED)
-      if (!need) { needs.set(ACCOUNT_NEED, { key: ACCOUNT_NEED, kind, agentIds: agentId ? [agentId] : [] }); return true }
+      if (!need) { needs.set(ACCOUNT_NEED, { key: ACCOUNT_NEED, kind, ...firstAgents(agentId, chatless) }); return true }
       const kindChanged = need.kind !== kind
       need.kind = kind
-      return addAgent(need, agentId) || kindChanged || wasDismissed
+      return addAgent(need, agentId, chatless) || kindChanged || wasDismissed
     },
-    recordInstall(userId: string, repo: string, installUrl: string, agentId?: string): boolean {
+    recordInstall(userId: string, repo: string, installUrl: string, agentId?: string, chatless = false): boolean {
       const owner = ownerOf(repo), key = installNeedKey(owner), needs = of(userId), need = needs.get(key)
       const wasDismissed = undismiss(userId, key)
-      if (!need) { needs.set(key, { key, kind: 'install', owner, repos: [repo], installUrl, agentIds: agentId ? [agentId] : [] }); return true }
+      if (!need) { needs.set(key, { key, kind: 'install', owner, repos: [repo], installUrl, ...firstAgents(agentId, chatless) }); return true }
       let changed = false
       if (!need.repos!.some(r => r.toLowerCase() === repo.toLowerCase())) { need.repos!.push(repo); changed = true }
       if (need.installUrl !== installUrl) { need.installUrl = installUrl; changed = true }
-      return addAgent(need, agentId) || changed || wasDismissed
+      return addAgent(need, agentId, chatless) || changed || wasDismissed
     },
     clearAccount(userId: string): boolean { return byProfile.get(userId)?.delete(ACCOUNT_NEED) ?? false },
     /** Drop every install need whose repositories are all covered now. */
@@ -75,7 +87,10 @@ export function createNeedsRegistry() {
     },
     dismissedKeys(userId: string): string[] { return [...(dismissedBy.get(userId) ?? [])] },
     list(userId: string): GithubNeedDto[] {
-      return [...(byProfile.get(userId)?.values() ?? [])].map(n => ({ ...n, agentIds: [...n.agentIds], ...(n.repos ? { repos: [...n.repos] } : {}) }))
+      // `chatlessAgentIds` only when a run no chat shows hit the need.
+      return [...(byProfile.get(userId)?.values() ?? [])].map(({ chatlessAgentIds, ...n }) => ({
+        ...n, agentIds: [...n.agentIds], ...(chatlessAgentIds?.length ? { chatlessAgentIds: [...chatlessAgentIds] } : {}), ...(n.repos ? { repos: [...n.repos] } : {})
+      }))
     }
   }
 }

@@ -13,6 +13,7 @@
 import type { PermissionReply } from './localAgentRequests'
 import type { InputRequest, InputResumeMode } from './runEvents'
 import type { TaskDispatchMode, TaskDispatchPauseReason } from './taskDispatch'
+import type { GithubNeedDto } from './github'
 
 /**
  * Where an entry came from.
@@ -129,6 +130,27 @@ export interface InboxSnapshot {
    * Optional for the same reason as `dispatch`.
    */
   disconnected?: SkillDisconnectedInboxItem[]
+  /**
+   * GitHub needs a run no chat shows hit (a kit command, a scheduled run): one
+   * per profile for the sign-in, one per owner for an install, as the composer
+   * rows dedupe them. Derived from main's in-memory needs on every read: a
+   * sign-in, a coverage read or a dismissal (here, on the agent's page or in a
+   * composer) clears it. Optional for the same reason as `dispatch`.
+   */
+  github?: GithubNeedInboxItem[]
+}
+
+/**
+ * "GitHub isn't connected for *agent*" (and the expired and install kinds): a
+ * GitHub need that an agent's run with no chat hit. Acted on with the
+ * composer row's own action (Sign in to GitHub, Reconnect GitHub, Allow
+ * access); Dismiss dismisses the need itself (`github:dismiss`).
+ */
+export interface GithubNeedInboxItem {
+  kind: 'github_need'
+  need: GithubNeedDto
+  /** The agents whose runs with no chat hit it, named; oldest first. */
+  agents: Array<{ id: string; name: string }>
 }
 
 /** What the Update on an "Update available" card acts on. */

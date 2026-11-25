@@ -4694,6 +4694,16 @@ describe('concurrent turns on one agent', () => {
     expect((await third).error).toBeUndefined()
   })
 
+  it('records the profile the turn runs for with its hold (the GitHub loopback answers for it)', async () => {
+    const origins: unknown[] = []
+    const w = world({ script: SAYS_HELLO, deps: { withLock: (agentId, owner, fn, _queued, signal, origin) => {
+      origins.push(origin)
+      return turnLock.withSharedLock(agentId, owner, async () => { origins.push(turnLock.latestOrigin(agentId)); return fn() }, signal, origin)
+    } } })
+    expect((await w.run({ runScope: { profileUserId: 'profile-a', settingsUserId: USER_ID } })).error).toBeUndefined()
+    expect(origins).toEqual([{ userId: 'profile-a' }, { userId: 'profile-a' }])
+  })
+
   it('refuses a turn while an exclusive folder write holds the agent', async () => {
     const w = world({ script: SAYS_HELLO, deps: { withLock: sharedLock } })
     const editor = turnLock.acquire(AGENT_ID, 'editor')

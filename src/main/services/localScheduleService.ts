@@ -396,7 +396,8 @@ async function executeScheduledCommand(scope: RunScope, binding: AgentScheduleBi
   try {
     if (!current() || tracked.controller.signal.aborted) throw new Error('The active profile changed before command launch.')
     localScheduleRepo.updateOccurrence(scope.profileUserId, receipt.id, { status: 'dispatched', startedAt: Date.now() })
-    const outcome = await commandService.runScheduled(scope.settingsUserId, binding.definition.agentId, binding.definition.resolvedCommand!, tracked.controller.signal)
+    const outcome = await commandService.runScheduled(scope.settingsUserId, binding.definition.agentId, binding.definition.resolvedCommand!, tracked.controller.signal,
+      undefined, scope.profileUserId)
     if (outcome.started === false && (outcome.aborted || tracked.interrupted || !current())) {
       // Stopped while queued for the agent's turn lock: nothing ran, so there is
       // no uncertain outcome to review.

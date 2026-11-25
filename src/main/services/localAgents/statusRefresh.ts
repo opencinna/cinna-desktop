@@ -35,6 +35,7 @@ import { RUN_REFERENCE_PATTERN } from '../../../shared/kit/manifest'
 import { getLayoutView } from '../../kit/contractStore'
 import { createLogger } from '../../logger/logger'
 import { commandService } from './commandService'
+import { activatedProfileUserId } from '../../auth/activatedProfile'
 import { readStatus } from './scannerService'
 
 const logger = createLogger('local-agent-status')
@@ -284,7 +285,9 @@ export async function runStatusRefresh(
     )
   }
 
-  const outcome = await commandService.run(userId, agentId, reference[1], signal)
+  // No chat shows it: started for the active profile, whose GitHub sign-in its gh uses.
+  const outcome = await commandService.run(userId, agentId, reference[1], signal, undefined, false,
+    { userId: activatedProfileUserId(), chatless: 'command' })
   if (outcome.ok) return RAN
   if (outcome.busy) {
     logger.debug('status refresh deferred: agent busy', { agentId })

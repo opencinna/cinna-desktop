@@ -13,9 +13,11 @@ import { AskUserQuestionBlock } from '../chat/AskUserQuestionBlock'
 import { DispatchGateCard, DispatchPausedCard } from './InboxDispatchCards'
 import { UpdateAvailableCard } from './InboxUpdateCard'
 import { SkillDisconnectedCard } from './InboxDisconnectedCard'
+import { GithubNeedCard } from './InboxGithubCard'
 import { ASK_NO_LONGER_WAITING, disconnectedKey } from '../../../../shared/inbox'
 import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
 import type {
+  GithubNeedInboxItem,
   InboxAnswerCode,
   InboxEntry,
   InboxQueuedFor,
@@ -27,14 +29,15 @@ import type {
 /**
  * One row of the list: an ask, one of the task dispatcher's cards (an
  * approval of outside content, a paused queue), an agent with an update
- * available, or a catalog skill that is disconnected. All kinds share the
- * order and the retention.
+ * available, a catalog skill that is disconnected, or a GitHub need a run
+ * with no chat hit. All kinds share the order and the retention.
  */
 type InboxRowItem =
-  | { key: string; at: Date; ask: InboxEntry; dispatch?: undefined; update?: undefined; disconnected?: undefined }
-  | { key: string; at: Date; ask?: undefined; dispatch: TaskDispatchInboxItem; update?: undefined; disconnected?: undefined }
-  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; update: UpdateAvailableInboxItem; disconnected?: undefined }
-  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; update?: undefined; disconnected: SkillDisconnectedInboxItem }
+  | { key: string; at: Date; ask: InboxEntry; dispatch?: undefined; update?: undefined; disconnected?: undefined; github?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch: TaskDispatchInboxItem; update?: undefined; disconnected?: undefined; github?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; update: UpdateAvailableInboxItem; disconnected?: undefined; github?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; update?: undefined; disconnected: SkillDisconnectedInboxItem; github?: undefined }
+  | { key: string; at: Date; ask?: undefined; dispatch?: undefined; update?: undefined; disconnected?: undefined; github: GithubNeedInboxItem }
 
 function dispatchKey(item: TaskDispatchInboxItem): string {
   return item.kind === 'dispatch_gate' ? `gate:${item.gateId}` : `paused:${item.agentId}:${item.pausedAt.getTime()}`
@@ -44,7 +47,8 @@ function rowsOf(
   entries: readonly InboxEntry[],
   dispatch: readonly TaskDispatchInboxItem[],
   updates: readonly UpdateAvailableInboxItem[] = [],
-  disconnected: readonly SkillDisconnectedInboxItem[] = []
+  disconnected: readonly SkillDisconnectedInboxItem[] = [],
+  github: readonly GithubNeedInboxItem[] = []
 ): InboxRowItem[] {
   return [
     ...entries.map((ask): InboxRowItem => ({ key: ask.requestId, at: ask.createdAt, ask })),
@@ -66,7 +70,9 @@ function rowsOf(
       key: `disconnected:${disconnectedKey(item.agentId, item.packageUuid, item.revision)}`,
       at: new Date(0),
       disconnected: item
-    }))
+    })),
+    // One card per need, as main dedupes them: one for the sign-in, one per owner for an install.
+    ...github.map((item): InboxRowItem => ({ key: `github:${item.need.key}`, at: new Date(0), github: item }))
   ]
 }
 
@@ -159,7 +165,7 @@ export function InboxView(): React.JSX.Element {
   const entries = useMemo(() => {
     const byId = new Map<string, InboxRowItem>()
     for (const row of retained) byId.set(row.key, row)
-    for (const row of rowsOf(data?.entries ?? [], data?.dispatch ?? [], data?.updates ?? [], data?.disconnected ?? [])) {
+    for (const row of rowsOf(data?.entries ?? [], data?.dispatch ?? [], data?.updates ?? [], data?.disconnected ?? [], data?.github ?? [])) {
       byId.set(row.key, row)
     }
     const known = new Set(order.current)
@@ -283,6 +289,8 @@ export function InboxView(): React.JSX.Element {
                 <UpdateAvailableCard key={row.key} item={row.update} onActed={() => retain(row)} />
               ) : row.disconnected ? (
                 <SkillDisconnectedCard key={row.key} item={row.disconnected} onActed={() => retain(row)} />
+              ) : row.github ? (
+                <GithubNeedCard key={row.key} item={row.github} onActed={() => retain(row)} />
               ) : row.dispatch.kind === 'dispatch_gate' ? (
                 <DispatchGateCard
                   key={row.key}

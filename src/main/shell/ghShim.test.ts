@@ -430,6 +430,13 @@ describe.skipIf(!hasCurl)('the gh wrapper', () => {
     expect(out.stdout).toContain('managed argv:pr list\nGH_TOKEN=served\n')
   })
 
+  it('another profile is running the agent: its message, exit 1, no need posted', async () => {
+    const loop = await startLoopback(() => ({ status: 200, body: { unavailable: true, message: GITHUB_MESSAGES.otherProfile } }))
+    const out = await run(['repo', 'view', 'acme/shop'], { endpoint: loop.url })
+    expect([out.status, out.stdout, out.stderr]).toEqual([1, '', `${GITHUB_MESSAGES.otherProfile}\n`])
+    expect(loop.requests.map((r) => r.path)).toEqual(['/github/token'])
+  })
+
   it('unavailable and no own login: its message, exit 1', async () => {
     const loop = await startLoopback(() => ({ status: 200, body: { unavailable: true, message: GITHUB_MESSAGES.unavailable } }))
     const out = await run(['pr', 'list'], { endpoint: loop.url })
@@ -583,6 +590,13 @@ describe.skipIf(!hasCurl)('gh auth git-credential (git, G4)', () => {
     const loop = await startLoopback(() => neededAnswer('sign_in'))
     const out = await run(['auth', 'git-credential', 'get'], { endpoint: loop.url, input: request, ownLogin: true })
     expect(out.stdout).toContain('fake-credential get\n')
+    expect(loop.requests.map((r) => r.path)).toEqual(['/github/token'])
+  })
+
+  it('another profile is running the agent (unavailable): an empty answer, its message, nothing posted', async () => {
+    const loop = await startLoopback(() => ({ status: 200, body: { unavailable: true, message: GITHUB_MESSAGES.otherProfile } }))
+    const out = await run(['auth', 'git-credential', 'get'], { endpoint: loop.url, input: request })
+    expect([out.status, out.stdout, out.stderr]).toEqual([0, '', `${GITHUB_MESSAGES.otherProfile}\n`])
     expect(loop.requests.map((r) => r.path)).toEqual(['/github/token'])
   })
 

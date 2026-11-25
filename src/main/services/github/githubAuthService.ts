@@ -16,7 +16,7 @@ import { runtimeHost } from '../../host/runtimeHost'
 import { publishEvent } from '../../host/events'
 import { githubAccountRepo } from '../../db/githubAccounts'
 import { rememberCredentialSecrets } from '../../security/serviceCredentialRedaction'
-import { GITHUB_CHANGED, type GithubAccountState, type GithubCoverage, type GithubDeviceFlowDto, type GithubStatusDto } from '../../../shared/github'
+import { GITHUB_CHANGED, type GithubAccountState, type GithubCoverage, type GithubDeviceFlowDto, type GithubNeedChatless, type GithubNeedDto, type GithubStatusDto } from '../../../shared/github'
 import { getUser, listCoverage, parseTokenPair, pollDeviceToken, refreshAccessToken, requestDeviceCode, safeCode, type GithubFetch, type TokenPair } from './githubApi'
 import { coverageOf, installUrlFor, parseRepo, type CoverageAnswer } from './githubCoverage'
 import { createNeedsRegistry } from './githubNeeds'
@@ -58,9 +58,14 @@ export interface GithubServiceDeps {
   logger?: ScopedLogger
 }
 
+/** What holds an agent now: the profile its loopback request is served for, and whether no chat shows the run. */
+export interface GithubAgentHolder { userId: string; chatless: GithubNeedChatless }
+/** Holders of one agent working for different profiles at once: nothing is served or recorded. */
+export interface GithubHolderConflict { conflict: true }
+
 /** Which profile an agent works for, and whether a profile can serve a token now. Installed by the hub. */
 export interface GithubProfileAccess {
-  agentProfile(agentId: string): string | null
+  agentHolder(agentId: string): GithubAgentHolder | GithubHolderConflict | null
   available(userId: string): boolean
 }
 
@@ -110,7 +115,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
   const logger = deps.logger ?? createLogger('github')
   const needs = createNeedsRegistry()
   const profiles = new Map<string, Profile>()
-  let access: GithubProfileAccess = { agentProfile: () => null, available: () => true }
+  let access: GithubProfileAccess = { agentHolder: () => null, available: () => true }
   let onSignedIn: (userId: string) => void = () => {}
   let onGhMissing: (agentId: string) => Promise<boolean> = async () => false
 
@@ -388,10 +393,24 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
         return false
       }
     },
-    /** The profile an agent's loopback request works for: null when none can serve it. */
-    profileForAgent(agentId: string): string | null {
-      const userId = access.agentProfile(agentId)
-      return userId && access.available(userId) ? userId : null
+    /**
+     * What an agent's loopback request works for: the profile of what holds the agent now (not
+     * the active one, unless the hold recorded none), and whether no chat shows that run. Null
+     * when that profile cannot serve; a conflict when the agent's holders work for different profiles.
+     */
+    holderOf(agentId: string): GithubAgentHolder | GithubHolderConflict | null {
+      const holder = access.agentHolder(agentId)
+      if (!holder || 'conflict' in holder) return holder
+      return access.available(holder.userId) ? holder : null
+    },
+
+    /**
+     * The needs a run no chat shows hit (`chatlessAgentIds` non-empty), for the Inbox. Empty for a
+     * profile that cannot serve. A dismissed or cleared need is not in the registry any more.
+     */
+    chatlessNeeds(userId: string): GithubNeedDto[] {
+      if (!access.available(userId)) return []
+      return needs.list(userId).filter(n => (n.kind === 'sign_in' || n.kind === 'reconnect' || n.kind === 'install') && (n.chatlessAgentIds?.length ?? 0) > 0)
     },
 
     /** What the renderer sees: never a token, refresh token or email. A profile that cannot serve reads as not signed in. */
@@ -432,20 +451,21 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
      * The wrapper found nothing that could authenticate: record what the composer should offer.
      * The profile's own state decides between Sign in and Reconnect; an install need for a
      * repository the cache already covers, or a sign-in need while signed in, is stale and dropped.
+     * `chatless`: a run no chat shows hit it (also an Inbox item and an agent-page row).
      */
-    async recordNeed(userId: string, kind: 'sign_in' | 'reconnect' | 'install', repoValue: unknown, agentId?: string): Promise<void> {
+    async recordNeed(userId: string, kind: 'sign_in' | 'reconnect' | 'install', repoValue: unknown, agentId?: string, chatless: GithubNeedChatless = null): Promise<void> {
       if (!access.available(userId)) return
       const account = await load(userId), p = profile(userId)
       const connected = account?.state === 'connected' && !!account.accessToken
       let changed = false
       if (!connected) {
-        changed = needs.recordAccount(userId, account ? 'reconnect' : 'sign_in', agentId)
+        changed = needs.recordAccount(userId, account ? 'reconnect' : 'sign_in', agentId, chatless !== null)
       } else if (kind === 'install') {
         const repo = parseRepo(repoValue)
         if (!repo) return
         const c = p.coverage ? coverageOf(p.coverage.installs, repo) : { answer: 'not_installed' as const }
         if (c.answer === 'covered') return
-        changed = needs.recordInstall(userId, repo, installUrlFor(c.answer, c.install), agentId)
+        changed = needs.recordInstall(userId, repo, installUrlFor(c.answer, c.install), agentId, chatless !== null)
       }
       if (changed) publish(userId)
     },

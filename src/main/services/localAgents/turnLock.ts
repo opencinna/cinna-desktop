@@ -46,6 +46,19 @@ const logger = createLogger('local-agent-lock')
 
 type LockMode = 'shared' | 'exclusive'
 
+/**
+ * Who a shared hold works for, recorded with it: the profile that started it
+ * (a chat turn's run profile, a schedule's or a command's starter) and, for a
+ * hold no chat shows, which kind it is. Read by the loopback endpoint through
+ * {@link TurnLock.latestOrigin}; never consulted by the lock itself.
+ */
+export interface HoldOrigin {
+  /** Null or absent: nothing recorded, the reader falls back to the active profile. */
+  userId?: string | null
+  /** A kit command or a scheduled run no chat shows; absent for a chat's turn or `/run:`. */
+  chatless?: 'command' | 'schedule'
+}
+
 interface HeldLock {
   /** Who took it — `'turn'`, `'editor'`, … Logged, never shown to the user. */
   owner: string
@@ -57,6 +70,7 @@ interface HeldLock {
    * refusing. The holder must stop its run; its later release is a no-op.
    */
   onPreempt?: () => void
+  origin?: HoldOrigin
 }
 
 export interface TurnLockHandle {
@@ -134,7 +148,7 @@ function preemptAll(agentId: string): void {
   }
 }
 
-function take(agentId: string, owner: string, mode: LockMode, onPreempt?: () => void): TurnLockHandle {
+function take(agentId: string, owner: string, mode: LockMode, onPreempt?: () => void, origin?: HoldOrigin): TurnLockHandle {
   const existing = blocker(agentId, mode)
   if (existing) {
     throw new LocalAgentError(
@@ -146,7 +160,7 @@ function take(agentId: string, owner: string, mode: LockMode, onPreempt?: () => 
   if (mode === 'exclusive') preemptAll(agentId)
   const token = nextToken++
   const holders = held.get(agentId) ?? new Map<number, HeldLock>()
-  holders.set(token, { owner, acquiredAt: Date.now(), mode, ...(onPreempt ? { onPreempt } : {}) })
+  holders.set(token, { owner, acquiredAt: Date.now(), mode, ...(onPreempt ? { onPreempt } : {}), ...(origin ? { origin } : {}) })
   held.set(agentId, holders)
   logger.debug('turn lock acquired', { agentId, owner, mode })
 
@@ -168,7 +182,7 @@ function take(agentId: string, owner: string, mode: LockMode, onPreempt?: () => 
   }
 }
 
-async function withQueued<T>(agentId: string, owner: string, mode: LockMode, signal: AbortSignal, fn: () => Promise<T> | T): Promise<T> {
+async function withQueued<T>(agentId: string, owner: string, mode: LockMode, signal: AbortSignal, fn: () => Promise<T> | T, origin?: HoldOrigin): Promise<T> {
   const handle = await new Promise<TurnLockHandle>((resolve, reject) => {
     let counted = false
     const remove = (): void => {
@@ -189,7 +203,7 @@ async function withQueued<T>(agentId: string, owner: string, mode: LockMode, sig
         return
       }
       remove()
-      resolve(take(agentId, owner, mode))
+      resolve(take(agentId, owner, mode, undefined, origin))
     }
     signal.addEventListener('abort', abort, { once: true })
     acquire()
@@ -226,13 +240,13 @@ const STOPPED_WHILE_WAITING = 'The turn was stopped while waiting for its agent.
  * when the holder is not brief, or the wait runs out. An abort of `signal`
  * ends the wait at once, removing its waiter, and rejects.
  */
-async function takeSharedWaitingOutBrief(agentId: string, owner: string, signal?: AbortSignal): Promise<TurnLockHandle> {
+async function takeSharedWaitingOutBrief(agentId: string, owner: string, signal?: AbortSignal, origin?: HoldOrigin): Promise<TurnLockHandle> {
   const deadline = Date.now() + BRIEF_EXCLUSIVE_WAIT_MS
   for (;;) {
     if (signal?.aborted) throw new Error(STOPPED_WHILE_WAITING)
     const existing = blocker(agentId, 'shared')
     const left = deadline - Date.now()
-    if (!existing || !BRIEF_EXCLUSIVE_OWNERS.has(existing.owner) || left <= 0) return take(agentId, owner, 'shared')
+    if (!existing || !BRIEF_EXCLUSIVE_OWNERS.has(existing.owner) || left <= 0) return take(agentId, owner, 'shared', undefined, origin)
     await new Promise<void>((resolve, reject) => {
       const settle = (): void => {
         clearTimeout(timer)
@@ -288,8 +302,8 @@ export const turnLock = {
    *
    * @throws LocalAgentError `turn_in_progress`
    */
-  acquireShared(agentId: string, owner: string): TurnLockHandle {
-    return take(agentId, owner, 'shared')
+  acquireShared(agentId: string, owner: string, origin?: HoldOrigin): TurnLockHandle {
+    return take(agentId, owner, 'shared', undefined, origin)
   },
 
   /**
@@ -305,9 +319,9 @@ export const turnLock = {
    * finds only preemptible holders evicts them (calling each `onPreempt`, which
    * must abort the run) and proceeds instead of refusing.
    */
-  tryAcquireSharedYielding(agentId: string, owner: string, onPreempt?: () => void): TurnLockHandle | null {
+  tryAcquireSharedYielding(agentId: string, owner: string, onPreempt?: () => void, origin?: HoldOrigin): TurnLockHandle | null {
     if (exclusiveHolder(agentId) || (queuedExclusive.get(agentId) ?? 0) > 0) return null
-    return take(agentId, owner, 'shared', onPreempt)
+    return take(agentId, owner, 'shared', onPreempt, origin)
   },
 
   /** Run `fn` under the exclusive lock, releasing it however `fn` ends. */
@@ -324,8 +338,8 @@ export const turnLock = {
    *
    * @throws LocalAgentError `turn_in_progress`
    */
-  async withSharedLock<T>(agentId: string, owner: string, fn: () => Promise<T> | T, signal?: AbortSignal): Promise<T> {
-    return withHeld(await takeSharedWaitingOutBrief(agentId, owner, signal), () => {
+  async withSharedLock<T>(agentId: string, owner: string, fn: () => Promise<T> | T, signal?: AbortSignal, origin?: HoldOrigin): Promise<T> {
+    return withHeld(await takeSharedWaitingOutBrief(agentId, owner, signal, origin), () => {
       if (signal?.aborted) throw new Error(STOPPED_WHILE_WAITING)
       return fn()
     })
@@ -337,8 +351,24 @@ export const turnLock = {
   },
 
   /** Shared, queued: waits only while an exclusive holder exists; cancellation removes its waiter. */
-  withQueuedSharedLock<T>(agentId: string, owner: string, signal: AbortSignal, fn: () => Promise<T> | T): Promise<T> {
-    return withQueued(agentId, owner, 'shared', signal, fn)
+  withQueuedSharedLock<T>(agentId: string, owner: string, signal: AbortSignal, fn: () => Promise<T> | T, origin?: HoldOrigin): Promise<T> {
+    return withQueued(agentId, owner, 'shared', signal, fn, origin)
+  },
+
+  /**
+   * The origin each shared hold on `agentId` recorded (null for one that recorded none), oldest
+   * first. Holds share one bearer per agent, so a loopback request cannot say which of several
+   * concurrent holds its child belongs to: the reader decides (the GitHub loopback refuses when
+   * they work for different profiles, and otherwise answers for the newest).
+   */
+  sharedOrigins(agentId: string): Array<HoldOrigin | null> {
+    // A Map iterates in insertion order and tokens only grow: oldest first.
+    return [...held.get(agentId)?.values() ?? []].filter((lock) => lock.mode === 'shared').map((lock) => lock.origin ?? null)
+  },
+
+  /** The origin the newest shared hold on `agentId` recorded; null when it recorded none or nothing holds it. */
+  latestOrigin(agentId: string): HoldOrigin | null {
+    return turnLock.sharedOrigins(agentId).at(-1) ?? null
   },
 
   /**

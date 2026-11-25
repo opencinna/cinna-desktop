@@ -108,11 +108,42 @@ describe('which chats show it', () => {
     await act(async () => {})
     expect(screen.queryByText('GitHub isn’t connected.')).toBeNull()
   })
-  it('not the new-chat screen', async () => {
+  it('not the new-chat screen, for a need only chats hit', async () => {
     status = signedOut([need()])
     show({ chatId: null })
+    await waitFor(() => expect(api.status).toHaveBeenCalled())
     await act(async () => {})
     expect(screen.queryByText('GitHub isn’t connected.')).toBeNull()
+  })
+})
+
+describe('the agent’s page (the new-chat screen): a need a run with no chat hit', () => {
+  it('shows the same row, acting the same, for that agent only', async () => {
+    status = signedOut([need({ agentIds: ['agent-1', 'agent-2'], chatlessAgentIds: ['agent-1'] })])
+    const { unmount } = show({ chatId: null })
+    const row = await screen.findByTitle('GitHub isn’t connected. This agent’s gh and git commands need a GitHub sign-in.')
+    expect(row.textContent).toBe('GitHub isn’t connected.')
+    api.signIn.mockResolvedValue({ ok: true, value: { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: Date.now() + 900_000, state: 'pending' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in to GitHub' }))
+    await waitFor(() => expect(api.signIn).toHaveBeenCalledTimes(1))
+    unmount()
+    // Another agent's page, whose chats alone hit it: nothing.
+    show({ chatId: null, agentId: 'agent-2' })
+    await act(async () => {})
+    expect(screen.queryByText('GitHub isn’t connected.')).toBeNull()
+  })
+
+  it('install: Allow access through main; × dismisses the need; no Continue once it clears', async () => {
+    const install = need({ key: 'install:acme', kind: 'install', owner: 'acme', repos: ['acme/shop'], installUrl: 'https://github.com/apps/opencinna/installations/new', chatlessAgentIds: ['agent-1'] })
+    status = connected([install])
+    const { send } = show({ chatId: null })
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow access' }))
+    await waitFor(() => expect(api.openInstall).toHaveBeenCalledWith('install:acme'))
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss GitHub access request' }))
+    await waitFor(() => expect(api.dismiss).toHaveBeenCalledWith('install:acme'))
+    await push(connected([]))
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    expect(send).not.toHaveBeenCalled()
   })
 })
 
@@ -162,6 +193,14 @@ describe('the device flow in the row', () => {
 })
 
 describe('dismiss and resolve', () => {
+  it('a refused × keeps the row and says so in its sentence', async () => {
+    status = signedOut([need()])
+    api.dismiss.mockResolvedValueOnce({ ok: false, error: 'nope' } as never)
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss GitHub sign-in' }))
+    expect(await screen.findByText('The row could not be dismissed.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Sign in to GitHub' })).toBeTruthy()
+  })
   it('dismisses through main, and a dismissed need is not read as connected', async () => {
     status = connected([need({ key: 'install:acme', kind: 'install', owner: 'acme', repos: ['acme/shop'] })])
     show()

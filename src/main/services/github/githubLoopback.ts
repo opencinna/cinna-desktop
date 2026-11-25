@@ -8,7 +8,8 @@
  *
  * Core module: no Electron.
  */
-import type { GithubAuthService } from './githubAuthService'
+import type { GithubAgentHolder, GithubAuthService, GithubHolderConflict } from './githubAuthService'
+import type { HoldOrigin } from '../localAgents/turnLock'
 import { parseRepo } from './githubCoverage'
 import { plainText } from './githubApi'
 
@@ -19,8 +20,26 @@ export const GITHUB_MESSAGES = {
   sign_in: "GitHub isn't connected. Ask the user to click Sign in to GitHub under the message box, then run this command again.",
   reconnect: 'The GitHub sign-in has expired. Ask the user to click Reconnect GitHub under the message box, then run this command again.',
   install: (repo: string): string => `Cinna's GitHub app can't reach ${repo} yet. Ask the user to click Allow access under the message box, then run this command again.`,
-  unavailable: 'GitHub could not be reached to refresh the sign-in. Try again in a moment.'
+  unavailable: 'GitHub could not be reached to refresh the sign-in. Try again in a moment.',
+  otherProfile: 'Another Cinna profile is running this agent right now. Try again when its run has finished.'
 } as const
+
+/**
+ * Whom an agent's loopback request works for, from the origins its shared holds recorded, oldest
+ * first (`turnLock.sharedOrigins`). Each hold works for the profile it recorded (the profile a
+ * chat's turn runs for, the starter of a kit command, the owner of a schedule), a hold that
+ * recorded none for the profile active now. Folder agents are shared by every profile, so a profile
+ * switch mid-turn must not hand the turn the new profile's GitHub account; and holds working for
+ * different profiles at once are a conflict, never a guess, since one bearer serves them all.
+ * Otherwise the newest hold answers, and its `chatless` says whether no chat shows that run.
+ */
+export function githubHolderOf(origins: Array<HoldOrigin | null>, activeProfile: () => string | null): GithubAgentHolder | GithubHolderConflict | null {
+  const newest = origins.at(-1) ?? null
+  const profiles = new Set(origins.length ? origins.map(o => o?.userId || activeProfile()) : [activeProfile()])
+  if (profiles.size > 1) return { conflict: true }
+  const userId = [...profiles][0]
+  return userId ? { userId, chatless: newest?.chatless ?? null } : null
+}
 
 const ok = (body: unknown): GithubRouteAnswer => ({ status: 200, body })
 const needed = (kind: 'sign_in' | 'reconnect'): GithubRouteAnswer => ok({ needed: kind, message: GITHUB_MESSAGES[kind] })
@@ -30,7 +49,10 @@ export function githubLoopbackRoutes(service: GithubAuthService): Record<string,
   return {
     /** `{ repo? }` → a token with the commit identity, or what is needed, or a transient refusal. */
     '/github/token': async (agentId, body) => {
-      const userId = service.profileForAgent(agentId)
+      // The profile of what holds the agent now (a chat's turn, a schedule's or a command's starter).
+      const holder = service.holderOf(agentId)
+      if (holder && 'conflict' in holder) return ok({ unavailable: true, message: GITHUB_MESSAGES.otherProfile })
+      const userId = holder?.userId
       if (!userId) return needed('sign_in')
       const repo = parseRepo(body.repo)
       const result = await service.token(userId, agentId)
@@ -54,8 +76,10 @@ export function githubLoopbackRoutes(service: GithubAuthService): Record<string,
         return { status: 422, body: { detail: { code: 'invalid_request', message: 'Expected {"kind": "sign_in" | "reconnect" | "install" | "gh_missing", "repo"?: "owner/repo"}.' } } }
       }
       if (kind === 'gh_missing') return ok({ ok: true, installing: await service.ghMissing(agentId) })
-      const userId = service.profileForAgent(agentId)
-      if (userId) await service.recordNeed(userId, kind as 'sign_in' | 'reconnect' | 'install', body.repo, agentId)
+      // Recorded under the same profile the token route answered for, so the row lands in its chats.
+      const holder = service.holderOf(agentId)
+      // Holders of different profiles at once: the token route refused, so nothing is recorded.
+      if (holder && !('conflict' in holder)) await service.recordNeed(holder.userId, kind as 'sign_in' | 'reconnect' | 'install', body.repo, agentId, holder.chatless)
       return ok({ ok: true })
     }
   }

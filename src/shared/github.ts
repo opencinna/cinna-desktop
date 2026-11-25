@@ -34,7 +34,16 @@ export interface GithubNeedDto {
   installUrl?: string
   /** The agents whose commands hit it. */
   agentIds: string[]
+  /**
+   * Those of {@link agentIds} that hit it from a run no chat shows (a kit command such as a status
+   * refresh, a scheduled run): the need is then also an Inbox item and a row on the agent's page.
+   * Absent or empty when only chats hit it.
+   */
+  chatlessAgentIds?: string[]
 }
+
+/** What held the agent when its need was recorded: a run no chat shows, or (null) a chat's turn. */
+export type GithubNeedChatless = 'command' | 'schedule' | null
 
 export interface GithubDeviceFlowDto {
   userCode: string

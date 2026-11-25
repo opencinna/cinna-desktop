@@ -66,6 +66,7 @@ import { RequestError } from '@agentclientprotocol/sdk'
 import { cinnaToolName } from './conductorToolPolicy'
 import { createSessionTitles, type SessionTitleScope, type SessionTitleSink, type SessionTitles } from './acpSessionTitle'
 import type { AgentRow } from '../../../db/agents'
+import type { HoldOrigin } from '../../../services/localAgents/turnLock'
 import type { RunAgentTurnResult, TurnIO, TurnSteer } from '../../../services/a2aStreamingService'
 import type { InputQuestion, RunEvent } from '../../../../shared/runEvents'
 import { describeQuestionAnswers, REQUEST_PARK_TIMEOUT_MS } from '../../../../shared/localAgentRequests'
@@ -254,9 +255,11 @@ export interface AcpDriverDeps {
    * sibling turns of the same agent (other chats) run beside it, and only an
    * exclusive holder (the desktop's own folder write) refuses or queues it.
    * `signal` is the turn's own: a Stop during a brief wait for a credential
-   * write ends the wait, and a stopped turn never runs `fn`.
+   * write ends the wait, and a stopped turn never runs `fn`. `origin` is
+   * recorded with the hold: the profile the turn runs for, which the GitHub
+   * loopback answers for while this hold is the newest.
    */
-  withLock<T>(agentId: string, owner: string, fn: () => Promise<T>, queuedSignal?: AbortSignal, signal?: AbortSignal): Promise<T>
+  withLock<T>(agentId: string, owner: string, fn: () => Promise<T>, queuedSignal?: AbortSignal, signal?: AbortSignal, origin?: HoldOrigin): Promise<T>
   /**
    * Where a session's traffic goes between turns (see `acpSessionObserver.ts`).
    * One sink per observed session, built with the chat and agent it belongs
@@ -871,7 +874,10 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
           } finally {
             await release?.()
           }
-        }, input.queueWhenBusy ? input.signal : undefined, input.signal)
+        }, input.queueWhenBusy ? input.signal : undefined, input.signal,
+        // The profile this turn runs for (a chat shared across profiles is owned by the default
+        // one, so never the chat row's owner): the GitHub loopback serves that profile's sign-in.
+        { userId: input.runScope?.profileUserId ?? null })
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
         // already user-facing ("This agent is busy right now…"). Letting it
