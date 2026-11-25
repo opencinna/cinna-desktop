@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import {
   AGENT, CODE_SENTENCE, INSTALL_SENTENCE, LOGIN, REPLY, RESOLVED_TITLE, SERVED, SIGN_IN_ROW_TITLE, SIGN_IN_SENTENCE,
@@ -18,7 +20,15 @@ test('sign in from the composer: the refused gh shows the row, the device code, 
   test.setTimeout(120_000)
   // The app is installed on acme with every repository: the sign-in is all that is missing.
   github.installs = [{ id: 77, owner: 'acme', ownerId: 9001, type: 'Organization', repos: 'all' }]
-  const { acp } = await arrange(cinna)
+  const { acp, agentPath } = await arrange(cinna)
+
+  await test.step('the scaffolded agent is sent to guide 15, and its relative path resolves to the workshop kit', async () => {
+    // Kit agents live at <root>/Local/<slug>, the kit at <root>/.cinna-kit: AGENTS.md item 7 is relative to that.
+    expect(basename(dirname(agentPath))).toBe('Local')
+    const guide = '../../.cinna-kit/guides/15-github-repos.md'
+    expect(readFileSync(join(agentPath, 'AGENTS.md'), 'utf8')).toContain(`read \`${guide}\` first`)
+    await expect.poll(() => existsSync(join(agentPath, guide)), { timeout: 15_000 }).toBe(true)
+  })
 
   await test.step('gh is refused with exit 4 and the sign-in sentence; the composer offers Sign in to GitHub', async () => {
     await runFromCommands(cinna)
