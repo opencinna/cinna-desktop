@@ -121,6 +121,9 @@ function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): R
   // machine has no usable git of its own — as a CI Mac without the command
   // line developer tools does. A spec never waits on it; it must never pull it.
   env.CINNA_GIT_DOWNLOAD = 'off'
+  // And for gh (~14 MB), which Cinna fetches for GitHub repos when the
+  // machine has no `gh` of its own. Same rule: a spec never pulls it.
+  env.CINNA_GH_DOWNLOAD = 'off'
   // And for the uv pre-warm (the managed uv plus `uv python install`), which
   // starts whenever a spec creates an agent. Bare-mac keeps it on.
   env.CINNA_UV_PREWARM = 'off'

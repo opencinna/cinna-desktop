@@ -3,8 +3,8 @@
  *
  * Cinna runs four external agent runtimes — OpenCode, Codex, Claude Code and
  * Antigravity. Codex and Claude Code run through an ACP adapter that is an
- * exact `package.json` pin; Antigravity's server speaks ACP itself. Git is
- * downloaded too, only for a machine that has none. A version
+ * exact `package.json` pin; Antigravity's server speaks ACP itself. Git and
+ * the GitHub CLI are downloaded too, only for a machine that has none. A version
  * that is compared, downloaded or displayed anywhere in the app is read from
  * here, so bumping a runtime is one edit plus the checksums that prove it.
  *
@@ -172,6 +172,15 @@ const GIT_ASSET_PREFIX = `dugite-native-v${GIT_CLI}-a44aeca`
 function gitAsset(plat: string, sha256: string, size: number): RuntimePinAsset {
   const file = `${GIT_ASSET_PREFIX}-${plat}.tar.gz`
   return { file, sha256, url: `${GIT_RELEASE}/${file}`, size }
+}
+
+const GH_CLI = '2.105.0'
+const GH_RELEASE = `https://github.com/cli/cli/releases/download/v${GH_CLI}`
+
+/** One GitHub CLI release archive: `<plat>` is the release's own platform name (`macOS_arm64.zip`, `linux_amd64.tar.gz`). */
+function ghAsset(plat: string, sha256: string, size: number): RuntimePinAsset {
+  const file = `gh_${GH_CLI}_${plat}`
+  return { file, sha256, url: `${GH_RELEASE}/${file}`, size }
 }
 
 /**
@@ -486,6 +495,28 @@ export const RUNTIME_PINS = {
       'darwin-x64': gitAsset('macOS-x64', '52cc663281e1ec2f1d76ba781193ca4847e62dbbf767f6c99ec9ec5b978a7659', 67470398),
       'linux-x64': gitAsset('ubuntu-x64', '1efd8ce0516b670b6b6d0f49ecaf395ceb8cf7fff3f5857259763d97a1238df9', 67467493),
       'linux-arm64': gitAsset('ubuntu-arm64', 'd5ce120515bf3013a014e6a918aa87ec0f7a6f5f9687c48d50127e637cb9b6c2', 25250010)
+    } as Readonly<Record<string, RuntimePinAsset>>
+  },
+  gh: {
+    cli: GH_CLI,
+    /** The first line of `gh --version` starts with exactly this, then the build date: `gh version 2.105.0 (2026-11-17)`. */
+    versionOutput: `gh version ${GH_CLI}`,
+    /**
+     * The GitHub CLI's own release archives (MIT), installed only when the
+     * machine has no `gh` of its own — any `gh` on PATH wins. See
+     * `main/shell/managedGh.ts`. Each archive unpacks to
+     * `gh_<cli>_<plat>/bin/gh` beside `LICENSE` and `share/man`; that
+     * directory is what is published.
+     *
+     * Every row was downloaded from the release and hashed on 2026-11-25, and
+     * agreed with the release's `gh_2.105.0_checksums.txt`; `size` is the byte
+     * count of the same download. **Windows is absent**: not supported yet.
+     */
+    assets: {
+      'darwin-arm64': ghAsset('macOS_arm64.zip', '2a5d03103ae444927383b93d9ffd65579a26e2eb900ce1cf11f55258d5319ded', 14135394),
+      'darwin-x64': ghAsset('macOS_amd64.zip', '23602cbccbbdc6285a8520745b714cb927ce2ca621779373c2a20cd8e33fda66', 15734736),
+      'linux-x64': ghAsset('linux_amd64.tar.gz', '79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f', 15050573),
+      'linux-arm64': ghAsset('linux_arm64.tar.gz', 'b1278c75107423d818f1937fd92cafc9e5e9b606631568f68d7fb816f5885a02', 13684308)
     } as Readonly<Record<string, RuntimePinAsset>>
   }
 } as const

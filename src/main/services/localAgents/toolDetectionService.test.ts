@@ -12,6 +12,12 @@ vi.mock('../../localdev/toolchain', () => ({
   managedUvLayout: () => ({ uvBin: managedUv.path })
 }))
 
+// Where the managed gh would be; a test that wants it installed writes a file there.
+const managedGhBin = vi.hoisted(() => ({ path: '/nonexistent/runtimes/gh-2.105.0/bin/gh' }))
+vi.mock('../../shell/managedGh', () => ({
+  managedGh: { binaryLocation: () => managedGhBin.path }
+}))
+
 /**
  * A Mac without the command line developer tools: `/usr/bin/git`, `make` and
  * `python3` are on PATH (so `which` finds them) but are stubs (so
@@ -86,6 +92,27 @@ describe('the managed uv', () => {
       })
     } finally {
       paths.uv = own
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('the managed gh', () => {
+  it('reports gh as managed when only the desktop\'s copy exists, and the user\'s own when both do', async () => {
+    const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const dir = mkdtempSync(join(tmpdir(), 'managed-gh-'))
+    try {
+      expect((await toolDetectionService.refresh()).find((t) => t.id === 'gh')).toMatchObject({ label: 'GitHub CLI', available: false, source: null })
+      managedGhBin.path = join(dir, 'gh')
+      writeFileSync(managedGhBin.path, '#!/bin/sh\n', { mode: 0o755 })
+      expect((await toolDetectionService.refresh()).find((t) => t.id === 'gh')).toMatchObject({
+        available: true, source: 'managed', path: managedGhBin.path, version: '0.4.20'
+      })
+      paths.gh = '/opt/homebrew/bin/gh'
+      expect((await toolDetectionService.refresh()).find((t) => t.id === 'gh')).toMatchObject({ source: 'path', path: '/opt/homebrew/bin/gh' })
+    } finally {
+      delete paths.gh
       rmSync(dir, { recursive: true, force: true })
     }
   })

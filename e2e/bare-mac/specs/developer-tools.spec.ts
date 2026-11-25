@@ -19,7 +19,8 @@ test('Developer Tools reads the stubs as missing and finds the managed git', asy
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   // The Default group comes first; Profile has a section of the same name.
   await page.getByRole('button', { name: 'Local Development', exact: true }).first().click()
-  const row = (label: string) => page.getByRole('row', { name: new RegExp(`^${label}`) })
+  // The label then a space or the end: `^Git` alone also matches the GitHub CLI row.
+  const row = (label: string) => page.getByRole('row', { name: new RegExp(`^${label}(\\s|$)`) })
   await expect(row('Python 3')).toContainText('Not found')
   // Kit 1.18.0 agents carry no Makefile, so make is no longer a detected tool.
   await expect(row('Make')).toHaveCount(0)

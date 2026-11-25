@@ -18,6 +18,7 @@ export const LOCAL_TOOL_IDS = [
   'antigravity-ide',
   'uv',
   'git',
+  'gh',
   'python3',
   'cinna'
 ] as const
@@ -40,8 +41,9 @@ export type LocalToolKind = 'cli-assistant' | 'editor' | 'runtime'
 /**
  * Where the executable was found.
  *
- * `managed` is the desktop's own copy under `userData` — today only cinna-cli,
- * installed by `src/main/localdev/toolchain.ts`. It ranks *below* `path` here
+ * `managed` is the desktop's own copy under `userData` — cinna-cli and uv,
+ * installed by `src/main/localdev/toolchain.ts`, and gh
+ * (`src/main/shell/managedGh.ts`). It ranks *below* `path` here
  * on purpose: this list answers "what can the user open a folder with", and a
  * `cinna` the user installed themselves is the one their terminal will run.
  * Desktop-spawned processes take the opposite view and always use the managed

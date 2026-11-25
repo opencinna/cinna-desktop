@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { clearToolCache, getShellEnv, shellEnvForChild, usableTool } from '../../shell/env'
 import { createLogger } from '../../logger/logger'
 import { managedUvLayout, toolchain } from '../../localdev/toolchain'
+import { managedGh } from '../../shell/managedGh'
 import type { DetectedTool, LocalToolId, LocalToolKind } from '../../../shared/localTools'
 
 const logger = createLogger('local-tools')
@@ -78,6 +79,8 @@ const TOOL_SPECS: readonly ToolSpec[] = [
   // The managed copy is what local-agent children fall back on (`managedUvPath.ts`).
   { id: 'uv', kind: 'runtime', label: 'uv', bin: 'uv', managed: () => managedUvLayout().uvBin },
   { id: 'git', kind: 'runtime', label: 'Git', bin: 'git' },
+  // The managed copy is installed only for GitHub repos, and only when there is no `gh` on PATH.
+  { id: 'gh', kind: 'runtime', label: 'GitHub CLI', bin: 'gh', managed: () => managedGh.binaryLocation() },
   { id: 'python3', kind: 'runtime', label: 'Python 3', bin: 'python3' }
 ]
 

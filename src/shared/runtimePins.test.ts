@@ -53,7 +53,8 @@ describe('runtime pins', () => {
       codex: RUNTIME_PINS.codex,
       antigravity: RUNTIME_PINS.antigravity,
       opencode: RUNTIME_PINS.opencode,
-      git: RUNTIME_PINS.git
+      git: RUNTIME_PINS.git,
+      gh: RUNTIME_PINS.gh
     })) {
       expect(Object.keys(pin.assets).length, tool).toBeGreaterThan(0)
       for (const [platform, asset] of Object.entries(pin.assets)) {
@@ -126,6 +127,27 @@ describe('runtime pins', () => {
     expect(new Set(Object.values(RUNTIME_PINS.git.assets).map((asset) => asset.sha256)).size).toBe(4)
     expect(RUNTIME_PINS.git.release).toBe(`v${RUNTIME_PINS.git.cli}-2`)
     expect(RUNTIME_PINS.git.versionOutput).toBe(`git version ${RUNTIME_PINS.git.cli}`)
+  })
+
+  it('every gh asset is a GitHub CLI release archive of the pinned version, POSIX only, with its size', () => {
+    const release = `https://github.com/cli/cli/releases/download/v${RUNTIME_PINS.gh.cli}`
+    const plats: Record<string, string> = {
+      'darwin-arm64': 'macOS_arm64.zip',
+      'darwin-x64': 'macOS_amd64.zip',
+      'linux-x64': 'linux_amd64.tar.gz',
+      'linux-arm64': 'linux_arm64.tar.gz'
+    }
+    // Windows is not supported yet: no row may creep in.
+    expect(Object.keys(RUNTIME_PINS.gh.assets).sort()).toEqual(Object.keys(plats).sort())
+    for (const [platform, asset] of Object.entries(RUNTIME_PINS.gh.assets)) {
+      expect(asset.file, platform).toBe(`gh_${RUNTIME_PINS.gh.cli}_${plats[platform]}`)
+      expect(asset.url, platform).toBe(`${release}/${asset.file}`)
+      // An archive holding `gh_<v>_<plat>/bin/gh`, not an executable to move into place.
+      expect(asset.format, platform).toBeUndefined()
+      expect(asset.size, platform).toBeGreaterThan(10 * 1024 * 1024)
+    }
+    expect(new Set(Object.values(RUNTIME_PINS.gh.assets).map((asset) => asset.sha256)).size).toBe(4)
+    expect(RUNTIME_PINS.gh.versionOutput).toBe(`gh version ${RUNTIME_PINS.gh.cli}`)
   })
 
   it('every Antigravity asset is a Google release zip holding the server and its harness, with its size', () => {
