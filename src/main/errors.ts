@@ -61,6 +61,8 @@ export type AuthErrorCode =
   | 'missing_server_url'
   | 'invalid_user_type'
   | 'identity_mismatch'
+  /** A keep-data Sign Out named a profile that is no longer the current one. */
+  | 'not_current'
 
 export type AgentErrorCode =
   | 'not_found'

@@ -222,7 +222,9 @@ export interface CredentialSetupDto {
 }
 /**
  * Why an account a local agent's credentials come from cannot supply them now:
- * `signed_out` (logged out this session, or no identity it can be read as), `locked` (a password
+ * `signed_out` (logged out this session; a non-current Cinna profile with no stored tokens, from a
+ * Sign Out that kept this device's data or a session revoked while it was current and then switched
+ * away from, since Switch + sign in is the action either way; or no identity it can be read as), `locked` (a password
  * profile not unlocked this session), `session_expired` (its stored tokens name no account; on the
  * current profile, re-authentication fixes it), `removed` (the profile was deleted), `other_profile`
  * (an AI credential provisioned to a profile that is not the current one: those follow the profile)

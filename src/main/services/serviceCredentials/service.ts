@@ -626,8 +626,14 @@ function profileOfKey(key: string): string | null {
 function unavailableAccount(key: string, userId: string | null, kind: 'credentials' | 'ai', credentials: number): UnavailableCredentialAccount {
   const record = recordedAccounts().get(key)
   const u = userId ? userRepo.list().find(row => row.id === userId) : undefined
+  // Signed out this session, or a non-current Cinna profile with no stored tokens, which stays
+  // signed out across a restart: a Sign Out that kept this device's data, or a session revoked
+  // while it was current and then switched away from. The latter deliberately reads as signed out
+  // too, since Switch + sign in is the action either way. Stored tokens that name no account are
+  // not this: they read as an expired session. The current profile is `session_expired` first.
+  const tokenless = u?.type === 'cinna_user' && !(u.cinnaAccessTokenEnc && u.cinnaRefreshTokenEnc)
   const reason = accountReason(userId === null ? null : {
-    exists: !!u, current: userId === currentUser, signedOut: signedOut.has(userId), hasIdentity: !!identities.get(userId),
+    exists: !!u, current: userId === currentUser, signedOut: signedOut.has(userId) || tokenless, hasIdentity: !!identities.get(userId),
     hasPassword: !!u?.passwordHash, unlocked: unlocked(userId)
   }, kind)
   const fromRecord = !!record && (userId === null || record.userId === userId)

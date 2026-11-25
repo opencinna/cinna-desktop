@@ -765,7 +765,12 @@ const api = {
       password?: string
     }): Promise<{ success: boolean; user?: UserData; error?: string }> =>
       ipcRenderer.invoke('auth:login', data),
-    logout: (): Promise<{ success: boolean }> => ipcRenderer.invoke('auth:logout'),
+    /**
+     * No argument: the session-only logout. `{ userId }`: Sign Out that keeps
+     * this device's data; refused (as data) unless it names the current Cinna profile.
+     */
+    logout: (data?: { userId: string }): Promise<{ success: boolean; error?: string }> =>
+      data === undefined ? ipcRenderer.invoke('auth:logout') : ipcRenderer.invoke('auth:logout', data),
     cinnaOAuthAbort: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('auth:cinna-oauth-abort'),
     cinnaReauth: (): Promise<{ success: boolean; user?: UserData; error?: string }> =>

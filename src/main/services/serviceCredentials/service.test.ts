@@ -56,9 +56,9 @@ function addAgent(kind: 'kit' | 'bare') {
   const path = join(world.home, kind); mkdirSync(path)
   const a = { id: `folder:${kind}`, kind, path }; world.agents.push(a); return a
 }
-/** A Cinna profile row; `login` registers one on demand. */
+/** A Cinna profile row with stored tokens (a signed-in account); `login` registers one on demand. */
 function register(id: string, extra: Record<string, unknown> = {}) {
-  if (!world.users.has(id)) world.users.set(id, { id, type: 'cinna_user', cinnaServerUrl: 'http://localhost:8000', displayName: id, username: id, passwordHash: null, ...extra })
+  if (!world.users.has(id)) world.users.set(id, { id, type: 'cinna_user', cinnaServerUrl: 'http://localhost:8000', displayName: id, username: id, passwordHash: null, cinnaAccessTokenEnc: Buffer.from('access'), cinnaRefreshTokenEnc: Buffer.from('refresh'), ...extra })
   return world.users.get(id)
 }
 /** The account key the service derives: sha256(origin + "\n" + jwt.sub)[:16]. */
@@ -2036,6 +2036,17 @@ describe('accounts that cannot supply an agent’s credentials', () => {
     expect(service.unavailableAccounts(a.id)).toMatchObject([{ userId: 'account-a', reason: 'session_expired', current: true }])
     await login('account-b')
     expect(service.unavailableAccounts(a.id)).toMatchObject([{ userId: 'account-a', name: 'Alice Smith', reason: 'session_expired', current: false }])
+  })
+  it('says signed out, across a restart too, for a profile whose tokens a Sign Out that kept its data cleared', async () => {
+    const a = await attachedUnder('account-a', alice); await login('account-b')
+    expect(service.unavailableAccounts(a.id)).toEqual([])
+    // No session sign-out: only the cleared token columns say what happened (as after a restart).
+    Object.assign(world.users.get('account-a'), { cinnaAccessTokenEnc: null, cinnaRefreshTokenEnc: null })
+    world.noTokens.add('account-a'); await service.refreshAccounts()
+    expect(service.unavailableAccounts(a.id)).toMatchObject([{ userId: 'account-a', name: 'Alice Smith', reason: 'signed_out', current: false }])
+    // Made current again it still offers Re-authenticate, not Switch.
+    await login('account-a')
+    expect(service.unavailableAccounts(a.id)).toMatchObject([{ userId: 'account-a', reason: 'session_expired', current: true }])
   })
   it('answers unknown for a key no profile is known to hold', async () => {
     const a = addAgent('kit')

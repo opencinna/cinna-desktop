@@ -3,9 +3,11 @@ import { createPortal } from 'react-dom'
 import { User, ChevronDown, Plus, LogOut, Cloud, AlertTriangle, Settings } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUIStore } from '../../stores/ui.store'
-import { useUsers, useDeleteUser } from '../../hooks/useAuth'
+import { useUsers, useDeleteUser, useLogout } from '../../hooks/useAuth'
 import { useSyncState } from '../../hooks/useSync'
 import { usePopover } from '../ui/usePopover'
+import { SwitchTrack } from '../ui/SwitchTrack'
+import { unwrapIpcError } from '../../utils/ipcError'
 import { RegisterForm } from './RegisterForm'
 import { useSwitchProfile } from './useSwitchProfile'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
@@ -21,6 +23,9 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
   const [signOutPassword, setSignOutPassword] = useState('')
   const [signOutError, setSignOutError] = useState('')
+  // Cinna accounts only: on (the default each time the dialog opens) deletes the
+  // profile from this device; off signs out and keeps its data and its row.
+  const [deleteLocalData, setDeleteLocalData] = useState(true)
   const signOutModalRef = useRef<HTMLDivElement>(null)
   const currentUser = useAuthStore((s) => s.currentUser)
   const isCinnaUser = currentUser?.type === 'cinna_user'
@@ -48,6 +53,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
   const setActiveView = useUIStore((s) => s.setActiveView)
   const { data: users } = useUsers()
   const deleteUser = useDeleteUser()
+  const logout = useLogout()
   const {
     open,
     setOpen,
@@ -101,11 +107,30 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
     setShowSignOutConfirm(true)
     setSignOutPassword('')
     setSignOutError('')
+    setDeleteLocalData(true)
   }
+
+  const keepLocalData = isCinnaUser && !deleteLocalData
+  const signOutPending = deleteUser.isPending || logout.isPending
 
   const handleConfirmSignOut = async (): Promise<void> => {
     if (!currentUser) return
     setSignOutError('')
+
+    if (keepLocalData) {
+      // Main refuses unless this is still the current Cinna profile; no password,
+      // since nothing is deleted and the local password keeps locking the profile.
+      const result = await logout
+        .mutateAsync({ userId: currentUser.id })
+        .catch((err: unknown) => ({ success: false as const, error: unwrapIpcError(err, 'Failed to sign out') }))
+      if (result.success) {
+        setShowSignOutConfirm(false)
+        setSignOutPassword('')
+      } else {
+        setSignOutError(result.error ?? 'Failed to sign out')
+      }
+      return
+    }
 
     if (currentUser.hasPassword && !signOutPassword) {
       setSignOutError('Password is required to confirm')
@@ -131,6 +156,23 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
       setSignOutError(result.error ?? 'Failed to sign out')
     }
   }
+
+  // Asked only when the profile is deleted from this device.
+  const signOutPasswordField = (
+    <div>
+      <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+        Enter password to confirm
+      </label>
+      <input
+        type="password"
+        value={signOutPassword}
+        onChange={(e) => setSignOutPassword(e.target.value)}
+        placeholder="Password"
+        className="w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none"
+        autoFocus
+      />
+    </div>
+  )
 
   const isDefault = currentUser?.id === DEFAULT_USER_ID
   const initial = (currentUser?.cinnaFullName ?? currentUser?.displayName)?.charAt(0).toUpperCase() ?? '?'
@@ -215,6 +257,11 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
                       Guest
                     </span>
                   )}
+                  {u.type === 'cinna_user' && u.hasCinnaTokens === false && (
+                    <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
+                      Signed out
+                    </span>
+                  )}
                   {u.type === 'cinna_user' && u.cinnaServerUrl && (
                     <span
                       role="button"
@@ -281,67 +328,100 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
 
       {/* Sign-out confirmation modal */}
       {showSignOutConfirm && currentUser && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        // Anchored from the top, not centred: flipping the switch changes only the
+        // bottom edge, so the title and the switch never move under the pointer.
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh] bg-black/50">
           <div ref={signOutModalRef} className="app-popover-surface w-96 rounded-lg border border-[var(--color-border)] shadow-xl p-5 space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-red-400">
-              <AlertTriangle size={16} />
+            <div className={`flex items-center gap-2 text-sm font-medium ${keepLocalData ? 'text-[var(--color-text)]' : 'text-red-400'}`}>
+              {keepLocalData ? <LogOut size={16} /> : <AlertTriangle size={16} />}
               Sign Out — {currentUser.cinnaFullName ?? currentUser.displayName}
             </div>
 
             {isCinnaUser ? (
               <>
-                <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
-                  Your <strong className="text-[var(--color-text)]">chats and job runs</strong> on this
-                  device will be permanently deleted — they are not synced and cannot be restored.
-                  {syncActive
-                    ? ' Your notes, jobs, and folder structure are synced and will return when you sign back in.'
-                    : ''}{' '}
-                  Your Cinna cloud account is not affected.
-                </p>
+                {/* Deliberately a switch named for the destructive choice and on by default
+                    (the feature's spec): an exception to ux_rules rule 14 for this dialog. */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={deleteLocalData}
+                  disabled={signOutPending}
+                  onClick={() => { setDeleteLocalData((on) => !on); setSignOutError('') }}
+                  className="w-full flex items-center justify-between gap-3 text-xs text-[var(--color-text)] disabled:opacity-50"
+                >
+                  <span>Delete data from this device</span>
+                  <SwitchTrack checked={deleteLocalData} size="sm" />
+                </button>
 
-                {syncActive && (
-                  <div className="flex items-start gap-2.5 rounded-md border border-red-500/30 bg-red-500/10 p-2.5">
-                    <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-400" />
-                    <span className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
-                      <span className="text-red-400 font-medium">
-                        This device will be removed from your account.
-                      </span>
-                      <br />
-                      You&apos;ll need your recovery key or another signed-in device to restore your
-                      data next time you sign in.
-                    </span>
-                  </div>
+                {deleteLocalData ? (
+                  <>
+                    <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                      Your <strong className="text-[var(--color-text)]">chats and job runs</strong> on this
+                      device will be permanently deleted — they are not synced and cannot be restored.
+                      {syncActive
+                        ? ' Your notes, jobs, and folder structure are synced and will return when you sign back in.'
+                        : ''}{' '}
+                      Your Cinna cloud account is not affected.
+                    </p>
+
+                    {syncActive && (
+                      <div className="flex items-start gap-2.5 rounded-md border border-red-500/30 bg-red-500/10 p-2.5">
+                        <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-400" />
+                        <span className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+                          <span className="text-red-400 font-medium">
+                            This device will be removed from your account.
+                          </span>
+                          <br />
+                          You&apos;ll need your recovery key or another signed-in device to restore your
+                          data next time you sign in.
+                        </span>
+                      </div>
+                    )}
+
+                    {currentUser.hasPassword && signOutPasswordField}
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                      You&apos;ll be signed out of this Cinna account. Its chats, agents and settings
+                      stay on this device, and it stays in your profile list so you can sign back in
+                      later. Your Cinna cloud account is not affected.
+                    </p>
+
+                    {currentUser.hasPassword ? (
+                      <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                        Its local password still locks it on this device.
+                      </p>
+                    ) : (
+                      <div className="flex items-start gap-2.5 rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 p-2.5">
+                        <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
+                        <span className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+                          Anyone who uses this computer can open this profile and read its chats. Set a
+                          local password in Settings → User Accounts to lock it.
+                        </span>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             ) : (
-              <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
-                This will remove the account from this device. All{' '}
-                <strong className="text-[var(--color-text)]">local</strong> chat history, providers,
-                agents, and settings for this account will be permanently erased. Only its name,
-                email and server, and the names of its credentials, stay while a local agent still
-                uses them, so that agent can say which account to sign in to.
-              </p>
+              <>
+                <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                  This will remove the account from this device. All{' '}
+                  <strong className="text-[var(--color-text)]">local</strong> chat history, providers,
+                  agents, and settings for this account will be permanently erased. Only its name,
+                  email and server, and the names of its credentials, stay while a local agent still
+                  uses them, so that agent can say which account to sign in to.
+                </p>
+
+                {currentUser.hasPassword && signOutPasswordField}
+              </>
             )}
 
-            {currentUser.hasPassword && (
-              <div>
-                <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
-                  Enter password to confirm
-                </label>
-                <input
-                  type="password"
-                  value={signOutPassword}
-                  onChange={(e) => setSignOutPassword(e.target.value)}
-                  placeholder="Password"
-                  className="w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none"
-                  autoFocus
-                />
-              </div>
-            )}
-
-            {signOutError && (
-              <div className="text-[10px] text-red-400">{signOutError}</div>
-            )}
+            {/* One line, always there: a refusal fills it without moving the buttons. */}
+            <div className="min-h-[1lh] text-xs leading-normal text-red-400" role="status">
+              {signOutError}
+            </div>
 
             <div className="flex justify-end gap-2">
               <button
@@ -352,10 +432,14 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
               </button>
               <button
                 onClick={handleConfirmSignOut}
-                disabled={deleteUser.isPending || syncStateLoading}
-                className="px-3 py-1.5 rounded-md text-xs font-medium bg-red-500 hover:bg-red-600 text-white transition-colors disabled:opacity-50"
+                disabled={signOutPending || (!keepLocalData && syncStateLoading)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium text-white transition-colors disabled:opacity-50 ${
+                  keepLocalData
+                    ? 'bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]'
+                    : 'bg-red-500 hover:bg-red-600'
+                }`}
               >
-                {deleteUser.isPending
+                {signOutPending
                   ? isCinnaUser
                     ? 'Signing out...'
                     : 'Removing...'

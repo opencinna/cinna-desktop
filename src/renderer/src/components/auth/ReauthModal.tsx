@@ -15,7 +15,7 @@
  * session was dead recover without a reload.
  */
 import { useEffect, useState } from 'react'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, LogIn, RefreshCw } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useReauthStore } from '../../stores/reauth.store'
 import { useAuthStore } from '../../stores/auth.store'
@@ -24,6 +24,8 @@ import { useCinnaReauth } from '../../hooks/useAuth'
 export function ReauthModal(): React.JSX.Element | null {
   const reauthRequired = useReauthStore((s) => s.reauthRequired)
   const info = useReauthStore((s) => s.info)
+  // Switched into a profile that was signed out on purpose: ask to sign in, not "expired".
+  const signIn = useReauthStore((s) => s.signIn)
   const clearReauth = useReauthStore((s) => s.clearReauth)
   const dismiss = useReauthStore((s) => s.dismiss)
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
@@ -111,29 +113,46 @@ export function ReauthModal(): React.JSX.Element | null {
       >
         <div className="flex items-start gap-3 px-4 pt-4">
           <div
-            className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center
-              bg-[var(--color-danger)]/15 text-[var(--color-danger)]"
+            className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+              signIn
+                ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]'
+                : 'bg-[var(--color-danger)]/15 text-[var(--color-danger)]'
+            }`}
           >
-            <AlertTriangle size={18} />
+            {signIn ? <LogIn size={18} /> : <AlertTriangle size={18} />}
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-[var(--color-text)]">
-              Cinna session expired
+              {signIn ? 'Sign in to Cinna' : 'Cinna session expired'}
             </div>
-            <div className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-              The connection to{' '}
-              <span className="font-medium text-[var(--color-text-secondary)]">{accountLabel}</span>
-              {serverHost && (
-                <>
-                  {' '}
-                  on <span className="font-medium text-[var(--color-text-secondary)]">{serverHost}</span>
-                </>
-              )}{' '}
-              was lost — its session was revoked or expired
-              {info?.source ? <> while loading {info.source}</> : null}. Re-authenticate to
-              restore remote agents, the bundles catalog, and agent status. Your chats, agents,
-              and settings are preserved.
-            </div>
+            {signIn ? (
+              <div className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+                <span className="font-medium text-[var(--color-text-secondary)]">{accountLabel}</span>
+                {serverHost && (
+                  <>
+                    {' '}
+                    on <span className="font-medium text-[var(--color-text-secondary)]">{serverHost}</span>
+                  </>
+                )}{' '}
+                is signed out on this device. Sign in again to use this account&apos;s agents and
+                credentials.
+              </div>
+            ) : (
+              <div className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+                The connection to{' '}
+                <span className="font-medium text-[var(--color-text-secondary)]">{accountLabel}</span>
+                {serverHost && (
+                  <>
+                    {' '}
+                    on <span className="font-medium text-[var(--color-text-secondary)]">{serverHost}</span>
+                  </>
+                )}{' '}
+                was lost — its session was revoked or expired
+                {info?.source ? <> while loading {info.source}</> : null}. Re-authenticate to
+                restore remote agents, the bundles catalog, and agent status. Your chats, agents,
+                and settings are preserved.
+              </div>
+            )}
           </div>
         </div>
 
@@ -168,8 +187,10 @@ export function ReauthModal(): React.JSX.Element | null {
               bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white
               transition-colors disabled:opacity-50"
           >
-            <RefreshCw size={12} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
-            {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
+            {signIn ? <LogIn size={12} /> : <RefreshCw size={12} className={cinnaReauth.isPending ? 'animate-spin' : ''} />}
+            {cinnaReauth.isPending
+              ? signIn ? 'Signing in…' : 'Re-authenticating…'
+              : signIn ? 'Sign in' : 'Re-authenticate'}
           </button>
         </div>
       </div>

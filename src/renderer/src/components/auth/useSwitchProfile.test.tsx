@@ -20,6 +20,7 @@ vi.mock('./LoginPrompt', () => ({
 }
 
 const { useSwitchProfile } = await import('./useSwitchProfile')
+const { useReauthStore } = await import('../../stores/reauth.store')
 
 function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
   return <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{children}</QueryClientProvider>
@@ -70,5 +71,41 @@ describe('switching profiles', () => {
     render(<>{result.current.prompt}</>)
     fireEvent.click(screen.getByText('unlock'))
     expect(switched).toHaveBeenCalledWith('alice')
+  })
+})
+
+describe('switching into a signed-out Cinna profile', () => {
+  const carol = { id: 'carol', type: 'cinna_user', username: 'carol@corp.test', displayName: 'carol', cinnaFullName: 'Carol', cinnaServerUrl: 'https://core.corp.test', hasPassword: false, hasCinnaTokens: false }
+  beforeEach(() => useReauthStore.setState({ reauthRequired: false, info: null, dismissed: false }))
+
+  it('opens the sign-in prompt for it, even after an earlier "Not now"', async () => {
+    useReauthStore.getState().dismiss()
+    login.mockResolvedValue({ success: true, user: carol })
+    const { result } = renderHook(() => useSwitchProfile(), { wrapper })
+    await act(() => result.current.switchTo('carol', false))
+    expect(useReauthStore.getState()).toMatchObject({ reauthRequired: true, dismissed: false, info: { account: 'Carol', serverUrl: 'https://core.corp.test', source: null } })
+  })
+
+  it('opens it after the password prompt unlocks a signed-out password profile', async () => {
+    const dave = { ...carol, id: 'dave', cinnaFullName: 'Dave', hasPassword: true }
+    ;(window as unknown as { api: { auth: Record<string, unknown> } }).api.auth.listUsers = async () => [dave]
+    login.mockResolvedValue({ success: false, error: 'Password required' })
+    const { result } = renderHook(() => useSwitchProfile(), { wrapper })
+    await waitFor(() => expect(result.current).toBeTruthy())
+    await act(() => result.current.switchTo('dave', true))
+    expect(useReauthStore.getState().reauthRequired).toBe(false)
+    render(<>{result.current.prompt}</>)
+    await waitFor(() => expect(screen.getByTestId('prompt')).toBeTruthy())
+    fireEvent.click(screen.getByText('unlock'))
+    expect(useReauthStore.getState()).toMatchObject({ reauthRequired: true, signIn: true, info: { account: 'Dave' } })
+  })
+
+  it('leaves it closed for a profile that still has its session, or a local one', async () => {
+    login.mockResolvedValue({ success: true, user: { ...carol, hasCinnaTokens: true } })
+    const { result } = renderHook(() => useSwitchProfile(), { wrapper })
+    await act(() => result.current.switchTo('carol', false))
+    login.mockResolvedValue({ success: true, user: { id: 'bob', type: 'local_user', username: 'bob', displayName: 'Bob', hasPassword: false } })
+    await act(() => result.current.switchTo('bob', false))
+    expect(useReauthStore.getState().reauthRequired).toBe(false)
   })
 })

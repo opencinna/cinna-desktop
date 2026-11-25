@@ -12,7 +12,12 @@ export interface ProfileFacts {
   exists: boolean
   /** It is the current profile. */
   current: boolean
-  /** It was logged out of in this app session. */
+  /**
+   * It was logged out of in this app session, or it is a Cinna profile with no stored tokens (a
+   * Sign Out that kept this device's data, or a session revoked while it was current and then
+   * switched away from: deliberately signed out too, since Switch + sign in is the action either
+   * way). Ignored for the current profile, which reads as `session_expired`.
+   */
   signedOut: boolean
   /** Its stored tokens name an account (the last derivation found a subject). */
   hasIdentity: boolean

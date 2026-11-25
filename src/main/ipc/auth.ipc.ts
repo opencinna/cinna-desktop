@@ -67,9 +67,20 @@ export function registerAuthHandlers(): void {
     }
   )
 
-  ipcHandle('auth:logout', async () => {
-    await authService.logout()
-    return { success: true as const }
+  // No argument: the session-only logout. `{ userId }`: Sign Out that keeps
+  // this device's data (refused unless it names the current Cinna profile).
+  ipcHandle('auth:logout', async (_event, data?: { userId: string }) => {
+    if (!data) {
+      // Unchanged: a failure still throws, as it always did.
+      await authService.logout()
+      return { success: true as const }
+    }
+    try {
+      await authService.logout({ userId: data.userId })
+      return { success: true as const }
+    } catch (err) {
+      return errorResponse(err)
+    }
   })
 
   ipcHandle('auth:cinna-oauth-abort', async () => {

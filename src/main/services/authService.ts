@@ -378,11 +378,45 @@ export const authService = {
     return { user: toDto(row) }
   },
 
-  async logout(): Promise<void> {
-    serviceCredentialService.signOut(getCurrentUserId())
+  /**
+   * Two sign-outs share this path.
+   *
+   * - No input: the session-only logout (kept for the E2E specs that drive
+   *   `window.api.auth.logout()`): the current profile is ineligible for
+   *   service credentials until it is activated again, unlocks are dropped,
+   *   Default becomes current. Its Cinna tokens stay.
+   * - `{ userId }`: UserMenu's Sign Out with "Delete data from this device"
+   *   off. Only the current Cinna profile qualifies, so a profile switch that
+   *   raced the dialog cannot sign out a different one. A final sync push runs
+   *   while the UMK is still unlocked; cursors, the device key and sync state
+   *   are kept so a later sign-in resumes sync on a still-trusted device. The
+   *   Cinna tokens are cleared, which is what "signed out" means across a
+   *   restart; the profile row and all its data stay.
+   */
+  async logout(input?: { userId: string }): Promise<void> {
+    if (!input) {
+      serviceCredentialService.signOut(getCurrentUserId())
+      userActivation.clearUnlocks()
+      await userActivation.activate(DEFAULT_USER_ID)
+      logger.info('user.logout')
+      return
+    }
+    const { userId } = input
+    if (userId !== getCurrentUserId()) {
+      throw new AuthError('not_current', 'Only the current profile can be signed out')
+    }
+    const row = userRepo.get(userId)
+    if (!row) throw new AuthError('not_found', 'User not found')
+    if (row.type !== 'cinna_user') {
+      throw new AuthError('invalid_user_type', 'Only a Cinna account can be signed out')
+    }
+    await syncService.flushBeforeSignOut(userId)
+    serviceCredentialService.signOut(userId)
     userActivation.clearUnlocks()
+    await userActivation.deactivate()
+    clearCinnaTokens(userId)
     await userActivation.activate(DEFAULT_USER_ID)
-    logger.info('user.logout')
+    logger.info('user.signed_out_kept_data', { userId, username: row.username })
   },
 
   updateUser(input: UpdateUserInput): { user: UserDto } {

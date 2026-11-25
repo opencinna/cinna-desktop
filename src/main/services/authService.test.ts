@@ -66,6 +66,7 @@ vi.mock('../auth/activation', () => ({
     activate: vi.fn(async () => {}),
     deactivate: vi.fn(async () => {}),
     forgetUnlock: vi.fn(),
+    clearUnlocks: vi.fn(),
     markUnlocked: vi.fn(),
     credentialsRenewed: vi.fn(),
     isActivated: () => holder.activated
@@ -76,7 +77,7 @@ vi.mock('../auth/session', async () => {
   return { ...actual, getCurrentUserId: () => holder.currentUserId }
 })
 vi.mock('./syncService', () => ({
-  syncService: { signOutCleanup: vi.fn(async () => {}) }
+  syncService: { signOutCleanup: vi.fn(async () => {}), flushBeforeSignOut: vi.fn(async () => {}) }
 }))
 vi.mock('../host/desktop/connectIntentService', () => ({ connectIntentService: { flush: vi.fn() } }))
 vi.mock('../window/focus', () => ({ focusMainWindow: vi.fn() }))
@@ -91,8 +92,10 @@ vi.mock('./taskSyncService', () => ({ taskSyncService: sync }))
 const { authService } = await import('./authService')
 const { userRepo } = await import('../db/users')
 const { localDevService } = await import('../localdev/localDevService')
-const { storeCinnaTokens } = await import('../auth/cinna-tokens')
+const { storeCinnaTokens, clearCinnaTokens } = await import('../auth/cinna-tokens')
 const { userActivation } = await import('../auth/activation')
+const { syncService } = await import('./syncService')
+const { serviceCredentialService } = await import('./serviceCredentials/service')
 
 /** The browser flow, answering for `email` with whatever server it was aimed at. */
 function oauthAnswers(email: string): void {
@@ -221,5 +224,72 @@ describe('creating a local profile', () => {
     const { user } = await authService.register({ username: 'locked-local', password: 'Correct-Horse-9-Battery' })
     expect(userActivation.markUnlocked).toHaveBeenCalledExactlyOnceWith(user.id)
     expect(userActivation.activate).toHaveBeenLastCalledWith(user.id)
+  })
+})
+
+describe('Sign Out that keeps this device\'s data', () => {
+  /** Every step the keep-data sign-out takes, in the order it took them. */
+  function recordSteps(): string[] {
+    const steps: string[] = []
+    vi.mocked(syncService.flushBeforeSignOut).mockReset().mockImplementation(async (id) => { steps.push(`flush:${id}`) })
+    vi.mocked(syncService.signOutCleanup).mockClear()
+    vi.mocked(userActivation.clearUnlocks).mockReset().mockImplementation(() => { steps.push('clearUnlocks') })
+    vi.mocked(userActivation.deactivate).mockReset().mockImplementation(async () => { steps.push('deactivate') })
+    vi.mocked(userActivation.activate).mockReset().mockImplementation(async (id) => { steps.push(`activate:${id}`) })
+    vi.mocked(clearCinnaTokens).mockReset().mockImplementation((id) => { steps.push(`clearTokens:${id}`) })
+    vi.spyOn(serviceCredentialService, 'signOut').mockImplementation((id) => { steps.push(`credentialsSignOut:${id}`) })
+    return steps
+  }
+  afterEach(() => vi.restoreAllMocks())
+
+  it('flushes sync, signs credentials out, clears the tokens and keeps the profile and its data', async () => {
+    const id = await signInSelfHosted('https://one.cinna.test')
+    holder.currentUserId = id
+    const steps = recordSteps()
+    const cascade = vi.spyOn(userRepo, 'deleteWithCascade')
+
+    await authService.logout({ userId: id })
+
+    // The flush runs while the UMK is still unlocked, before the session goes.
+    expect(steps).toEqual([
+      `flush:${id}`, `credentialsSignOut:${id}`, 'clearUnlocks', 'deactivate', `clearTokens:${id}`, 'activate:__default__'
+    ])
+    expect(userRepo.get(id)).toBeDefined()
+    expect(cascade).not.toHaveBeenCalled()
+    // The device stays trusted: no cursor/device-key wipe, no cursor reset.
+    expect(syncService.signOutCleanup).not.toHaveBeenCalled()
+    expect(sync.resetCursors).not.toHaveBeenCalled()
+  })
+
+  it('refuses a profile that is not the current one', async () => {
+    const id = await signInSelfHosted('https://one.cinna.test')
+    holder.currentUserId = 'someone-else'
+    const steps = recordSteps()
+
+    await expect(authService.logout({ userId: id })).rejects.toMatchObject({ code: 'not_current' })
+    expect(steps).toEqual([])
+    expect(clearCinnaTokens).not.toHaveBeenCalled()
+  })
+
+  it('refuses a local profile', async () => {
+    const { user } = await authService.register({ username: 'plain-local' })
+    holder.currentUserId = user.id
+    const steps = recordSteps()
+
+    await expect(authService.logout({ userId: user.id })).rejects.toMatchObject({ code: 'invalid_user_type' })
+    expect(steps).toEqual([])
+    expect(userRepo.get(user.id)).toBeDefined()
+  })
+
+  it('leaves the argument-less logout as it was: session only, tokens kept', async () => {
+    const id = await signInSelfHosted('https://one.cinna.test')
+    holder.currentUserId = id
+    const steps = recordSteps()
+
+    await authService.logout()
+
+    expect(steps).toEqual([`credentialsSignOut:${id}`, 'clearUnlocks', 'activate:__default__'])
+    expect(clearCinnaTokens).not.toHaveBeenCalled()
+    expect(syncService.flushBeforeSignOut).not.toHaveBeenCalled()
   })
 })

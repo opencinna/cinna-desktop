@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useLogin, useUsers } from '../../hooks/useAuth'
+import { useReauthStore } from '../../stores/reauth.store'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { LoginPrompt } from './LoginPrompt'
 
@@ -20,6 +21,29 @@ export interface SwitchProfile {
   prompt: ReactNode
   /** Close the password prompt without switching. */
   cancelPrompt: () => void
+}
+
+/** What the switch needs to know about the profile it lands on. */
+interface SwitchedUser {
+  type?: string
+  username?: string
+  displayName?: string
+  cinnaFullName?: string
+  cinnaServerUrl?: string
+  hasCinnaTokens?: boolean
+}
+
+/**
+ * A Cinna profile with no stored tokens was signed out (Sign Out that kept its data): landing on
+ * it opens the global sign-in prompt (ReauthModal), which re-links the same profile.
+ */
+function promptSignInIfSignedOut(user: SwitchedUser | undefined): void {
+  if (user?.type !== 'cinna_user' || user.hasCinnaTokens !== false) return
+  useReauthStore.getState().promptSignIn({
+    account: user.cinnaFullName || user.displayName || user.username || 'your Cinna account',
+    serverUrl: user.cinnaServerUrl ?? null,
+    source: null
+  })
 }
 
 /**
@@ -49,6 +73,7 @@ export function useSwitchProfile(options: { onSwitched?: () => void } = {}): Swi
     })
     if (!result) return
     if (result.success) {
+      promptSignInIfSignedOut(result.user)
       switched?.(userId)
       return
     }
@@ -72,6 +97,7 @@ export function useSwitchProfile(options: { onSwitched?: () => void } = {}): Swi
             const switched = pendingSwitched.current
             pendingSwitched.current = null
             setPromptUserId(null)
+            promptSignInIfSignedOut(users?.find((u) => u.id === promptUserId))
             switched?.(promptUserId)
             onSwitched?.()
           }}

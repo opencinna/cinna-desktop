@@ -19,6 +19,10 @@ interface ReauthStore {
   /** Set once the user closes the modal — suppresses re-opening on the next
    *  failed poll so we don't nag. Reset on a successful re-auth. */
   dismissed: boolean
+  /** Raised by {@link ReauthStore.promptSignIn}: the profile was signed out on
+   *  purpose, so the modal asks to sign in rather than reporting an expiry.
+   *  Kept until a re-auth succeeds or the modal is dismissed. */
+  signIn: boolean
   /** Raise the prompt (no-op while dismissed). Optional account details from
    *  the main broadcast are kept; the renderer fallback passes none. */
   requireReauth: (info?: ReauthRequiredEvent | null) => void
@@ -26,16 +30,24 @@ interface ReauthStore {
   clearReauth: () => void
   /** User closed the modal without re-authenticating. */
   dismiss: () => void
+  /** Open the prompt for a profile just switched into that has no session
+   *  (signed out): a deliberate switch, so an earlier "Not now" does not hold.
+   *  A later {@link ReauthStore.requireReauth} keeps this variant and its info. */
+  promptSignIn: (info: ReauthRequiredEvent) => void
 }
 
 export const useReauthStore = create<ReauthStore>((set) => ({
   reauthRequired: false,
   info: null,
   dismissed: false,
+  signIn: false,
   requireReauth: (info) =>
-    set((s) => (s.dismissed ? s : { reauthRequired: true, info: info ?? s.info })),
-  clearReauth: () => set({ reauthRequired: false, info: null, dismissed: false }),
-  dismiss: () => set({ reauthRequired: false, dismissed: true })
+    set((s) =>
+      s.dismissed ? s : { reauthRequired: true, info: s.signIn ? s.info : (info ?? s.info) }
+    ),
+  clearReauth: () => set({ reauthRequired: false, info: null, dismissed: false, signIn: false }),
+  dismiss: () => set({ reauthRequired: false, dismissed: true, signIn: false }),
+  promptSignIn: (info) => set({ reauthRequired: true, info, dismissed: false, signIn: true })
 }))
 
 /**

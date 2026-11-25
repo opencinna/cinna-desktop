@@ -1197,6 +1197,26 @@ export const syncService = {
   },
 
   /**
+   * One final sync cycle before a sign-out, while the UMK is still in memory,
+   * so edits made inside the debounce window reach the server. Touches no
+   * cursor, tombstone, device key or sync state: a Sign Out that keeps this
+   * device's data (`authService.logout({ userId })`) calls only this, so the
+   * device stays trusted and a later sign-in resumes sync where it stopped.
+   * A failed flush is logged and swallowed; the sign-out goes ahead.
+   */
+  async flushBeforeSignOut(userId: string): Promise<void> {
+    if (!isCinnaProfile(userId) || !vault.isUnlocked(userId)) return
+    try {
+      await runCycleNow(userId)
+    } catch (err) {
+      logger.warn('sign-out: final sync flush failed (continuing)', {
+        userId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  },
+
+  /**
    * Sign-out hook (called by `authService.deleteAccount` for Cinna profiles
    * BEFORE the session is deactivated, while the UMK is still in memory).
    *
@@ -1212,16 +1232,7 @@ export const syncService = {
    */
   async signOutCleanup(userId: string, opts: { removeDevice: boolean }): Promise<void> {
     if (!isCinnaProfile(userId)) return
-    if (vault.isUnlocked(userId)) {
-      try {
-        await runCycleNow(userId)
-      } catch (err) {
-        logger.warn('sign-out: final sync flush failed (continuing)', {
-          userId,
-          error: err instanceof Error ? err.message : String(err)
-        })
-      }
-    }
+    await this.flushBeforeSignOut(userId)
     // Reset cursor + clear tombstones regardless of the device choice.
     syncRepo.wipe(userId)
     // Drop the cached crypto identity — a later rebind of this profile id to a

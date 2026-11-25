@@ -181,8 +181,11 @@ export function useLogout() {
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser)
 
   return useMutation({
-    mutationFn: () => window.api.auth.logout(),
-    onSuccess: async () => {
+    // No argument: the session-only logout. `{ userId }`: UserMenu's Sign Out
+    // that keeps this device's data. A refusal comes back as `{ success: false, error }`.
+    mutationFn: (data?: { userId: string }) => window.api.auth.logout(data),
+    onSuccess: async (result) => {
+      if (!result.success) return
       // Fetch the default user info before resetting
       const defaultUser = await window.api.auth.getCurrent()
       if (defaultUser) {

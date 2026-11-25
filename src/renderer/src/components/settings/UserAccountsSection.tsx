@@ -113,6 +113,11 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
                 Guest
               </span>
             )}
+            {needsReauth && (
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-[11px] font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
+                Signed out
+              </span>
+            )}
             {isCurrentUser && !isDefault && (
               <span className="shrink-0 px-1.5 py-0.5 rounded text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
                 Active
@@ -130,8 +135,8 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
               ) : (
                 <CloudOff
                   size={10}
-                  className="text-[var(--color-danger)] shrink-0"
-                  aria-label="Not connected"
+                  className="text-[var(--color-text-muted)] shrink-0"
+                  aria-label="Signed out"
                 />
               )
             ) : (
