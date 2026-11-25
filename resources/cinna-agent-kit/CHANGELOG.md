@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `6c7a47839cd00d43`.
+Your current kit is version `aa91ec587c2d566d`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,16 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.26.1 — every GitHub sentence that needs the user is relayed
+
+Wording only. Every 1.x folder stays valid.
+
+- **`guides/15-github-repos.md`** — any sentence from a `gh` or `git` command that
+  asks the user to do something (connect, allow access, reconnect, install a tool)
+  is relayed word for word and ends the turn; a sentence saying to try again in a
+  moment or later means waiting briefly and running the command once more, then
+  relaying it if it fails again.
 
 ## 1.26.0 — agents work on GitHub repositories
 

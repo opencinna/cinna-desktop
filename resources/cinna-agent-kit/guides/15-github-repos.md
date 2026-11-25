@@ -31,11 +31,11 @@ of `cd … && git`. Engines' own command checks block the `cd` form.
 
 `gh` and `git` are already authenticated. Cinna Desktop signs them in as the user.
 
-If a `gh` or `git` command stops with a sentence saying GitHub isn't connected, or asking the user to allow access to a repository, relay that sentence to the user word for word and end your turn. Run the command again when the user says to go on. Never run `gh auth login`, and never ask the user for a token.
+If a `gh` or `git` command stops with a sentence that asks the user to do something (connect GitHub, allow access to a repository, reconnect, install a tool), relay that sentence to the user word for word and end your turn. Run the command again when the user says to go on. Never run `gh auth login`, and never ask the user for a token.
 
 If a `gh` or `git` command says it needs network access and to run it again with escalated permissions, that is not an outage: run the same command again with escalated permissions. This happens in Codex's sandbox.
 
-If it says Cinna is still installing `gh`, wait a moment and run it again.
+If it says to try again in a moment or later, or that Cinna is still installing `gh`, wait briefly and run it once more. If it fails again, relay its sentence to the user word for word and end your turn.
 
 A repository the user has not given access to is reported by Cinna in that same
 kind of sentence. Do not decide on your own that the name is a typo: relay it.
