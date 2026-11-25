@@ -17,7 +17,7 @@ import { publishEvent } from '../../host/events'
 import { githubAccountRepo } from '../../db/githubAccounts'
 import { rememberCredentialSecrets } from '../../security/serviceCredentialRedaction'
 import { GITHUB_CHANGED, type GithubAccountState, type GithubCoverage, type GithubDeviceFlowDto, type GithubNeedChatless, type GithubNeedDto, type GithubStatusDto } from '../../../shared/github'
-import { getUser, listCoverage, parseTokenPair, pollDeviceToken, refreshAccessToken, requestDeviceCode, safeCode, type GithubFetch, type TokenPair } from './githubApi'
+import { getRepoVisibility, getUser, listCoverage, parseTokenPair, pollDeviceToken, refreshAccessToken, requestDeviceCode, safeCode, type GithubFetch, type RepoVisibility, type TokenPair } from './githubApi'
 import { coverageOf, installUrlFor, parseRepo, type CoverageAnswer } from './githubCoverage'
 import { createNeedsRegistry } from './githubNeeds'
 
@@ -25,6 +25,10 @@ import { createNeedsRegistry } from './githubNeeds'
 export const MIN_TOKEN_TTL_MS = 600_000
 /** A lookup naming a repository the cache does not cover refreshes it at most this often. */
 export const COVERAGE_MISS_REFRESH_MS = 60_000
+/** A repository's known visibility is kept this long. */
+export const VISIBILITY_REFRESH_MS = COVERAGE_MISS_REFRESH_MS
+/** At most this many repositories' visibility are kept per profile (the oldest go first). */
+export const VISIBILITY_CACHE_MAX = 500
 /** Both mean the refresh token is dead (rotated out, revoked or expired): Reconnect GitHub. */
 const DEAD_REFRESH = new Set(['bad_refresh_token', 'incorrect_client_credentials'])
 
@@ -62,11 +66,15 @@ export interface GithubServiceDeps {
 export interface GithubAgentHolder { userId: string; chatless: GithubNeedChatless }
 /** Holders of one agent working for different profiles at once: nothing is served or recorded. */
 export interface GithubHolderConflict { conflict: true }
+/** The holder's profile cannot serve now (locked, not activated, gone): nothing is served or recorded. */
+export interface GithubHolderLocked { locked: true }
 
 /** Which profile an agent works for, and whether a profile can serve a token now. Installed by the hub. */
 export interface GithubProfileAccess {
   agentHolder(agentId: string): GithubAgentHolder | GithubHolderConflict | null
   available(userId: string): boolean
+  /** Whether the profile exists at all: one that does but cannot serve is locked. Absent: exists. */
+  exists?(userId: string): boolean
 }
 
 interface DeviceFlow { dto: GithubDeviceFlowDto; abort: AbortController; gen: number }
@@ -80,6 +88,12 @@ interface Profile {
   coverage: { installs: GithubCoverage[]; fetchedAt: number } | null
   coverageFlight?: Promise<boolean>
   lastMissRefresh: number
+  /**
+   * Per repository (lowercased), whether it is public: a definite answer is kept for
+   * {@link VISIBILITY_REFRESH_MS}; a read in flight is shared by concurrent callers; an unknown
+   * answer is not kept. At most {@link VISIBILITY_CACHE_MAX} entries. Cleared with the coverage cache.
+   */
+  visibility: Map<string, { readAt: number; answer: Promise<RepoVisibility | null> }>
   device: DeviceFlow | null
   starting?: Promise<GithubDeviceFlowDto>
 }
@@ -121,7 +135,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
 
   function profile(userId: string): Profile {
     let p = profiles.get(userId)
-    if (!p) { p = { gen: 0, account: undefined, coverage: null, lastMissRefresh: -Infinity, device: null }; profiles.set(userId, p) }
+    if (!p) { p = { gen: 0, account: undefined, coverage: null, lastMissRefresh: -Infinity, visibility: new Map(), device: null }; profiles.set(userId, p) }
     return p
   }
   function publish(userId: string): void { deps.publish(userId) }
@@ -170,11 +184,21 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     p!.account = account
   }
 
+  function clearCoverage(p: Profile): void {
+    p.coverage = null
+    p.visibility = new Map()
+  }
+
   function grantOf(a: Account & { accessToken: string }): GithubTokenGrant {
     return { token: a.accessToken, expiresAt: a.expiresAt, login: a.login, name: a.name, email: a.email }
   }
 
-  async function expire(userId: string, gen: number, agentId?: string): Promise<void> {
+  /**
+   * The refresh token is dead: the account turns `expired` (Settings shows Reconnect GitHub). No
+   * need is recorded here: the wrapper may still fall back to the user's own gh login, and a
+   * composer row appears only when it reports `/github/needed`.
+   */
+  async function expire(userId: string, gen: number): Promise<void> {
     const p = profile(userId), current = p.account
     if (!current || p.gen !== gen) return
     const expired: Account = { ...current, accessToken: null, expiresAt: null, refreshToken: null, refreshExpiresAt: null, state: 'expired' }
@@ -182,17 +206,16 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     try { await persist(userId, expired, gen) }
     catch (error) { logger.warn('The expired GitHub sign-in was not stored', { userId, error: error instanceof Error ? error.message : String(error) }) }
     if (p.gen !== gen) return
-    p.coverage = null
-    needs.recordAccount(userId, 'reconnect', agentId)
+    clearCoverage(p)
     logger.info('GitHub sign-in expired; Reconnect GitHub', { userId })
     publish(userId)
   }
 
-  async function refresh(userId: string, gen: number, agentId?: string): Promise<GithubTokenResult> {
+  async function refresh(userId: string, gen: number): Promise<GithubTokenResult> {
     const p = profile(userId), current = p.account
     if (!current?.accessToken || current.state !== 'connected') return { kind: 'needed', need: current ? 'reconnect' : 'sign_in' }
     if (!current.refreshToken || (current.refreshExpiresAt !== null && current.refreshExpiresAt <= now())) {
-      await expire(userId, gen, agentId)
+      await expire(userId, gen)
       return { kind: 'needed', need: 'reconnect' }
     }
     let body: Record<string, unknown>
@@ -206,7 +229,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
       const code = safeCode(body.error)
       if (DEAD_REFRESH.has(code)) {
         logger.warn('GitHub refused the refresh token', { userId, code })
-        await expire(userId, gen, agentId)
+        await expire(userId, gen)
         return { kind: 'needed', need: 'reconnect' }
       }
       logger.warn('GitHub refused a refresh', { userId, code })
@@ -229,7 +252,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     return { kind: 'token', grant: grantOf(next) }
   }
 
-  async function token(userId: string, agentId?: string): Promise<GithubTokenResult> {
+  async function token(userId: string): Promise<GithubTokenResult> {
     if (!access.available(userId)) return { kind: 'needed', need: 'sign_in' }
     const account = await load(userId)
     if (!account) return { kind: 'needed', need: 'sign_in' }
@@ -237,7 +260,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     if (account.expiresAt === null || account.expiresAt - now() >= MIN_TOKEN_TTL_MS) return { kind: 'token', grant: grantOf(account as Account & { accessToken: string }) }
     const p = profile(userId)
     if (p.refreshing) return p.refreshing
-    const flight = refresh(userId, p.gen, agentId).catch((error): GithubTokenResult => {
+    const flight = refresh(userId, p.gen).catch((error): GithubTokenResult => {
       logger.warn('GitHub refresh failed', { userId, error: error instanceof Error ? error.message : String(error) })
       return { kind: 'unavailable' }
     })
@@ -297,7 +320,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     if (!current()) return
     flow.abort.abort()
     p.device = null
-    p.coverage = null
+    clearCoverage(p)
     needs.clearAccount(userId)
     logger.info('Signed in to GitHub', { userId })
     publish(userId)
@@ -359,7 +382,7 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
     p.device?.abort.abort()
     p.device = null
     p.account = null
-    p.coverage = null
+    clearCoverage(p)
     p.refreshing = undefined
     p.lastMissRefresh = -Infinity
     needs.clear(userId)
@@ -398,10 +421,12 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
      * the active one, unless the hold recorded none), and whether no chat shows that run. Null
      * when that profile cannot serve; a conflict when the agent's holders work for different profiles.
      */
-    holderOf(agentId: string): GithubAgentHolder | GithubHolderConflict | null {
+    holderOf(agentId: string): GithubAgentHolder | GithubHolderConflict | GithubHolderLocked | null {
       const holder = access.agentHolder(agentId)
       if (!holder || 'conflict' in holder) return holder
-      return access.available(holder.userId) ? holder : null
+      if (access.available(holder.userId)) return holder
+      // A profile that is gone answers as no profile at all (sign in, nothing recorded).
+      return access.exists?.(holder.userId) === false ? null : { locked: true }
     },
 
     /**
@@ -440,6 +465,34 @@ export function createGithubAuthService(deps: GithubServiceDeps) {
         cached = p.coverage ? coverageOf(p.coverage.installs, repo) : null
       }
       return cached ? { answer: cached.answer, installUrl: installUrlFor(cached.answer, cached.install) } : null
+    },
+    /**
+     * Whether `owner/repo` is public, read with the profile's token (`GET /repos/{owner}/{repo}`):
+     * 200 with `private: false` is public; 404 or `private: true` is private; anything else
+     * (403 rate limit, 401, 5xx, unreachable, timeout, no token) is unknown (null). Asked only for
+     * a repository the installations do not cover. A definite answer is kept for
+     * {@link VISIBILITY_REFRESH_MS}; an unknown one is not kept, so the next request asks again.
+     */
+    visibilityFor(userId: string, repo: string): Promise<RepoVisibility | null> {
+      const p = profile(userId), key = repo.toLowerCase(), cache = p.visibility
+      const cached = cache.get(key)
+      if (cached && now() - cached.readAt < VISIBILITY_REFRESH_MS) return cached.answer
+      const answer = (async (): Promise<RepoVisibility | null> => {
+        const t = await token(userId)
+        if (t.kind !== 'token') return null
+        try { return await getRepoVisibility(deps.fetch, t.grant.token, repo) }
+        catch (error) {
+          logger.warn('A repository visibility could not be read', { userId, status: (error as { status?: unknown }).status ?? null })
+          return null
+        }
+      })()
+      const entry = { readAt: now(), answer }
+      cache.delete(key)
+      cache.set(key, entry)
+      while (cache.size > VISIBILITY_CACHE_MAX) cache.delete(cache.keys().next().value!)
+      // Unknown is not kept: drop the entry once its read settles without an answer.
+      void answer.then(v => { if (v === null && cache.get(key) === entry) cache.delete(key) })
+      return answer
     },
     /** Check again: read the installations now. */
     async checkAgain(userId: string): Promise<GithubStatusDto> {

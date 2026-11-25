@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { API, WEB, connected, makeService } from './testSupport/fakeGithub'
-import { MIN_TOKEN_TTL_MS } from './githubAuthService'
+import { MIN_TOKEN_TTL_MS, VISIBILITY_CACHE_MAX } from './githubAuthService'
 import { GITHUB_HTTP_TIMEOUT_MS } from './githubApi'
 import { clearCredentialRedaction, redactCredentialText } from '../../security/serviceCredentialRedaction'
 
@@ -133,16 +133,19 @@ describe('token and refresh', () => {
     for (const secret of ['ghu_access_OLD_0000000000', 'ghr_refresh_OLD_000000000', TOKENS.access_token, TOKENS.refresh_token]) expect(t.log.text()).not.toContain(secret)
   })
 
-  it.each(['incorrect_client_credentials', 'bad_refresh_token'])('turns %s into Reconnect: expired, tokens dropped, a reconnect need', async (code) => {
+  it.each(['incorrect_client_credentials', 'bad_refresh_token'])('turns %s into Reconnect: expired and published, tokens dropped, no row until the wrapper reports one', async (code) => {
     const t = makeService()
     t.storage.seed(U, connected({ expiresAt: Date.now() + 1000 }))
     t.github.on('/login/oauth/access_token', { json: { error: code, error_description: 'The refresh token passed is incorrect or expired.' } })
-    expect(await t.service.token(U, 'folder:a')).toEqual({ kind: 'needed', need: 'reconnect' })
+    expect(await t.service.token(U)).toEqual({ kind: 'needed', need: 'reconnect' })
     expect(t.storage.record(U)).toMatchObject({ accessToken: null, refreshToken: null, state: 'expired', login: 'alice' })
     const status = await t.service.status(U)
     expect(status.account).toMatchObject({ login: 'alice', state: 'expired' })
-    expect(status.needs).toEqual([{ key: 'account', kind: 'reconnect', agentIds: ['folder:a'] }])
+    // The wrapper may still fall back to the user's own gh login: the row comes only from /github/needed.
+    expect(status.needs).toEqual([])
     expect(t.published.length).toBeGreaterThan(0)
+    await t.service.recordNeed(U, 'reconnect', undefined, 'folder:a')
+    expect((await t.service.status(U)).needs).toEqual([{ key: 'account', kind: 'reconnect', agentIds: ['folder:a'] }])
     // Later calls answer reconnect without asking GitHub again.
     expect(await t.service.token(U)).toEqual({ kind: 'needed', need: 'reconnect' })
     expect(t.github.count('/login/oauth/access_token')).toBe(1)
@@ -241,6 +244,62 @@ describe('coverage', () => {
       { installationId: 3, owner: 'bob', ownerType: 'User', ownerId: 30, selection: 'selected', repos: ['bob/site'] }
     ])
     expect(t.github.requests.every(r => r.auth === 'Bearer ghu_access_OLD_0000000000')).toBe(true)
+  })
+
+  it('keeps a definite visibility for a minute (public; private by 404 or private:true); unknown (403, 401, 5xx, no field, network) is not kept', async () => {
+    let clock = 1_000_000_000_000
+    const t = makeService({ now: () => clock })
+    t.storage.seed(U, connected({ expiresAt: null }))
+    t.github.on(`${API}/repos/acme/site`, { json: { full_name: 'acme/site', private: false } })
+    t.github.on(`${API}/repos/acme/secret`, { status: 404, json: { message: 'Not Found' } })
+    t.github.on(`${API}/repos/acme/limited`, { status: 403, json: { message: 'API rate limit exceeded' } })
+    t.github.on(`${API}/repos/acme/unauth`, { status: 401, json: {} })
+    t.github.on(`${API}/repos/acme/inner`, { json: { private: true } })
+    t.github.on(`${API}/repos/acme/odd`, { json: { full_name: 'acme/odd' } })
+    t.github.on(`${API}/repos/acme/flaky`, { status: 502, json: {} })
+    t.github.on(`${API}/repos/acme/down`, new Error('ECONNRESET'))
+    expect(await Promise.all([t.service.visibilityFor(U, 'acme/site'), t.service.visibilityFor(U, 'ACME/site')])).toEqual(['public', 'public'])
+    expect(await t.service.visibilityFor(U, 'acme/secret')).toBe('private')
+    expect(await t.service.visibilityFor(U, 'acme/secret')).toBe('private')
+    expect(await t.service.visibilityFor(U, 'acme/inner')).toBe('private')
+    for (const repo of ['acme/limited', 'acme/unauth', 'acme/odd', 'acme/flaky', 'acme/down']) {
+      expect(await t.service.visibilityFor(U, repo)).toBeNull()
+      expect(await t.service.visibilityFor(U, repo)).toBeNull()
+      expect(t.github.count(`/repos/${repo}`)).toBe(2)
+    }
+    expect(t.github.count('/repos/acme/site')).toBe(1)
+    expect(t.github.count('/repos/acme/secret')).toBe(1)
+    expect(t.github.requests.find(r => r.url.endsWith('/repos/acme/site'))?.auth).toBe('Bearer ghu_access_OLD_0000000000')
+    clock += 61_000
+    await t.service.visibilityFor(U, 'acme/site')
+    expect(t.github.count('/repos/acme/site')).toBe(2)
+  })
+
+  it('keeps at most VISIBILITY_CACHE_MAX repositories, dropping the oldest', async () => {
+    const t = makeService()
+    t.storage.seed(U, connected({ expiresAt: null }))
+    t.github.fetch.mockImplementation(async () => new Response(JSON.stringify({ private: false }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    for (let i = 0; i <= VISIBILITY_CACHE_MAX; i++) await t.service.visibilityFor(U, `acme/r${i}`)
+    expect(t.github.fetch).toHaveBeenCalledTimes(VISIBILITY_CACHE_MAX + 1)
+    await t.service.visibilityFor(U, `acme/r${VISIBILITY_CACHE_MAX}`)
+    expect(t.github.fetch).toHaveBeenCalledTimes(VISIBILITY_CACHE_MAX + 1)
+    await t.service.visibilityFor(U, 'acme/r0')
+    expect(t.github.fetch).toHaveBeenCalledTimes(VISIBILITY_CACHE_MAX + 2)
+  })
+
+  it('the visibility cache is cleared with the coverage cache (an expired sign-in)', async () => {
+    let clock = 1_000_000_000_000
+    const t = makeService({ now: () => clock })
+    t.storage.seed(U, connected({ expiresAt: clock + MIN_TOKEN_TTL_MS + 30_000 }))
+    t.github.on(`${API}/repos/acme/site`, { json: { private: false } })
+    t.github.on('/login/oauth/access_token', { json: { error: 'bad_refresh_token' } })
+    expect(await t.service.visibilityFor(U, 'acme/site')).toBe('public')
+    clock += 31_000
+    expect(await t.service.visibilityFor(U, 'acme/site')).toBe('public')
+    expect(await t.service.token(U)).toEqual({ kind: 'needed', need: 'reconnect' })
+    // Within the minute, but the cache went with the sign-in: no answer without a token.
+    expect(await t.service.visibilityFor(U, 'acme/site')).toBeNull()
+    expect(t.github.count('/repos/acme/site')).toBe(1)
   })
 
   it('refreshes for an uncovered repo at most once a minute', async () => {

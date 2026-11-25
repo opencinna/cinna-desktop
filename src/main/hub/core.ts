@@ -112,7 +112,9 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
       if (!user) return false
       if (userActivation.isActivated() && userId === getProfileScopeUserId()) return true
       return !user.passwordHash || userActivation.isUnlocked(userId)
-    }
+    },
+    // A profile that exists but cannot serve is locked; one that is gone answers as no profile.
+    exists: (userId) => !!userRepo.get(userId)
   })
   // Its loopback routes ride the credential token endpoint (same listener, bearer and held rule).
   for (const [path, handle] of Object.entries(githubLoopbackRoutes(githubAuthService))) serviceCredentialService.registerTokenRoute(path, handle)

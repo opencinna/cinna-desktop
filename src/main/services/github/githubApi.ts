@@ -169,3 +169,24 @@ export async function listCoverage(fetch: GithubFetch, token: string): Promise<G
   }
   return out
 }
+
+export type RepoVisibility = 'public' | 'private'
+
+/**
+ * Whether `owner/repo` (already validated by `parseRepo`) is public, read with the user's token:
+ * 200 with `private: false` → public, with `private: true` → private; 404 → private (GitHub hides
+ * it). Throws {@link GithubTransientError} for anything else (403 is often a rate limit, 401, 5xx,
+ * unreachable, timeout, a 200 without the field): unknown.
+ */
+export async function getRepoVisibility(fetch: GithubFetch, token: string, repo: string): Promise<RepoVisibility> {
+  const [owner, name] = repo.split('/')
+  let body: unknown
+  try { ({ body } = await getJson(fetch, `${githubApiUrl()}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, token)) }
+  catch (error) {
+    if (error instanceof GithubTransientError && error.status === 404) return 'private'
+    throw error
+  }
+  const flag = (body as { private?: unknown } | null)?.private
+  if (typeof flag !== 'boolean') throw new GithubTransientError(200, 'GitHub sent an unreadable repository')
+  return flag ? 'private' : 'public'
+}

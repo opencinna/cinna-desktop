@@ -21,8 +21,39 @@ export const GITHUB_MESSAGES = {
   reconnect: 'The GitHub sign-in has expired. Ask the user to click Reconnect GitHub under the message box, then run this command again.',
   install: (repo: string): string => `Cinna's GitHub app can't reach ${repo} yet. Ask the user to click Allow access under the message box, then run this command again.`,
   unavailable: 'GitHub could not be reached to refresh the sign-in. Try again in a moment.',
-  otherProfile: 'Another Cinna profile is running this agent right now. Try again when its run has finished.'
+  otherProfile: 'Another Cinna profile is running this agent right now. Try again when its run has finished.',
+  locked: "This agent's Cinna profile is locked. Ask the user to unlock it, then run this command again."
 } as const
+
+/**
+ * The coverage and visibility reads inside one `/github/token` answer finish within this, or the
+ * repository's coverage counts as unknown (the token is handed out: GitHub enforces the bounds).
+ * The reads go on in the background and fill the caches for the next request.
+ */
+export const GITHUB_COVERAGE_DEADLINE_MS = 12_000
+/**
+ * The whole `/github/token` answer stays within this (a refresh may take up to
+ * `GITHUB_HTTP_TIMEOUT_MS`), below the wrapper's 40 s wait, so a slow GitHub answers before curl
+ * gives up.
+ */
+export const GITHUB_TOKEN_ROUTE_BUDGET_MS = 35_000
+
+export interface GithubLoopbackOptions {
+  coverageDeadlineMs?: number
+  routeBudgetMs?: number
+  now?: () => number
+}
+
+const MISSED = Symbol('missed')
+/** `work`'s value, or {@link MISSED} when it has not settled within `ms` (the work itself goes on). */
+function within<T>(work: Promise<T>, ms: number): Promise<T | typeof MISSED> {
+  if (ms <= 0) return Promise.resolve(MISSED)
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(MISSED), ms)
+    timer.unref?.()
+    work.then(value => { clearTimeout(timer); resolve(value) }, error => { clearTimeout(timer); reject(error) })
+  })
+}
 
 /**
  * Whom an agent's loopback request works for, from the origins its shared holds recorded, oldest
@@ -38,30 +69,55 @@ export function githubHolderOf(origins: Array<HoldOrigin | null>, activeProfile:
   const profiles = new Set(origins.length ? origins.map(o => o?.userId || activeProfile()) : [activeProfile()])
   if (profiles.size > 1) return { conflict: true }
   const userId = [...profiles][0]
-  return userId ? { userId, chatless: newest?.chatless ?? null } : null
+  // Chatless only when no hold could be a chat's: every hold recorded a chatless origin.
+  const chatless = origins.length > 0 && origins.every(o => !!o?.chatless) ? newest?.chatless ?? null : null
+  return userId ? { userId, chatless } : null
 }
 
 const ok = (body: unknown): GithubRouteAnswer => ({ status: 200, body })
 const needed = (kind: 'sign_in' | 'reconnect'): GithubRouteAnswer => ok({ needed: kind, message: GITHUB_MESSAGES[kind] })
 const NEED_KINDS = new Set(['sign_in', 'reconnect', 'install', 'gh_missing'])
 
-export function githubLoopbackRoutes(service: GithubAuthService): Record<string, GithubRouteHandler> {
+export function githubLoopbackRoutes(service: GithubAuthService, options: GithubLoopbackOptions = {}): Record<string, GithubRouteHandler> {
+  const now = options.now ?? Date.now
+  const coverageDeadlineMs = options.coverageDeadlineMs ?? GITHUB_COVERAGE_DEADLINE_MS
+  const routeBudgetMs = options.routeBudgetMs ?? GITHUB_TOKEN_ROUTE_BUDGET_MS
   return {
-    /** `{ repo? }` → a token with the commit identity, or what is needed, or a transient refusal. */
+    /**
+     * `{ repo?, via? }` → a token with the commit identity, or what is needed, or a transient
+     * refusal. `via`: `"git"` from git's credential helper (a push, or a fetch of a repository
+     * that is not public: a public clone or fetch never asks), `"write"` for a gh command the
+     * wrapper knows changes something, `"gh"` for any other gh command. Absent or anything else
+     * reads as `"git"` (fail closed: an uncovered repository then needs Allow access).
+     */
     '/github/token': async (agentId, body) => {
+      const started = now()
       // The profile of what holds the agent now (a chat's turn, a schedule's or a command's starter).
       const holder = service.holderOf(agentId)
       if (holder && 'conflict' in holder) return ok({ unavailable: true, message: GITHUB_MESSAGES.otherProfile })
+      if (holder && 'locked' in holder) return ok({ unavailable: true, message: GITHUB_MESSAGES.locked })
       const userId = holder?.userId
       if (!userId) return needed('sign_in')
       const repo = parseRepo(body.repo)
-      const result = await service.token(userId, agentId)
+      const via = body.via === 'gh' ? 'gh' : body.via === 'write' ? 'write' : 'git'
+      const result = await service.token(userId)
       if (result.kind === 'needed') return needed(result.need)
       if (result.kind === 'unavailable') return ok({ unavailable: true, message: GITHUB_MESSAGES.unavailable })
       if (repo) {
-        const coverage = await service.coverageFor(userId, repo)
-        // Unknown coverage (the installations could not be read) hands the token out: GitHub enforces the bounds anyway.
-        if (coverage && coverage.answer !== 'covered') return ok({ needed: 'install', message: GITHUB_MESSAGES.install(repo), repo })
+        // Coverage and visibility share one deadline; a read that misses it counts as unknown coverage.
+        const deadline = Math.min(now() + coverageDeadlineMs, started + routeBudgetMs)
+        const coverage = await within(service.coverageFor(userId, repo), deadline - now())
+        // Unknown coverage (unreadable, or not read in time) hands the token out: GitHub enforces the bounds anyway.
+        if (coverage !== MISSED && coverage && coverage.answer !== 'covered') {
+          const install = ok({ needed: 'install', message: GITHUB_MESSAGES.install(repo), repo })
+          // git asks only to push or to fetch a repository that is not public, and a write needs the
+          // app on the repository whatever its visibility: Allow access.
+          if (via !== 'gh') return install
+          // A gh read of a public repository works with the token. Unknown visibility (not read in
+          // time, or GitHub could not say) counts as unknown coverage: the token.
+          const visibility = await within(service.visibilityFor(userId, repo), deadline - now())
+          if (visibility === 'private') return install
+        }
       }
       const { grant } = result
       return ok({ token: grant.token, expires_at: grant.expiresAt === null ? null : Math.floor(grant.expiresAt / 1000), login: grant.login, name: plainText(grant.name) || grant.login, email: grant.email })
@@ -78,8 +134,8 @@ export function githubLoopbackRoutes(service: GithubAuthService): Record<string,
       if (kind === 'gh_missing') return ok({ ok: true, installing: await service.ghMissing(agentId) })
       // Recorded under the same profile the token route answered for, so the row lands in its chats.
       const holder = service.holderOf(agentId)
-      // Holders of different profiles at once: the token route refused, so nothing is recorded.
-      if (holder && !('conflict' in holder)) await service.recordNeed(holder.userId, kind as 'sign_in' | 'reconnect' | 'install', body.repo, agentId, holder.chatless)
+      // Holders of different profiles at once, or a locked profile: the token route refused, so nothing is recorded.
+      if (holder && 'userId' in holder) await service.recordNeed(holder.userId, kind as 'sign_in' | 'reconnect' | 'install', body.repo, agentId, holder.chatless)
       return ok({ ok: true })
     }
   }

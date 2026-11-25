@@ -12,7 +12,7 @@ vi.mock('../logger/logger', () => ({
 
 const {
   createGhShim, ghShimScript, withGithubCredentialHelper, withoutGithubCredentialHelper, githubCredentialHelperFor,
-  GH_NETWORK_MESSAGE, GH_INSTALLING_MESSAGE, GH_SLOW_MESSAGE, GH_NOT_INSTALLED_MESSAGE, GITHUB_HELPER_KEY, GITHUB_USE_HTTP_PATH_KEY
+  GH_NETWORK_MESSAGE, GH_INSTALLING_MESSAGE, GH_SLOW_MESSAGE, GH_RETRY_MESSAGE, GH_NOT_INSTALLED_MESSAGE, GH_WRAPPER_MARKER, GITHUB_HELPER_KEY, GITHUB_USE_HTTP_PATH_KEY
 } = await import('./ghShim')
 const { GITHUB_MESSAGES } = await import('../services/github/githubLoopback')
 
@@ -27,7 +27,7 @@ function resolveTool(name: string): string | null {
   const found = run.stdout.trim()
   return run.status === 0 && found.startsWith('/') ? found : null
 }
-const TOOLS = ['sed', 'head', 'cat', 'env', 'mkdir', 'git', 'curl', 'basename']
+const TOOLS = ['sed', 'head', 'grep', 'cat', 'env', 'mkdir', 'git', 'curl', 'basename']
 const toolPaths = Object.fromEntries(TOOLS.map((name) => [name, resolveTool(name)]))
 const hasCurl = toolPaths.curl !== null
 const hasGit = toolPaths.git !== null
@@ -98,6 +98,17 @@ async function startLoopback(answer: (path: string, body: Record<string, unknown
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   return { url: `http://127.0.0.1:${port}/github`, requests, server }
+}
+
+/** An endpoint that takes the connection and then breaks it off: an empty reply (curl 52) or a reset (curl 56). */
+async function breakingEndpoint(how: 'empty' | 'reset'): Promise<string> {
+  const server = createServer((req) => {
+    req.resume()
+    req.on('end', () => (how === 'reset' ? req.socket.resetAndDestroy() : req.socket.destroy()))
+  })
+  servers.push(server)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}/github`
 }
 
 async function closedPort(): Promise<string> {
@@ -312,9 +323,16 @@ describe('the wrapper and git wiring in the env', () => {
     expect(githubCredentialHelperFor(kit, null).GIT_CONFIG_COUNT).toBe('1')
   })
 
-  it('starts at 0 over a missing or malformed count', () => {
-    expect(withGithubCredentialHelper<Env>({ GIT_CONFIG_COUNT: 'x' }, '/w/gh').GIT_CONFIG_KEY_0).toBe(GITHUB_HELPER_KEY)
+  it('starts at 0 over a missing or empty count', () => {
+    expect(withGithubCredentialHelper<Env>({ GIT_CONFIG_COUNT: '' }, '/w/gh').GIT_CONFIG_KEY_0).toBe(GITHUB_HELPER_KEY)
     expect(withGithubCredentialHelper<Env>({}, "/it's/gh").GIT_CONFIG_VALUE_1).toBe(`!'/it'\\''s/gh' auth git-credential`)
+  })
+
+  it.each(['x', '-1', '2x', '1.5', '99999'])('a count that is not a number (%j): the user entries untouched, nothing added', (count) => {
+    const user = { GIT_CONFIG_COUNT: count, GIT_CONFIG_KEY_0: 'user.name', GIT_CONFIG_VALUE_0: 'U', CINNA_GITHUB_URL: 'http://127.0.0.1:1/github', CINNA_GITHUB_AUTH: 'b' }
+    expect(withGithubCredentialHelper<Env>(user, '/w/gh')).toBe(user)
+    expect(withoutGithubCredentialHelper<Env>(user)).toBe(user)
+    expect(githubCredentialHelperFor<Env>(user, '/w/gh')).toBe(user)
   })
 })
 
@@ -327,7 +345,7 @@ describe.skipIf(!hasCurl)('the gh wrapper', () => {
       `argv:pr list -R o/r\nGH_TOKEN=served\nGH_CONFIG_DIR=${fx.configDir}\nGH_PROMPT_DISABLED=1\nGITHUB_TOKEN=unset\nGH_HOST=unset\n`
     )
     expect(out.stderr).toBe('')
-    expect(loop.requests).toEqual([{ path: '/github/token', auth: `Bearer ${BEARER}`, body: { repo: 'o/r' } }])
+    expect(loop.requests).toEqual([{ path: '/github/token', auth: `Bearer ${BEARER}`, body: { repo: 'o/r', via: 'gh' } }])
     // Neither the bearer nor the token is ever on a command line.
     const argv = curlArgv()
     expect(argv).toContain('--config -')
@@ -354,7 +372,7 @@ describe.skipIf(!hasCurl)('the gh wrapper', () => {
     expect(out.stdout).toBe('')
     expect(out.stderr).toBe(`${GITHUB_MESSAGES.install('acme/shop')}\n`)
     expect(loop.requests.map((r) => [r.path, r.body])).toEqual([
-      ['/github/token', { repo: 'acme/shop' }],
+      ['/github/token', { repo: 'acme/shop', via: 'write' }],
       ['/github/needed', { kind: 'install', repo: 'acme/shop' }]
     ])
     expect(loop.requests.every((r) => r.auth === `Bearer ${BEARER}`)).toBe(true)
@@ -365,7 +383,7 @@ describe.skipIf(!hasCurl)('the gh wrapper', () => {
     const out = await run(['auth', 'status'], { endpoint: loop.url, realGh: false })
     expect([out.status, out.stderr]).toEqual([4, `${GITHUB_MESSAGES.sign_in}\n`])
     expect(loop.requests.map((r) => [r.path, r.body])).toEqual([
-      ['/github/token', {}],
+      ['/github/token', { via: 'gh' }],
       ['/github/needed', { kind: 'sign_in' }]
     ])
   })
@@ -378,6 +396,37 @@ describe.skipIf(!hasCurl)('the gh wrapper', () => {
     expect(GH_NETWORK_MESSAGE).toBe(
       'This GitHub command needs network access, which this sandbox blocks. Run the same command again with escalated permissions. It is not an internet outage.'
     )
+  })
+
+  it.each(['empty', 'reset'] as const)('an endpoint that connected and then broke off (%s): try again, exit 1, not the sandbox sentence', async (how) => {
+    const url = await breakingEndpoint(how)
+    const out = await run(['pr', 'list', '-R', 'o/r'], { endpoint: url })
+    expect([out.status, out.stdout, out.stderr]).toEqual([1, '', `${GH_RETRY_MESSAGE}\n`])
+    expect(GH_RETRY_MESSAGE).toBe('Cinna could not answer for GitHub just now. Try again in a moment.')
+    const git = await run(['auth', 'git-credential', 'get'], { endpoint: url, input: 'protocol=https\nhost=github.com\n\n' })
+    expect([git.status, git.stdout, git.stderr]).toEqual([1, '', `${GH_RETRY_MESSAGE}\n`])
+  })
+
+  it('skips a gh carrying the Cinna wrapper marker earlier on PATH (another instance): the real gh runs', async () => {
+    const other = join(fx.root, 'other instance', 'gh-shim')
+    mkdirSync(other, { recursive: true })
+    writeFileSync(join(other, 'gh'), `#!/bin/sh\n${GH_WRAPPER_MARKER}\necho "other wrapper ran"\nexit 7\n`, { mode: 0o755 })
+    const env = baseEnv({})
+    const out = await run(['pr', 'list'], {}, { ...env, PATH: `${join(fx.userData, 'gh-shim')}:${other}:${fx.curlDir}:${fx.fakeGhDir}:${fx.toolsDir}` })
+    expect([out.status, out.stdout.split('\n')[0]]).toEqual([0, 'argv:pr list'])
+    expect(readFileSync(fx.wrapper, 'utf8').split('\n')[1]).toBe(GH_WRAPPER_MARKER)
+  })
+
+  it('two real Cinna wrappers on PATH, either order: no loop, the real gh is served the token', async () => {
+    const { userData: otherData } = makeRoot()
+    await shimFor(otherData).apply({ PATH: '/usr/bin' })
+    const theirs = join(otherData, 'gh-shim'), ours = join(fx.userData, 'gh-shim')
+    const loop = await startLoopback(tokenAnswer)
+    const env = baseEnv({ endpoint: loop.url })
+    for (const first of [[ours, theirs], [theirs, ours]]) {
+      const out = await run(['pr', 'list', '-R', 'o/r'], {}, { ...env, PATH: `${first.join(':')}:${fx.curlDir}:${fx.fakeGhDir}:${fx.toolsDir}` })
+      expect([out.status, out.stdout.split('\n').slice(0, 2)]).toEqual([0, ['argv:pr list -R o/r', 'GH_TOKEN=served']])
+    }
   })
 
   it('a 401 (nothing holds the agent): the real gh untouched', async () => {
@@ -393,7 +442,7 @@ describe.skipIf(!hasCurl)('the gh wrapper', () => {
     expect([out.status, out.stdout, out.stderr]).toEqual([1, '', 'Cinna is still installing gh, try again in a moment.\n'])
     expect(GH_INSTALLING_MESSAGE).toBe('Cinna is still installing gh, try again in a moment.')
     expect(loop.requests.map((r) => [r.path, r.body])).toEqual([
-      ['/github/token', {}],
+      ['/github/token', { via: 'gh' }],
       ['/github/needed', { kind: 'gh_missing' }]
     ])
   })
@@ -467,39 +516,116 @@ describe.skipIf(!hasCurl)('the gh wrapper', () => {
 })
 
 describe.skipIf(!hasCurl)('which repo the wrapper asks for', () => {
-  const cases: Array<[string[], Record<string, string>]> = [
-    [['pr', 'list', '-R', 'o/r'], { repo: 'o/r' }],
-    [['pr', 'list', '-Ro/r'], { repo: 'o/r' }],
-    [['pr', 'list', '--repo=o/r.git'], { repo: 'o/r' }],
-    [['issue', 'view', '3', '--repo', 'https://github.com/o/r'], { repo: 'o/r' }],
-    [['repo', 'view', 'https://github.com/acme/shop.git'], { repo: 'acme/shop' }],
-    [['repo', 'fork', 'git@github.com:acme/shop.git'], { repo: 'acme/shop' }],
-    [['repo', 'sync', 'acme/my.repo_1'], { repo: 'acme/my.repo_1' }],
-    [['repo', 'view', '-b', 'main', 'acme/shop'], { repo: 'acme/shop' }],
-    [['api', 'repos/acme/shop/pulls'], { repo: 'acme/shop' }],
-    [['api', '-X', 'GET', '/repos/acme/shop?per_page=1'], { repo: 'acme/shop' }],
-    [['api', 'user'], {}],
-    [['repo', 'view', 'https://gitlab.com/acme/shop'], {}],
-    [['repo', 'view', 'acme/shop/extra'], {}],
-    [['pr', 'list', '-R', 'bad owner/x'], {}],
-    [['pr', 'list', '--', '-R', 'o/r'], {}]
+  const cases: Array<[string[], string | null]> = [
+    [['pr', 'list', '-R', 'o/r'], 'o/r'],
+    [['pr', 'list', '-Ro/r'], 'o/r'],
+    [['pr', 'list', '--repo=o/r.git'], 'o/r'],
+    [['issue', 'view', '3', '--repo', 'https://github.com/o/r'], 'o/r'],
+    [['pr', 'list', '-R', 'github.com/o/r'], 'o/r'],
+    [['pr', 'list', '--repo=github.com/o/r'], 'o/r'],
+    [['repo', 'view', 'https://github.com/acme/shop.git'], 'acme/shop'],
+    [['repo', 'fork', 'git@github.com:acme/shop.git'], 'acme/shop'],
+    [['repo', 'sync', 'acme/my.repo_1'], 'acme/my.repo_1'],
+    [['repo', 'view', '-b', 'main', 'acme/shop'], 'acme/shop'],
+    [['repo', 'edit', '--description', 'a/b', 'acme/shop'], 'acme/shop'],
+    [['repo', 'delete', 'acme/shop', '--yes'], 'acme/shop'],
+    [['repo', 'archive', 'github.com/acme/shop'], 'acme/shop'],
+    [['api', 'repos/acme/shop/pulls'], 'acme/shop'],
+    [['api', '-X', 'GET', '/repos/acme/shop?per_page=1'], 'acme/shop'],
+    [['api', 'user'], null],
+    [['repo', 'fork', '--org', 'acme'], null],
+    [['repo', 'fork', '--org', 'acme', 'other/thing'], 'other/thing'],
+    [['repo', 'fork', '--remote-name', 'up', '--fork-name', 'x', 'other/thing'], 'other/thing'],
+    [['repo', 'view', '--branch', 'a/b', 'other/thing'], 'other/thing'],
+    [['repo', 'view', '-b', 'a/b', '-q', '.name', '--template', 'x/y', 'other/thing'], 'other/thing'],
+    [['repo', 'edit', '--default-branch', 'a/b', '--visibility', 'public', 'other/thing'], 'other/thing'],
+    [['repo', 'view', 'https://gitlab.com/acme/shop'], null],
+    [['repo', 'view', 'acme/shop/extra'], null],
+    [['pr', 'list', '-R', 'bad owner/x'], null],
+    [['pr', 'list', '--', '-R', 'o/r'], null]
   ]
-  it.each(cases)('%j → %j', async (args, body) => {
+  it.each(cases)('%j → %j', async (args, repo) => {
     const loop = await startLoopback(tokenAnswer)
     await run(args, { endpoint: loop.url })
-    expect(loop.requests[0]?.body).toEqual(body)
+    expect((loop.requests[0]?.body as { repo?: string }).repo ?? null).toBe(repo)
   })
 
-  it.skipIf(!hasGit)('falls back to the origin remote of the current folder, when it is on github.com', async () => {
+  // Writes say so (an uncovered public repo then needs Allow access); everything else, unknown included, is gh.
+  const vias: Array<[string[], 'gh' | 'write']> = [
+    [['pr', 'create', '-R', 'o/r'], 'write'], [['pr', 'edit', '3'], 'write'], [['pr', 'merge', '3'], 'write'], [['pr', 'comment', '3'], 'write'],
+    [['pr', 'close', '3'], 'write'], [['pr', 'review', '3'], 'write'], [['issue', 'create'], 'write'], [['issue', 'edit', '1'], 'write'],
+    [['issue', 'comment', '1'], 'write'], [['issue', 'close', '1'], 'write'], [['release', 'create', 'v1'], 'write'], [['release', 'edit', 'v1'], 'write'],
+    [['release', 'delete', 'v1'], 'write'], [['release', 'upload', 'v1', 'a.tgz'], 'write'], [['repo', 'edit', 'o/r'], 'write'], [['repo', 'delete', 'o/r'], 'write'],
+    [['repo', 'archive', 'o/r'], 'write'], [['repo', 'rename', 'x'], 'write'], [['repo', 'fork', 'o/r'], 'write'], [['repo', 'deploy-key', 'add', 'k.pub'], 'write'],
+    [['label', 'create', 'bug'], 'write'], [['secret', 'set', 'X'], 'write'], [['variable', 'delete', 'X'], 'write'],
+    [['api', '-X', 'POST', 'repos/o/r/issues'], 'write'], [['api', '--method', 'PATCH', 'repos/o/r'], 'write'], [['api', '-XDELETE', 'repos/o/r'], 'write'],
+    [['api', '--method=PUT', 'repos/o/r'], 'write'], [['api', 'repos/o/r/issues', '-f', 'title=x'], 'write'], [['api', 'repos/o/r/issues', '-Fbody=@f'], 'write'],
+    [['api', 'repos/o/r', '--field', 'a=b'], 'write'], [['api', 'repos/o/r', '--raw-field=a=b'], 'write'], [['api', 'repos/o/r', '--input', 'f.json'], 'write'],
+    [['api', '-X', 'GET', 'repos/o/r'], 'gh'], [['api', 'repos/o/r'], 'gh'], [['pr', 'list'], 'gh'], [['pr', 'view', '3'], 'gh'], [['pr', 'diff', '3'], 'gh'],
+    [['pr', 'checkout', '3'], 'gh'], [['issue', 'list'], 'gh'], [['release', 'download', 'v1'], 'gh'], [['repo', 'view', 'o/r'], 'gh'],
+    [['repo', 'clone', 'o/r'], 'gh'], [['repo', 'deploy-key', 'list'], 'gh'], [['label', 'list'], 'gh'], [['something', 'new'], 'gh']
+  ]
+  it.each(vias)('%j via %s', async (args, via) => {
+    const loop = await startLoopback(tokenAnswer)
+    await run(args, { endpoint: loop.url })
+    expect((loop.requests[0]?.body as { via?: string }).via).toBe(via)
+  })
+
+  it.each([[['-R', 'gitlab.com/o/r']], [['--repo', 'https://gitlab.com/o/r']], [['--repo=ghe.example.com/o/r']], [['-Rgit@gitlab.com:o/r.git']]])(
+    '-R naming another host (%j): the real gh untouched, no token asked',
+    async (flag) => {
+      const loop = await startLoopback(tokenAnswer)
+      const out = await run(['pr', 'list', ...flag], { endpoint: loop.url })
+      expect(out.status).toBe(0)
+      expect(out.stdout).toContain('GH_TOKEN=unset\nGH_CONFIG_DIR=unset\n')
+      expect(loop.requests).toEqual([])
+    }
+  )
+
+  /** A folder whose origin is acme/shop on github.com. */
+  function originRepo(url = 'https://github.com/acme/shop.git'): string {
     const repo = join(fx.root, 'work')
     spawnSync(toolPaths.git!, ['init', '-q', repo])
-    spawnSync(toolPaths.git!, ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/acme/shop.git'])
+    spawnSync(toolPaths.git!, ['-C', repo, 'remote', 'add', 'origin', url])
+    return repo
+  }
+
+  // Commands that act on the current repository and name none: the origin's repo.
+  const fromOrigin: string[][] = [
+    ['pr', 'list'], ['issue', 'view', '3'], ['release', 'list'], ['run', 'list'], ['workflow', 'list'], ['browse'], ['cache', 'list'],
+    ['secret', 'list'], ['variable', 'list'], ['label', 'list'], ['ruleset', 'list'], ['attestation', 'verify', 'x.tgz'],
+    ['repo', 'view'], ['repo', 'view', '--json', 'name'], ['repo', 'edit', '--description', 'x'], ['repo', 'sync'], ['repo', 'fork'], ['repo', 'fork', '--org', 'acme'],
+    ['repo', 'set-default', '--view'], ['repo', 'deploy-key', 'list'], ['repo', 'archive', '-y'], ['repo', 'unarchive'],
+    ['repo', 'rename', 'newname'], ['repo', 'delete', '--yes']
+  ]
+  it.skipIf(!hasGit).each(fromOrigin)('origin applies: %j', async (...args) => {
+    const cwd = originRepo()
     const loop = await startLoopback(tokenAnswer)
-    await run(['pr', 'list'], { endpoint: loop.url, cwd: repo })
-    expect(loop.requests[0]?.body).toEqual({ repo: 'acme/shop' })
-    spawnSync(toolPaths.git!, ['-C', repo, 'remote', 'set-url', 'origin', 'https://example.com/acme/shop.git'])
-    await run(['pr', 'list'], { endpoint: loop.url, cwd: repo })
-    expect(loop.requests[1]?.body).toEqual({})
+    await run(args, { endpoint: loop.url, cwd })
+    expect((loop.requests[0]?.body as { repo?: string }).repo).toBe('acme/shop')
+  })
+
+  // Commands that do not act on the current repository, unknown ones, and ones that name a repo (or another host).
+  const notFromOrigin: Array<[string[], string | null]> = [
+    [['auth', 'status'], null], [['api', 'user'], null], [['search', 'repos', 'x'], null], [['gist', 'list'], null],
+    [['repo', 'clone'], null], [['repo', 'list'], null], [['repo', 'create', 'x'], null], [['status'], null], [['extension', 'list'], null],
+    [['config', 'get', 'editor'], null], [['alias', 'list'], null], [['codespace', 'list'], null], [['org', 'list'], null],
+    [['project', 'list'], null], [['ssh-key', 'list'], null], [['gpg-key', 'list'], null], [['something-new'], null],
+    [['repo', 'view', 'other/thing'], 'other/thing'], [['repo', 'view', 'https://gitlab.com/a/b'], null],
+    [['repo', 'fork', '--org', 'acme', 'other/thing'], 'other/thing'], [['pr', 'list', '-R', 'bad owner/x'], null]
+  ]
+  it.skipIf(!hasGit).each(notFromOrigin)('origin does not apply: %j → %j', async (args, repo) => {
+    const cwd = originRepo()
+    const loop = await startLoopback(tokenAnswer)
+    await run(args, { endpoint: loop.url, cwd })
+    expect((loop.requests[0]?.body as { repo?: string }).repo ?? null).toBe(repo)
+  })
+
+  it.skipIf(!hasGit)('an origin that is not on github.com names no repo', async () => {
+    const cwd = originRepo('https://example.com/acme/shop.git')
+    const loop = await startLoopback(tokenAnswer)
+    await run(['pr', 'list'], { endpoint: loop.url, cwd })
+    expect(loop.requests[0]?.body).toEqual({ via: 'gh' })
   })
 })
 
@@ -548,7 +674,7 @@ describe.skipIf(!hasCurl)('gh auth git-credential (git, G4)', () => {
     const out = await run(['auth', 'git-credential', 'get'], { endpoint: loop.url, input: request })
     expect(out.status).toBe(0)
     expect(out.stdout).toBe(`protocol=https\nhost=github.com\nusername=x-access-token\npassword=${TOKEN}\n`)
-    expect(loop.requests.map((r) => r.body)).toEqual([{ repo: 'acme/shop' }])
+    expect(loop.requests.map((r) => r.body)).toEqual([{ repo: 'acme/shop', via: 'git' }])
     expect(curlArgv()).not.toContain(BEARER)
   })
 
@@ -605,7 +731,7 @@ describe.skipIf(!hasCurl)('gh auth git-credential (git, G4)', () => {
     const out = await run(['auth', 'git-credential', 'get'], { endpoint: loop.url, input: request })
     expect([out.status, out.stdout, out.stderr]).toEqual([0, '', `${GITHUB_MESSAGES.install('acme/shop')}\n`])
     expect(loop.requests.map((r) => [r.path, r.body])).toEqual([
-      ['/github/token', { repo: 'acme/shop' }],
+      ['/github/token', { repo: 'acme/shop', via: 'git' }],
       ['/github/needed', { kind: 'install', repo: 'acme/shop' }]
     ])
   })
@@ -671,7 +797,7 @@ describe.skipIf(!hasCurl || !hasGit)('git credential fill through the envs Cinna
     expect(out.stdout).toContain(`password=${TOKEN}\n`)
     expect(out.stdout).toContain('username=x-access-token\n')
     expect(userHelper).toBe('')
-    expect(loop.requests.map((r) => r.body)).toEqual([{ repo: 'acme/shop' }])
+    expect(loop.requests.map((r) => r.body)).toEqual([{ repo: 'acme/shop', via: 'git' }])
   })
 
   it('control: without the wiring the user helper answers', async () => {
