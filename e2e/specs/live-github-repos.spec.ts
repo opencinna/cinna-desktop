@@ -7,6 +7,7 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { ANTHROPIC_API_KEY, CLAUDE_API_AUTH, pinClaudeApiProfile } from '../fixtures/claudeApiAuth'
 import { claudeBinary } from '../fixtures/liveEngine'
 import { LIVE_REQUESTED } from '../fixtures/live'
+import type { GithubCoverage, GithubStatusDto } from '../../src/shared/github'
 
 /**
  * GitHub repos P1 against **real GitHub**: opt-in, never part of an ordinary run.
@@ -84,10 +85,16 @@ import { LIVE_REQUESTED } from '../fixtures/live'
  *    process cannot ask it directly): an open pull request for the run, its
  *    head branch on the remote, the line in its diff, every commit by that
  *    noreply email.
- * 5. `finally`: a cleanup kit command closes every open pull request naming
- *    the run id (`--delete-branch`) and deletes `heads/cinna-e2e-<run id>*`;
- *    each tolerant of being absent. If the app cannot run it, the manual
- *    commands are printed.
+ * 5. `finally`: a cleanup kit command closes the open pull requests whose
+ *    head is exactly `cinna-e2e-<run id>` (`--delete-branch`) and deletes
+ *    exactly `heads/cinna-e2e-<run id>` if it is still there; each tolerant of
+ *    being absent, each gh exit status checked before its output is used. If
+ *    the app cannot run it, the manual commands are printed.
+ *
+ * The repository needs a README on its default branch (an empty one cannot
+ * take a pull request): the test skips otherwise. A public repository is
+ * checked before any turn; a private one right after the sign-in, before
+ * Continue (turn 1 has run by then).
  */
 
 const REPO = (process.env.CINNA_E2E_GITHUB_REPO ?? '').trim()
@@ -124,6 +131,28 @@ async function runFromCommands(cinna: CinnaApp): Promise<void> {
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('tablist', { name: 'Agent details' }).getByRole('tab', { name: /^Commands/ }).click()
   await page.getByRole('listitem').filter({ hasText: '/run:gh-check' }).getByRole('button', { name: 'Run', exact: true }).click()
+}
+
+/**
+ * The status once the installations have been read: "GitHub is connected." shows as soon as the
+ * sign-in is stored, and the first installations read runs after it. Fails after a minute, or when
+ * the app is not installed on the repository's owner (naming the owners it found and the login).
+ */
+async function connectedCoverage(cinna: CinnaApp): Promise<{ login: string; install: GithubCoverage }> {
+  const owner = REPO.split('/')[0].toLowerCase()
+  let account: GithubStatusDto['account'] = null
+  await expect.poll(async () => {
+    const status = await cinna.page.evaluate(() => window.api.github.status())
+    if (!status.ok) throw new Error(status.error)
+    account = status.value.account
+    return account?.coverageFetchedAt ?? null
+  }, { message: 'the installations are read after the sign-in (main.log: "GitHub installations could not be read"?)', timeout: 60_000, intervals: [500, 1_000] }).not.toBeNull()
+  const read = account as GithubStatusDto['account']
+  const owners = read?.coverage.map((i) => `${i.owner} (${i.selection})`).join(', ') || 'none'
+  const install = read?.coverage.find((i) => i.owner.toLowerCase() === owner)
+  console.log(`    signed in as ${read?.login ?? '?'}; OpenCinna installed on: ${owners}`)
+  expect(install, `the OpenCinna app is not installed on ${owner} (signed in as ${read?.login ?? '?'}; installed on: ${owners}): install it there and run again`).toBeTruthy()
+  return { login: read!.login, install: install! }
 }
 
 test('real GitHub: sign in from the composer, then the agent’s gh views the repository on the OpenCinna token', async ({ cinna }) => {
@@ -171,12 +200,8 @@ test('real GitHub: sign in from the composer, then the agent’s gh views the re
   })
 
   await test.step(`the coverage names ${REPO}`, async () => {
-    const status = await cinna.page.evaluate(() => window.api.github.status())
-    if (!status.ok) throw new Error(status.error)
-    const owner = REPO.split('/')[0].toLowerCase()
-    const install = status.value.account?.coverage.find((i) => i.owner.toLowerCase() === owner)
-    expect(install, `the OpenCinna app is not installed on ${owner}: install it there and run again`).toBeTruthy()
-    if (install!.selection === 'selected') expect(install!.repos.map((r) => r.toLowerCase())).toContain(REPO.toLowerCase())
+    const { install } = await connectedCoverage(cinna)
+    if (install.selection === 'selected') expect(install.repos.map((r) => r.toLowerCase())).toContain(REPO.toLowerCase())
   })
 
   await test.step('the same command now prints the repository and exits 0', async () => {
@@ -279,17 +304,76 @@ const VERIFY_SCRIPT = [
   ''
 ].join('\n')
 
-/** Closes this run's pull requests (with their branches) and deletes `heads/cinna-e2e-<run id>*`; each tolerant of being absent. */
+/**
+ * Closes the open pull requests whose head is exactly this run's branch (in this repository, not a
+ * fork), then deletes exactly `heads/<branch>` if it is still there. Every gh call's exit status is
+ * checked before its output is used, and nothing is named from an error's text: gh prints GitHub's
+ * error body on stdout, which once turned a 409 "Git Repository is empty." into four DELETEs.
+ * An absent pull request or branch is fine; what was done is printed.
+ */
 const CLEANUP_SCRIPT = [
   '#!/bin/sh',
   `R='${REPO}'`,
+  `B='${BRANCH}'`,
   `echo "cinna-e2e cleanup ${RUN_ID}"`,
-  `for n in $(gh pr list --repo "$R" --state open --limit 100 --json number,headRefName,title,body --jq '${RUN_PRS} | .number' 2>/dev/null); do`,
-  '  gh pr close "$n" --repo "$R" --delete-branch 2>&1; echo "CLOSED $n exit: $?"',
+  'err=$(mktemp) || exit 1',
+  `prs=$(gh pr list --repo "$R" --state open --head "$B" --limit 100 --json number,headRefName,isCrossRepository --jq '.[] | select(.headRefName == "${BRANCH}" and (.isCrossRepository | not)) | .number' 2>"$err")`,
+  's=$?',
+  'if [ "$s" -ne 0 ]; then echo "PR LIST failed (exit $s): $(head -c 300 "$err" | tr "\\n" " ")"; prs=""; fi',
+  'closed=0',
+  'for n in $prs; do',
+  '  case "$n" in *[!0-9]*) echo "SKIPPED a pull request number that is not a number"; continue ;; esac',
+  '  if gh pr close "$n" --repo "$R" --delete-branch >"$err" 2>&1; then echo "CLOSED PR $n"; closed=$((closed + 1))',
+  '  else echo "CLOSE PR $n failed (exit $?): $(head -c 300 "$err" | tr "\\n" " ")"; fi',
   'done',
-  `for ref in $(gh api "repos/$R/git/matching-refs/heads/${BRANCH}" --jq '.[].ref' 2>/dev/null); do`,
-  '  gh api -X DELETE "repos/$R/git/$ref" 2>&1; echo "DELETED $ref exit: $?"',
-  'done',
+  '[ "$s" -ne 0 ] || [ "$closed" -gt 0 ] || [ -n "$prs" ] || echo "NO open pull request from $B"',
+  'ref=$(gh api "repos/$R/git/ref/heads/$B" --jq .ref 2>"$err")',
+  's=$?',
+  'if [ "$s" -eq 0 ] && [ "$ref" = "refs/heads/$B" ]; then',
+  '  if gh api -X DELETE "repos/$R/git/refs/heads/$B" >"$err" 2>&1; then echo "DELETED BRANCH $B"',
+  '  else echo "DELETE BRANCH $B failed (exit $?): $(head -c 300 "$err" | tr "\\n" " ")"; fi',
+  'elif [ "$s" -eq 0 ]; then echo "SKIPPED the branch: GitHub answered another ref"',
+  'elif grep -q "HTTP 404" "$err"; then echo "NO branch $B"',
+  'else echo "BRANCH READ failed (exit $s), nothing deleted: $(head -c 300 "$err" | tr "\\n" " ")"; fi',
+  'rm -f "$err"',
+  `echo "cinna-e2e end ${RUN_ID}"`,
+  ''
+].join('\n')
+
+const EMPTY_REPO_SKIP = 'the test repo needs an initial commit with a README on its default branch'
+
+/**
+ * Whether the repository has a README on its default branch, read without a sign-in (a public
+ * repository): `missing` on a 404 for the README of a repository that exists (an empty one, or no
+ * README), `unknown` when the repository itself is not readable that way (private, or GitHub did
+ * not answer).
+ */
+async function publicReadme(): Promise<'present' | 'missing' | 'unknown'> {
+  const get = async (path: string): Promise<number> => {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${REPO}${path}`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'cinna-e2e' }, signal: AbortSignal.timeout(15_000) })
+      return res.status
+    } catch {
+      return 0
+    }
+  }
+  if (await get('') !== 200) return 'unknown'
+  const readme = await get('/readme')
+  return readme === 200 ? 'present' : readme === 404 || readme === 409 ? 'missing' : 'unknown'
+}
+
+/** The same check for a private repository, through Cinna's gh wrapper once signed in. */
+const PRECHECK_SCRIPT = [
+  '#!/bin/sh',
+  `R='${REPO}'`,
+  `echo "cinna-e2e precheck ${RUN_ID}"`,
+  'err=$(mktemp) || exit 1',
+  'path=$(gh api "repos/$R/readme" --jq .path 2>"$err")',
+  's=$?',
+  'if [ "$s" -eq 0 ]; then echo "README FOUND"',
+  'elif grep -q "HTTP 40[49]" "$err"; then echo "README MISSING"',
+  'else echo "README UNKNOWN (exit $s): $(head -c 300 "$err" | tr "\\n" " ")"; fi',
+  'rm -f "$err"',
   `echo "cinna-e2e end ${RUN_ID}"`,
   ''
 ].join('\n')
@@ -401,6 +485,11 @@ test.describe('real Claude (haiku) turn', () => {
     let tokenFile: string | null = null
     let turns = 0
     console.log(`\n>>> GitHub repos live flow: ${REPO}, run id ${RUN_ID}, branch ${BRANCH}, Claude ${auth.kind === 'oauth' ? 'subscription token' : 'API token'} on haiku\n`)
+    // Before any billed turn: a public repository is read without a sign-in; a private one only
+    // after it (step 3, once turn 1 has run), through the agent's gh wrapper.
+    const readme = await publicReadme()
+    console.log(`    README on the default branch, read without a sign-in: ${readme}`)
+    test.skip(readme === 'missing', EMPTY_REPO_SKIP)
 
     try {
       await test.step('step 1: a kit agent on Claude Agent (haiku), approval Ask every time', async () => {
@@ -480,12 +569,17 @@ test.describe('real Claude (haiku) turn', () => {
         }
         await expect(cinna.page.getByRole('status', { name: 'GitHub' }).getByText('GitHub is connected.', { exact: true }))
           .toBeVisible({ timeout: APPROVE_HUMAN_MS })
-        const after = await cinna.page.evaluate(() => window.api.github.status())
-        if (!after.ok) throw new Error(after.error)
-        const install = after.value.account?.coverage.find((i) => i.owner.toLowerCase() === owner.toLowerCase())
-        expect(install, `the OpenCinna app is not installed on ${owner}: install it there and run again`).toBeTruthy()
-        console.log(`    signed in as ${after.value.account?.login}`)
+        await connectedCoverage(cinna)
       })
+
+      if (readme === 'unknown') {
+        await test.step('step 3: the repository has a README on its default branch (read through the wrapper, before any further turn)', async () => {
+          addKitCommand(agentPath, 'cinna-e2e-precheck', PRECHECK_SCRIPT, 'E2E check that the repository has a README (test only)')
+          const out = await runInChat(cinna, 'cinna-e2e-precheck', 'precheck')
+          console.log(`    precheck: ${out.split('\n').filter((line) => line.startsWith('README')).join(' ') || out}`)
+          test.skip(/^README MISSING$/m.test(out), EMPTY_REPO_SKIP)
+        })
+      }
 
       let verified: Verified | null = null
       await test.step('step 4: Continue; the agent clones, pushes the branch and opens the pull request', async () => {
@@ -559,7 +653,7 @@ test.describe('real Claude (haiku) turn', () => {
           }
         } catch (err) {
           console.log(`    !!! cleanup through the app failed (${err instanceof Error ? err.message.split('\n')[0] : String(err)}). Clean up by hand:`)
-          console.log(`      gh pr list --repo ${REPO} --state open --search ${RUN_ID}   # then gh pr close <n> --repo ${REPO} --delete-branch`)
+          console.log(`      gh pr list --repo ${REPO} --state open --head ${BRANCH}   # then gh pr close <n> --repo ${REPO} --delete-branch`)
           console.log(`      gh api -X DELETE repos/${REPO}/git/refs/heads/${BRANCH}`)
         } finally {
           if (tokenFile) rmSync(tokenFile, { force: true })
