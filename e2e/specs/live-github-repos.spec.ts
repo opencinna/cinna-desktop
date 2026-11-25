@@ -77,14 +77,14 @@ import type { GithubCoverage, GithubStatusDto } from '../../src/shared/github'
  *    up to ten minutes for a human to approve.
  * 4. Continue (then at most two "please continue" nudges if no pull request
  *    is open yet). Asserts: the clone is `<agent>/app-data/repos/<owner>__<repo>`
- *    with that origin; its local `user.email` is the noreply identity
- *    `<id>+<login>@users.noreply.github.com` the served `gh repo clone` sets
- *    (the sandbox has no global git identity); and, read from real GitHub by
+ *    with that origin (its local `user.email` is only printed: G7 sets it
+ *    after a served `gh repo clone`, a plain `git clone` has none); and, read from real GitHub by
  *    a kit command through Cinna's `gh` wrapper on the OpenCinna token (the
  *    loopback only answers while something holds the agent, so the test
  *    process cannot ask it directly): an open pull request for the run, its
- *    head branch on the remote, the line in its diff, every commit by that
- *    noreply email.
+ *    head branch on the remote, the line in its diff, and the author and
+ *    committer of every commit the one noreply `<id>+<login>@users.noreply.github.com`
+ *    (the sandbox has no global git identity; offenders are printed).
  * 5. `finally`: a cleanup kit command closes the open pull requests whose
  *    head is exactly `cinna-e2e-<run id>` (`--delete-branch`) and deletes
  *    exactly `heads/cinna-e2e-<run id>` if it is still there; each tolerant of
@@ -297,7 +297,7 @@ const VERIFY_SCRIPT = [
   `for n in $(gh pr list --repo "$R" --state open --limit 100 --json number,headRefName,title,body --jq '${RUN_PRS} | .number' 2>/dev/null); do`,
   '  head=$(gh pr view "$n" --repo "$R" --json headRefName --jq .headRefName 2>/dev/null)',
   `  gh api "repos/$R/branches/$head" --jq '"BRANCH \\(.name)"' 2>&1`,
-  `  gh api "repos/$R/pulls/$n/commits" --jq '.[] | "AUTHOR '"$n"' \\(.commit.author.email)"' 2>&1`,
+  `  gh api "repos/$R/pulls/$n/commits" --jq '.[] | "AUTHOR '"$n"' \\(.sha[0:7]) \\(.commit.author.email) \\(.commit.committer.email)"' 2>&1`,
   `  if gh pr diff "$n" --repo "$R" 2>/dev/null | grep -q '^+.*${README_LINE}'; then echo "LINE $n yes"; else echo "LINE $n no"; fi`,
   'done',
   `echo "cinna-e2e end ${RUN_ID}"`,
@@ -433,14 +433,16 @@ async function runInChat(cinna: CinnaApp, name: string, marker: string): Promise
   return blocks.last().innerText()
 }
 
-interface Verified { prs: { number: string; head: string }[]; branches: string[]; authors: Map<string, string[]>; withLine: string[]; text: string }
+/** One commit of a pull request: its short sha, author email and committer email. */
+interface PrCommit { sha: string; author: string; committer: string }
+interface Verified { prs: { number: string; head: string }[]; branches: string[]; authors: Map<string, PrCommit[]>; withLine: string[]; text: string }
 
 function parseVerify(text: string): Verified {
   const lines = text.split('\n').map((line) => line.trim())
-  const authors = new Map<string, string[]>()
+  const authors = new Map<string, PrCommit[]>()
   for (const line of lines) {
-    const m = /^AUTHOR (\d+) (\S+)$/.exec(line)
-    if (m) authors.set(m[1], [...(authors.get(m[1]) ?? []), m[2]])
+    const m = /^AUTHOR (\d+) (\S+) (\S+) (\S+)$/.exec(line)
+    if (m) authors.set(m[1], [...(authors.get(m[1]) ?? []), { sha: m[2], author: m[3], committer: m[4] }])
   }
   return {
     prs: lines.flatMap((line) => { const m = /^PR (\d+) (\S+)$/.exec(line); return m ? [{ number: m[1], head: m[2] }] : [] }),
@@ -618,21 +620,29 @@ test.describe('real Claude (haiku) turn', () => {
         expect(gitValue(['-C', clone, 'remote', 'get-url', 'origin']).toLowerCase()).toContain(REPO.toLowerCase())
         const status = await cinna.page.evaluate(() => window.api.github.status())
         const login = status.ok ? status.value.account?.login ?? '' : ''
-        const email = gitValue(['-C', clone, 'config', '--local', '--get', 'user.email'])
-        const name = gitValue(['-C', clone, 'config', '--local', '--get', 'user.name'])
-        console.log(`    clone ${clone}: local identity ${name} <${email}>`)
+        // Informational: G7 keeps the noreply in the clone only after a served `gh repo clone`; a plain
+        // `git clone` has no local identity and its commits get the noreply from Cinna's identity
+        // config (GIT_CONFIG_GLOBAL). What counts is the commits on GitHub, below.
+        const localEmail = gitValue(['-C', clone, 'config', '--local', '--get', 'user.email'])
+        console.log(`    clone ${clone}: local user.email ${localEmail === '' ? '(none)' : localEmail}`)
         const escaped = login.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
-        expect(email, 'the served gh repo clone set the user’s noreply email (a plain git clone would not)').toMatch(new RegExp(`^\\d+\\+${escaped}@users\\.noreply\\.github\\.com$`, 'i'))
-        expect(name).toBe(login)
+        const noreply = new RegExp(`^\\d+\\+${escaped}@users\\.noreply\\.github\\.com$`, 'i')
+        expect(login, 'signed in to GitHub').not.toBe('')
 
         expect(v.withLine, `an open pull request for run ${RUN_ID} adds the README line:\n${v.text}`).not.toHaveLength(0)
         const number = v.withLine[0]
         const pr = v.prs.find((p) => p.number === number)!
         console.log(`    pull request #${number} from ${pr.head}`)
         expect(v.branches, 'its head branch is on the remote').toContain(pr.head)
-        const authors = v.authors.get(number) ?? []
-        expect(authors.length, 'the pull request has commits').toBeGreaterThan(0)
-        expect(authors.every((a) => a.toLowerCase() === email.toLowerCase()), `every commit is by ${email}: ${authors.join(', ')}`).toBe(true)
+        const commits = v.authors.get(number) ?? []
+        expect(commits.length, 'the pull request has commits').toBeGreaterThan(0)
+        // Every commit, author and committer, is the user's noreply <id>+<login>: no stranger's
+        // address (live run 4 committed as a made-up cinna@users.noreply.github.com).
+        const offenders = commits.filter((c) => !noreply.test(c.author) || !noreply.test(c.committer))
+        for (const c of offenders) console.log(`    OFFENDER ${c.sha}: author ${c.author}, committer ${c.committer}`)
+        const emails = new Set(commits.flatMap((c) => [c.author.toLowerCase(), c.committer.toLowerCase()]))
+        expect(offenders, `every commit's author and committer is the noreply <id>+${login}: ${commits.map((c) => `${c.sha} ${c.author}/${c.committer}`).join(', ')}`).toEqual([])
+        expect(emails.size, `one noreply address on every commit: ${[...emails].join(', ')}`).toBe(1)
         console.log(`    ${turns} haiku turn(s) in all`)
       })
     } finally {
