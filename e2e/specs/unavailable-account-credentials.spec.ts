@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs'
+import { join, sep } from 'node:path'
 import { test, expect, answerAgentsFolder, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { approveDesktopAuth, liveCinnaConfig, preflight, signIn, type LiveCinnaConfig } from '../fixtures/liveCinna'
 import { mintDesktopTokens, type SharingPerson, type TeamFixtureBase } from '../fixtures/liveTeamSharing'
 import { scriptAcpEngine, SCRIPT_MODEL, type ScriptAcpEngine } from '../fixtures/scriptAcpEngine'
+import { writeFakeClaudeCli } from '../fixtures/fakeClaudeCli'
 import type { AgentRootDto, LocalAgentDto } from '../../src/shared/localAgents'
 
 /**
@@ -44,9 +45,18 @@ import type { AgentRootDto, LocalAgentDto } from '../../src/shared/localAgents'
  * desktop OAuth, with `shell.openExternal` recorded and the browser's approve click
  * done over core's consent API as her (`approveDesktopAuth`).
  *
- * Not proven here: Re-authenticate (the current profile's expired session) and a
- * profile rebound to another account (`unknown`), the skill-slot side of held slots,
- * and vault agents.
+ * Also: U6 an expired session (core revokes this sandbox's desktop client by id, the stored
+ * access token is aged so the app's own refresh is refused and clears her tokens) seen after a
+ * restart, with Re-authenticate through the same recorded browser; U6b the same state without a
+ * restart, `test.fail()` for a known defect; U7 the kept profile rebound to another core account
+ * (her address moved by the admin to a second throwaway user, then signed in over
+ * `auth.register`), whose held slot reads `unknown` and is named only from what was recorded;
+ * U8 an own skill's credential slot held the same way; U9 a vault agent on the fake vault backend
+ * (`CINNA_VAULT_FAKE=1`, no VM, network for the move's `uv python install`) whose run-secrets copy
+ * is withdrawn at the first turn after she signs out.
+ *
+ * Not proven here: Re-authenticate failing on an identity mismatch, a held Google slot, and a
+ * real vault VM.
  */
 
 const config = liveCinnaConfig()
@@ -61,6 +71,9 @@ interface Person extends SharingPerson { password: string }
 interface CoreCredential { id: string; name: string; secret: string; serviceUri: string }
 let person: Person | null = null
 let credential: CoreCredential | null = null
+/** Users and credentials a test made beyond Alicia's, deleted by exact id in afterAll (credentials first, as their owner). */
+const extraUsers: Person[] = []
+const extraCredentials: { id: string; owner: Person }[] = []
 /** U5's AI credential, kept here so afterAll can delete it by id when the test did not. */
 let aiCredentialId: string | null = null
 
@@ -73,13 +86,52 @@ async function api(token: string, path: string, init: { method?: string; body?: 
   return { status: response.status, body: await response.json().catch(() => null) }
 }
 
-/** A kit agent whose manifest declares `slots` (each `api_token`, one field), seen only after a relaunch. */
-async function kitAgent(cinna: CinnaApp, root: AgentRootDto, name: string, slots: { name: string; serviceUri: string }[]): Promise<LocalAgentDto> {
-  const agent = await createFolderAgent(cinna, root, name)
+/** A throwaway core user, made by the admin and recorded for afterAll unless it is Alicia (`track` false). */
+async function makePerson(admin: string, input: { first: string; label: string; email: string }, track = true): Promise<Person> {
+  const password = `${randomBytes(18).toString('base64url')}Aa1!`
+  const name = `${input.first} E2E ${input.label} (delete me)`
+  const created = await api(admin, '/users/', { method: 'POST', body: { email: input.email, password, full_name: name, is_active: true, is_superuser: false } })
+  if (created.status !== 200) throw new Error(`could not create a throwaway user: HTTP ${created.status}`)
+  const made: Person = { id: String(created.body.id), email: input.email, name, token: '', password }
+  if (track) extraUsers.push(made)
+  made.token = await signIn({ ...(config as LiveCinnaConfig), email: input.email, password })
+  return made
+}
+
+/** An `api_token` credential `owner` holds, local use allowed, recorded for afterAll unless it is Alicia's. */
+async function makeCredential(owner: Person, tag: string, track = true): Promise<CoreCredential> {
+  const fixture: CoreCredential = { id: '', name: `Held fixture ${tag}`, secret: `held-secret-${randomBytes(6).toString('hex')}`, serviceUri: `e2e-held-${tag}` }
+  const made = await api(owner.token, '/credentials/', { method: 'POST', body: {
+    name: fixture.name, type: 'api_token', service_uri: fixture.serviceUri, allow_sharing: false, allow_local_use: true,
+    credential_data: { api_token_type: 'bearer', api_token: fixture.secret }
+  } })
+  if (made.status !== 200) throw new Error(`could not create a fixture credential: HTTP ${made.status}`)
+  const out = { ...fixture, id: String(made.body.id) }
+  if (track) extraCredentials.push({ id: out.id, owner })
+  return out
+}
+
+interface AgentSpec {
+  name: string
+  slots: { name: string; serviceUri: string }[]
+  /** Own skills (`skills/<name>/SKILL.md`), each declaring one `api_token` credential slot. */
+  skills?: { name: string; slot: string }[]
+}
+
+/** A kit agent whose manifest declares `slots` (each `api_token`, one field) and its own `skills`, seen only after a relaunch. */
+async function kitAgent(cinna: CinnaApp, root: AgentRootDto, spec: AgentSpec): Promise<LocalAgentDto> {
+  const agent = await createFolderAgent(cinna, root, spec.name)
   const path = join(agent.path, 'cinna-agent.json')
   const manifest = JSON.parse(readFileSync(path, 'utf8'))
-  manifest.credentials = slots.map((slot) => ({ name: slot.name, type: 'api_token', service_uri: slot.serviceUri, fields: ['api_token'] }))
+  manifest.credentials = spec.slots.map((slot) => ({ name: slot.name, type: 'api_token', service_uri: slot.serviceUri, fields: ['api_token'] }))
   writeFileSync(path, JSON.stringify(manifest, null, 2))
+  for (const skill of spec.skills ?? []) {
+    mkdirSync(join(agent.path, 'skills', skill.name), { recursive: true })
+    writeFileSync(join(agent.path, 'skills', skill.name, 'SKILL.md'), [
+      '---', `name: ${skill.name}`, 'description: Reads the held API status.', 'credentials:', `  - slot: ${skill.slot}`, '    type: api_token', '---', '',
+      `Call the held API with \`credentials.require_slot("${skill.slot}")\`.`, ''
+    ].join('\n'))
+  }
   return agent
 }
 
@@ -88,8 +140,7 @@ async function kitAgent(cinna: CinnaApp, root: AgentRootDto, name: string, slots
  * desktop tokens sealed by the app's own safeStorage, made current, with a keyless Ollama
  * Default mode on the scripted engine's `/api/tags` (her turns need a model).
  */
-async function aliciaProfile(cinna: CinnaApp, fake: ScriptAcpEngine): Promise<string> {
-  const p = person!
+async function aliciaProfile(cinna: CinnaApp, fake: ScriptAcpEngine, p: Person): Promise<{ userId: string; clientId: string }> {
   const created = await cinna.page.evaluate((x) => window.api.auth.register({ accountType: 'local', username: x.email, displayName: x.name }), { email: p.email, name: p.name })
   expect(created.success).toBe(true)
   const userId = created.user!.id
@@ -113,12 +164,11 @@ async function aliciaProfile(cinna: CinnaApp, fake: ScriptAcpEngine): Promise<st
     const provider = await window.api.providers.upsert({ type: 'ollama', name: 'Scripted fixture', baseUrl: host, enabled: true })
     await window.api.chatModes.upsert({ name: 'Default', providerId: provider.id, modelId: model, isDefault: true })
   }, { host: fake.host, model: SCRIPT_MODEL })
-  return userId
+  return { userId, clientId: tokens.clientId }
 }
 
 /** Sync Alicia (current) and attach her credential to each agent under her account's group. */
-async function attachHeld(cinna: CinnaApp, agents: LocalAgentDto[]): Promise<void> {
-  const c = credential!
+async function attachHeld(cinna: CinnaApp, agents: LocalAgentDto[], c: CoreCredential): Promise<void> {
   const synced = await cinna.page.evaluate(async () => { const u = (await window.api.auth.getCurrent())!; return window.api.serviceCredentials.sync(u.id, u.cinnaServerUrl!) })
   expect(synced.ok).toBe(true)
   for (const agent of agents) {
@@ -143,19 +193,21 @@ function readCredentials(agent: LocalAgentDto): string {
  * The common arrangement: the scripted engine, `agents` declared, Alicia linked, a relaunch so
  * the composer sees the agents, her credential attached and delivered. Alicia is current after it.
  */
-async function arrange(cinna: CinnaApp, fake: ScriptAcpEngine, agents: { name: string; slots: { name: string; serviceUri: string }[] }[]): Promise<{ userId: string; agents: LocalAgentDto[] }> {
+async function arrange(
+  cinna: CinnaApp, fake: ScriptAcpEngine, agents: AgentSpec[], who: { person: Person; credential: CoreCredential } = { person: person!, credential: credential! }
+): Promise<{ userId: string; clientId: string; agents: LocalAgentDto[] }> {
   await cinna.skipOnboarding()
   await fake.install(cinna)
   const root = await addAgentRoot(cinna)
   const made: LocalAgentDto[] = []
-  for (const a of agents) made.push(await kitAgent(cinna, root, a.name, a.slots))
-  const userId = await aliciaProfile(cinna, fake)
+  for (const a of agents) made.push(await kitAgent(cinna, root, a))
+  const { userId, clientId } = await aliciaProfile(cinna, fake, who.person)
   await cinna.relaunch()
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
   expect((await cinna.page.evaluate(() => window.api.auth.getCurrent()))?.id).toBe(userId)
-  await attachHeld(cinna, made)
-  return { userId, agents: made }
+  await attachHeld(cinna, made, who.credential)
+  return { userId, clientId, agents: made }
 }
 
 const currentId = async (cinna: CinnaApp): Promise<string | undefined> => (await cinna.page.evaluate(() => window.api.auth.getCurrent()))?.id
@@ -165,9 +217,8 @@ const currentId = async (cinna: CinnaApp): Promise<string | undefined> => (await
  * Out`), with "Delete data from this device" as `deleteData` leaves it: off keeps the profile and
  * clears its tokens (`auth:logout { userId }`), on deletes the profile. Guest is current after it.
  */
-async function signOutThroughMenu(cinna: CinnaApp, deleteData: boolean): Promise<void> {
+async function signOutThroughMenu(cinna: CinnaApp, deleteData: boolean, name = person!.name): Promise<void> {
   const page = cinna.page
-  const name = person!.name
   await page.reload()
   await page.getByTitle(name, { exact: true }).click()
   await page.getByRole('button', { name: 'Sign Out', exact: true }).click()
@@ -184,8 +235,8 @@ async function signOutThroughMenu(cinna: CinnaApp, deleteData: boolean): Promise
 }
 
 /** Sign Out with the switch off: the profile stays, signed out, with no tokens. */
-async function signOutKeepingData(cinna: CinnaApp, userId: string): Promise<void> {
-  await signOutThroughMenu(cinna, false)
+async function signOutKeepingData(cinna: CinnaApp, userId: string, name = person!.name): Promise<void> {
+  await signOutThroughMenu(cinna, false, name)
   const users = await cinna.page.evaluate(() => window.api.auth.listUsers())
   expect(users.find((u) => u.id === userId)).toMatchObject({ type: 'cinna_user', hasCinnaTokens: false })
 }
@@ -200,6 +251,26 @@ async function recordBrowser(cinna: CinnaApp): Promise<void> {
     globals.__authorizeUrl = undefined
     shell.openExternal = async (url: string): Promise<void> => { globals.__authorizeUrl = url }
   })
+}
+
+/**
+ * Her desktop session dies on core while she is current: core revokes exactly this sandbox's client
+ * (as she would from Cinna web's device list), the stored access token is aged so the next call
+ * refreshes, and core refuses the refresh, so the app clears her tokens. She stays current.
+ */
+async function revokeSession(cinna: CinnaApp, p: Person, userId: string, clientId: string): Promise<void> {
+  expect((await api(p.token, `/desktop-auth/clients/${encodeURIComponent(clientId)}`, { method: 'DELETE' })).status).toBe(204)
+  await cinna.electronApp.evaluate(({ app }, input) => {
+    if (app.getPath('userData') !== input.userData) throw new Error('Not the isolated test profile')
+    const req = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
+    const Database = req('better-sqlite3') as typeof import('better-sqlite3')
+    const db = new Database(`${input.userData}/cinna.db`, { fileMustExist: true })
+    try { db.prepare('UPDATE users SET cinna_token_expires_at = ? WHERE id = ?').run(Date.now() - 1000, input.userId) } finally { db.close() }
+  }, { userId, userData: cinna.sandbox.userData })
+  // The app's own account sync is the next call: its refresh is refused (HTTP 400/401) and the tokens go.
+  await cinna.page.evaluate((u) => window.api.serviceCredentials.sync(u.id, u.url), { id: userId, url: (config as LiveCinnaConfig).serverUrl })
+  await expect.poll(async () => (await cinna.page.evaluate(() => window.api.auth.listUsers())).find((u) => u.id === userId)?.hasCinnaTokens).toBe(false)
+  expect(await currentId(cinna)).toBe(userId)
 }
 
 /** What the user does in that browser: approve the authorization as `who` (core's real consent over the API). */
@@ -251,25 +322,26 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
     const me = await api(admin, '/users/me')
     test.skip(me.body?.is_superuser !== true, `CINNA_E2E_EMAIL must be a superuser on ${live.serverUrl}: this spec creates a throwaway user and deletes it by id`)
     const tag = `${Date.now()}-${randomBytes(3).toString('hex')}`
-    const email = `e2e-unavailable-${tag}@example.com`
-    const password = `${randomBytes(18).toString('base64url')}Aa1!`
-    const name = `${FIRST} E2E unavailable account (delete me)`
-    const created = await api(admin, '/users/', { method: 'POST', body: { email, password, full_name: name, is_active: true, is_superuser: false } })
-    if (created.status !== 200) throw new Error(`could not create the throwaway user: HTTP ${created.status}`)
-    const token = await signIn({ ...live, email, password })
-    person = { id: created.body.id, email, name, token, password }
-    const fixture: CoreCredential = { id: '', name: `Held fixture ${tag}`, secret: `held-secret-${randomBytes(6).toString('hex')}`, serviceUri: `e2e-held-${tag}` }
-    const made = await api(token, '/credentials/', { method: 'POST', body: {
-      name: fixture.name, type: 'api_token', service_uri: fixture.serviceUri, allow_sharing: false, allow_local_use: true,
-      credential_data: { api_token_type: 'bearer', api_token: fixture.secret }
-    } })
-    if (made.status !== 200) throw new Error(`could not create the fixture credential: HTTP ${made.status}`)
-    credential = { ...fixture, id: String(made.body.id) }
+    person = await makePerson(admin, { first: FIRST, label: 'unavailable account', email: `e2e-unavailable-${tag}@example.com` }, false)
+    credential = await makeCredential(person, tag, false)
   })
 
   test.afterAll(async () => {
-    if (!person) return
     const live = config as LiveCinnaConfig
+    if (extraUsers.length || extraCredentials.length) {
+      const admin = await signIn(live)
+      for (const c of extraCredentials.splice(0)) {
+        // As the owner, by the email core holds for that id now (D2 moves one).
+        const held = await api(admin, `/users/${c.owner.id}`)
+        const token = held.status === 200 ? await signIn({ ...live, email: held.body.email, password: c.owner.password }).catch(() => null) : null
+        console.log(`extra credential cleanup: DELETE → ${token ? (await api(token, `/credentials/${c.id}`, { method: 'DELETE' })).status : `owner HTTP ${held.status}`}`)
+      }
+      for (const u of extraUsers.splice(0)) {
+        const del = await api(admin, `/users/${u.id}`, { method: 'DELETE' })
+        console.log(`extra user cleanup: DELETE /users/<id> → ${del.status}, GET after → ${(await api(admin, `/users/${u.id}`)).status}`)
+      }
+    }
+    if (!person) return
     // Exactly the ids this run created, and nothing else.
     const token = await signIn({ ...live, email: person.email, password: person.password })
     if (aiCredentialId) console.log(`AI credential cleanup: DELETE → ${(await api(token, `/ai-credentials/${aiCredentialId}`, { method: 'DELETE' })).status}`)
@@ -528,5 +600,257 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
       const del = await api(token, `/ai-credentials/${aiCredentialId}`, { method: 'DELETE' })
       if (del.status === 200) aiCredentialId = null
     }
+  })
+
+  test('U6 session expired: her desktop session is revoked on core while she is current; after a restart the row offers Re-authenticate, and it brings the credential back', async ({ cinna }) => {
+    test.setTimeout(180_000)
+    const c = credential!
+    const p = person!
+    const { userId, clientId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Reader', slots: [{ name: SLOT, serviceUri: c.serviceUri }] }])
+    await revokeSession(cinna, p, userId, clientId)
+    // Main derives the accounts again at start; in the same app session it does not yet (U6b).
+    await cinna.relaunch()
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    expect(await currentId(cinna)).toBe(userId)
+    const page = cinna.page
+
+    await test.step('the app-level prompt says her session expired; Not now leaves her in her profile', async () => {
+      await expect(page.getByText('Cinna session expired', { exact: true })).toBeVisible({ timeout: 30_000 })
+      await page.getByRole('button', { name: 'Not now', exact: true }).click()
+      await expect(page.getByText('Cinna session expired', { exact: true })).toHaveCount(0)
+    })
+
+    await test.step('main holds the slot as her expired session, current, and delivers nothing', async () => {
+      const accounts = await page.evaluate((id) => window.api.serviceCredentials.unavailableAccounts(id), agent.id)
+      expect(accounts.ok && accounts.value.accounts.map((a) => [a.name, a.reason, a.current, a.credentials])).toEqual([[p.name, 'session_expired', true, 1]])
+      const setup = await page.evaluate((id) => window.api.serviceCredentials.setupState(id), agent.id)
+      expect(setup.ok && setup.value.slots.map((s) => [s.name, s.state])).toEqual([[SLOT, 'account_unavailable']])
+      await expect.poll(() => readCredentials(agent)).toBe('')
+      expect(await rendererView(cinna, agent.id)).not.toContain(c.name)
+    })
+
+    await test.step('her composer: the row says the session expired and offers Re-authenticate, not Switch', async () => {
+      await newChatWith(cinna, 'Held Reader')
+      const panel = statusPanel(cinna)
+      await expectRows(cinna, [`${FIRST}’s session expired: 1 credential comes from that account.`])
+      await expect(panel.getByRole('button', { name: 'Re-authenticate', exact: true })).toBeVisible()
+      await expect(panel.getByRole('button', { name: `Switch to ${FIRST}`, exact: true })).toHaveCount(0)
+      await expect(panel).not.toContainText('needs a credential')
+      await expect(page.locator('body')).not.toContainText(c.name)
+    })
+
+    await test.step('Re-authenticate (her browser approves as her): new tokens, the row is gone, the credential is delivered', async () => {
+      await page.getByRole('combobox', { name: 'Type a message...', exact: true }).fill(DRAFT)
+      await recordBrowser(cinna)
+      await statusPanel(cinna).getByRole('button', { name: 'Re-authenticate', exact: true }).click()
+      await approveInBrowser(cinna, p)
+      await expect.poll(async () => (await page.evaluate(() => window.api.auth.listUsers())).find((u) => u.id === userId)?.hasCinnaTokens).toBe(true)
+      await expect(statusPanel(cinna).getByText(`${FIRST}’s session expired`)).toHaveCount(0)
+      await expect(page.getByText('Cinna session expired', { exact: true })).toHaveCount(0)
+      await expect(page.getByRole('combobox', { name: 'Type a message...', exact: true })).toHaveValue(DRAFT)
+      await expect.poll(() => readCredentials(agent), { timeout: 30_000 }).toContain(c.secret)
+    })
+  })
+
+  test('U6b session expired in the same app session: once the app has cleared her tokens, the slot is held and the row offers Re-authenticate without a restart', async ({ cinna }) => {
+    // Known defect: clearing the current profile's tokens after a refused refresh does not make main
+    // derive the accounts again, so until a restart her account stays eligible and the composer reads
+    // "Add the credentials for Held API by attaching them or configuring credentials/.env." (the
+    // missing-credential row this feature replaced) instead of the session-expired row.
+    test.fail()
+    test.setTimeout(120_000)
+    const c = credential!
+    const p = person!
+    const { userId, clientId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Reader', slots: [{ name: SLOT, serviceUri: c.serviceUri }] }])
+    await revokeSession(cinna, p, userId, clientId)
+    const page = cinna.page
+    await expect(page.getByText('Cinna session expired', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Not now', exact: true }).click()
+    await newChatWith(cinna, 'Held Reader')
+    // Intended: the same state a restart shows (U6). Observed: main keeps her account eligible, so
+    // the slot reads connected, no row is shown, and her credential stays in the agent folder.
+    await expectRows(cinna, [`${FIRST}’s session expired: 1 credential comes from that account.`])
+    await expect.poll(() => readCredentials(agent)).toBe('')
+  })
+
+  test('U7 the profile signs back in as a different Cinna account (same email, another account on core): the held slot is not delivered to it or named for it', async ({ cinna }) => {
+    test.setTimeout(180_000)
+    const live = config as LiveCinnaConfig
+    const admin = await signIn(live)
+    const tag = `${Date.now()}-${randomBytes(3).toString('hex')}`
+    const email = `e2e-unavailable-rebind-${tag}@example.com`
+    const first = await makePerson(admin, { first: FIRST, label: 'rebind old account', email })
+    const held = await makeCredential(first, `rebind-${tag}`)
+    const { userId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Rebound', slots: [{ name: SLOT, serviceUri: held.serviceUri }] }], { person: first, credential: held })
+    const page = cinna.page
+    await signOutKeepingData(cinna, userId, first.name)
+
+    // Core: her address moves to a second account, so signing in "as her" again is someone else.
+    const moved = await api(admin, `/users/${first.id}`, { method: 'PATCH', body: { email: `e2e-unavailable-rebind-${tag}-moved@example.com` } })
+    expect(moved.status, JSON.stringify(moved.body)).toBe(200)
+    const second = await makePerson(admin, { first: 'Bruno', label: 'rebind new account', email })
+    expect(second.id).not.toBe(first.id)
+
+    await test.step('signing in to Cinna with that address rebinds the kept profile to the new account', async () => {
+      await recordBrowser(cinna)
+      const registering = page.evaluate((serverUrl) => window.api.auth.register({ accountType: 'cinna', cinnaHostingType: 'self_hosted', cinnaServerUrl: serverUrl }), live.serverUrl)
+      await approveInBrowser(cinna, second)
+      const registered = await registering
+      expect(registered.success, JSON.stringify(registered)).toBe(true)
+      expect(registered.user?.id).toBe(userId)
+      await page.reload()
+      await expect.poll(() => currentId(cinna)).toBe(userId)
+      await expect(page.getByTitle(second.name, { exact: true })).toBeVisible()
+    })
+
+    await test.step('main: the old account is unknown here, named only from what was recorded, and nothing is delivered', async () => {
+      const synced = await page.evaluate((u) => window.api.serviceCredentials.sync(u.id, u.url), { id: userId, url: live.serverUrl })
+      expect(synced.ok, JSON.stringify(synced)).toBe(true)
+      const accounts = await page.evaluate((id) => window.api.serviceCredentials.unavailableAccounts(id), agent.id)
+      expect(accounts.ok && accounts.value.accounts.map((a) => [a.name, a.email, a.reason, a.userId, a.current, a.credentials])).toEqual([[first.name, email, 'unknown', null, false, 1]])
+      const setup = await page.evaluate((id) => window.api.serviceCredentials.setupState(id), agent.id)
+      expect(setup.ok && setup.value.slots.map((s) => [s.name, s.state])).toEqual([[SLOT, 'account_unavailable']])
+      // Not under the new account's group: the attachment stays in the old key's group, unnamed, and
+      // the new account's group (offered for attaching, as any current account is) does not list it.
+      const attachments = await page.evaluate((id) => window.api.serviceCredentials.attachments(id), agent.id)
+      expect(attachments.ok && attachments.value.map((a) => [a.ref, a.state, a.credential, a.groupLabel])).toEqual([[held.id, 'account_unavailable', null, 'Signed-out account']])
+      const options = await page.evaluate((id) => window.api.serviceCredentials.attachOptions(id), agent.id)
+      expect(options.ok && options.value.groups.map((g) => [g.label, g.items.length])).toEqual([['This computer', 0], [second.name, 0]])
+      expect(JSON.stringify(options)).not.toContain(held.id)
+      expect(JSON.stringify([attachments, accounts, setup])).not.toContain(second.name)
+      expect(await rendererView(cinna, agent.id)).not.toContain(held.name)
+      await expect.poll(() => readCredentials(agent)).toBe('')
+    })
+
+    await test.step('the new account’s composer names the old account, offers Open accounts, and never names the new one', async () => {
+      await newChatWith(cinna, 'Held Rebound')
+      const panel = statusPanel(cinna)
+      await expectRows(cinna, [`${FIRST} isn’t signed in here: 1 credential comes from that account.`])
+      await expect(panel.getByRole('button', { name: 'Open accounts', exact: true })).toBeVisible()
+      await expect(panel.getByRole('button', { name: /^Switch to/ })).toHaveCount(0)
+      await expect(panel).not.toContainText('Bruno')
+      await expect(panel).not.toContainText('needs a credential')
+      await expect(page.locator('body')).not.toContainText(held.name)
+    })
+  })
+
+  test('U8 a held skill slot: an own skill’s credential from a signed-out account reads as held, not missing, in Finish setup and the composer', async ({ cinna }) => {
+    test.setTimeout(180_000)
+    const c = credential!
+    const skill = 'held-reader'
+    const { userId, agents: [agent] } = await arrange(cinna, fake, [{ name: 'Held Skills', slots: [], skills: [{ name: skill, slot: c.serviceUri }] }])
+    const page = cinna.page
+    const got = await page.evaluate((id) => window.api.localAgents.get(id), agent.id)
+    expect(got.ok && got.value.skills?.find((s) => s.name === skill)?.credentials.map((slot) => [slot.slot, slot.filled])).toEqual([[c.serviceUri, true]])
+    await signOutKeepingData(cinna, userId)
+
+    await test.step('main: the skill slot is held by her account, not missing, and nothing is delivered', async () => {
+      await page.evaluate(() => window.api.localAgents.rescan())
+      const setup = await page.evaluate((id) => window.api.serviceCredentials.setupState(id), agent.id)
+      expect(setup.ok && setup.value.skillSlots.map((s) => [s.slot, s.state, s.account?.name ?? null, s.account?.reason ?? null])).toEqual([[c.serviceUri, 'account_unavailable', person!.name, 'signed_out']])
+      expect(setup.ok && setup.value.setupNeeded).toBe(false)
+      const skills = await page.evaluate((id) => window.api.localAgents.get(id), agent.id)
+      expect(skills.ok && skills.value.skills?.find((s) => s.name === skill)?.credentials.map((slot) => [slot.filled, slot.attachment?.state])).toEqual([[false, 'account_unavailable']])
+      await expect.poll(() => readCredentials(agent)).toBe('')
+      expect(await rendererView(cinna, agent.id)).not.toContain(c.name)
+    })
+
+    await test.step('the composer: the account row, and no skill prompt asking for the credential', async () => {
+      await newChatWith(cinna, 'Held Skills')
+      const panel = statusPanel(cinna)
+      await expectRows(cinna, [`${FIRST} is signed out: 1 credential comes from that account.`])
+      await expect(panel.getByRole('button', { name: `Switch to ${FIRST}`, exact: true })).toBeVisible()
+      await expect(panel.getByRole('button', { name: 'Dismiss skill credential prompt' })).toHaveCount(0)
+      await expect(page.locator('body')).not.toContainText(c.name)
+    })
+
+    await test.step('Addons → Finish setup: the skill slot says where its credential comes from, not that none fits', async () => {
+      await page.getByRole('button', { name: 'Agents', exact: true }).click()
+      await page.getByRole('button', { name: 'Held Skills', exact: true }).first().click()
+      await page.getByRole('button', { name: 'Settings', exact: true }).click()
+      await page.getByRole('tab', { name: /^Addons/ }).click()
+      const row = page.getByRole('tabpanel').getByRole('listitem').filter({ hasText: skill })
+      await row.getByRole('button', { name: 'Finish setup', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: 'Finish setting up Held Skills' })
+      const held = dialog.getByTestId(`finish-setup-skill-slot-${c.serviceUri}`)
+      await expect(held).toContainText(new RegExp(`${escape(c.serviceUri)}\\s*Signed out`))
+      await expect(held.getByTestId('held-account-line')).toContainText(new RegExp(`^From\\s*${escape(`${person!.name} <${person!.email}> localhost:8000`)}Switch to ${FIRST}`))
+      await expect(held.getByRole('button', { name: `Switch to ${FIRST}`, exact: true })).toBeVisible()
+      await expect(held).not.toContainText('None of your credentials fits it')
+      await expect(dialog).not.toContainText(c.name)
+    })
+  })
+
+  test.describe('a vault agent (fake vault backend)', () => {
+    test.use({ env: { CINNA_VAULT_FAKE: '1' } })
+    const VAULT_AGENT = 'Held Vault'
+    const VAULT_REPLY = 'Hello from the held vault.'
+
+    /** Every `credentials.json` under the sandbox outside the agents root: the fake vault's run-secrets copies. */
+    function vaultCopies(cinna: CinnaApp): string[] {
+      const out: string[] = []
+      const walk = (dir: string, depth: number): void => {
+        if (depth > 12) return
+        let entries: Dirent[]
+        try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+        for (const e of entries) {
+          const full = join(dir, e.name)
+          if (e.isDirectory() && !e.isSymbolicLink()) walk(full, depth + 1)
+          else if (e.name === 'credentials.json' && full.includes(`${sep}run-secrets${sep}`)) out.push(full)
+        }
+      }
+      walk(cinna.sandbox.root, 0)
+      return out
+    }
+
+    test('U9 a vault agent moved in with her credential: once she signs out, the next turn in the vault runs without it', async ({ cinna }) => {
+      test.setTimeout(420_000)
+      const c = credential!
+      const page = (): typeof cinna.page => cinna.page
+      await cinna.skipOnboarding()
+      const claude = writeFakeClaudeCli(cinna, { models: [{ value: 'default', displayName: 'Default', description: 'fake', supportsAutoMode: true }], reply: VAULT_REPLY })
+      await page().evaluate((path) => window.api.settings.set('localAgentsClaudePath', path), claude.path)
+      await page().evaluate(() => window.api.localAgents.homeGrant())
+      const root = (await page().evaluate(() => window.api.localAgents.rootsList())).find((r) => r.isDefault)
+      if (!root) throw new Error('no default agents root after homeGrant')
+      const agent = await kitAgent(cinna, root, { name: VAULT_AGENT, slots: [{ name: SLOT, serviceUri: c.serviceUri }] })
+      const got = await page().evaluate((id) => window.api.localAgents.get(id), agent.id)
+      if (!got.ok) throw new Error(got.message)
+      const set = await page().evaluate(({ id, stamp }) => window.api.localAgents.updateField({
+        agentId: id, update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: null } }, expectedStamp: stamp
+      } as never), { id: agent.id, stamp: got.value.stamps['cinna-agent.json']! })
+      expect(set.ok, JSON.stringify(set)).toBe(true)
+      const { userId } = await aliciaProfile(cinna, fake, person!)
+      await page().evaluate((path) => window.api.settings.set('localAgentsClaudePath', path), claude.path)
+      await cinna.relaunch()
+      await cinna.skipOnboarding()
+      await page().evaluate(() => window.api.localAgents.rescan())
+      expect(await currentId(cinna)).toBe(userId)
+      await attachHeld(cinna, [agent], c)
+
+      const started = await page().evaluate((id) => window.api.vault.moveIn(id, { sizeBytes: 10 * 1024 ** 3 }), agent.id)
+      expect(started.ok, JSON.stringify(started)).toBe(true)
+      await expect.poll(async () => { const a = await page().evaluate((id) => window.api.localAgents.get(id), agent.id); return a.ok ? a.value.vault != null : false }, { timeout: 240_000 }).toBe(true)
+      // The credentials step delivered her credential into the vault (vaultd's run-secrets copy).
+      const copies = vaultCopies(cinna)
+      expect(copies).toHaveLength(1)
+      expect(readFileSync(copies[0], 'utf8')).toContain(c.secret)
+
+      await signOutKeepingData(cinna, userId)
+      // Vault agents get no account row (docs/agents/service_credentials/README.md, Known limits), so
+      // only delivery and naming are asserted here.
+      await newChatWith(cinna, VAULT_AGENT)
+      await expect(page().getByRole('button', { name: `Agent "${VAULT_AGENT}" attached as a participant` })).toBeVisible()
+      await expect(page().locator('body')).not.toContainText(c.name)
+      const box = page().getByRole('combobox', { name: 'Type a message...', exact: true })
+      await box.fill('Say hello in one word.')
+      await box.press('Enter')
+      await expect(page().getByText(VAULT_REPLY, { exact: true })).toBeVisible({ timeout: 90_000 })
+      // Before that turn the vault got the files again without her credential: the copy is withdrawn.
+      expect(vaultCopies(cinna).filter((f) => readFileSync(f, 'utf8').includes(c.secret))).toEqual([])
+      expect(vaultCopies(cinna)).toEqual([])
+      expect(await rendererView(cinna, agent.id)).not.toContain(c.name)
+    })
   })
 })
