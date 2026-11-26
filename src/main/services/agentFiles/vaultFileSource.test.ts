@@ -335,3 +335,17 @@ function createAgentFileServiceWithCap(maxPreviewBytes: number) {
     })
   })
 }
+
+describe('readReservedFile in a vault', () => {
+  it('reads the agent-relative path inside the vault agent folder', async () => {
+    write('docs/AGENT_DETAILS.md', '# In the vault\n')
+    const read = await service().readReservedFile(VAULT_AGENT, 'docs/AGENT_DETAILS.md', 1024)
+    expect(read.success && read.bytes.toString('utf8')).toBe('# In the vault\n')
+    expect(await service().readReservedFile(VAULT_AGENT, 'docs/AGENT_DETAILS.html', 1024)).toMatchObject({ success: false, code: 'not_found' })
+  })
+
+  it('refuses a file over the cap', async () => {
+    write('docs/AGENT_DETAILS.md', 'x'.repeat(65))
+    expect(await service().readReservedFile(VAULT_AGENT, 'docs/AGENT_DETAILS.md', 64)).toMatchObject({ success: false, code: 'too_large' })
+  })
+})

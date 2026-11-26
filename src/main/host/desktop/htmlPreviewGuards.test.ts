@@ -218,3 +218,60 @@ describe('previewFrameNavigation: a dashboard tile stays under its own path', ()
     expect(DASHBOARD_FRAME_SANDBOX).not.toMatch(/allow-same-origin|allow-popups|allow-top-navigation/)
   })
 })
+
+describe('an agent Details frame never navigates itself', () => {
+  const DETAILS = 'cinna-preview://det-0123abcd/'
+  const frame = (url: string, frameUrl = DETAILS, ancestorUrls: string[] = []) =>
+    previewFrameNavigation(nav({ url, frameUrl, ancestorUrls }))
+
+  it('loads once, into a fresh frame', () => {
+    expect(frame(DETAILS, '')).toBe('allow')
+    expect(frame(DETAILS, 'about:blank')).toBe('allow')
+  })
+
+  it('sends an https target (a meta refresh, a plain link) to the browser', () => {
+    expect(frame('https://example.com/')).toBe('open-external')
+    expect(frame('HTTPS://example.com/a')).toBe('open-external')
+  })
+
+  it('blocks every other target, the preview scheme included', () => {
+    for (const url of [
+      'http://example.com/',
+      DETAILS,
+      `${DETAILS}#top`,
+      'cinna-preview://det-ffff/',
+      'cinna-preview://0123abcd/report.html',
+      'cinna-preview://art-0123/index.html',
+      'data:text/html,<p>x</p>',
+      'about:blank',
+      'about:srcdoc',
+      'blob:null/1234',
+      'file:///etc/passwd',
+      'javascript:alert(1)'
+    ]) {
+      expect(frame(url), url).toBe('block')
+    }
+  })
+
+  it('lets nothing load under it', () => {
+    expect(frame('https://example.com/', 'about:blank', [DETAILS])).toBe('block')
+    expect(frame('data:text/html,x', '', [DETAILS])).toBe('block')
+    expect(frame(PREVIEW, '', [DETAILS])).toBe('block')
+  })
+
+  it('sends only https to the browser when it navigates the window', () => {
+    const main = (url: string, initiatorUrls: string[]) =>
+      mainFrameNavigation({ url, appUrls: ['http://localhost:5173/'], initiatorUrls })
+    expect(main('https://example.com/a', [DETAILS])).toBe('open-external')
+    expect(main('http://example.com/a', [DETAILS])).toBe('block')
+    expect(main('http://localhost:5173/', [DETAILS])).toBe('block')
+    expect(main('file:///etc/passwd', [DETAILS])).toBe('block')
+    // Another preview keeps its http rule.
+    expect(main('http://example.com/a', [PREVIEW])).toBe('open-external')
+  })
+
+  it('carries a sandbox with no scripts, no same origin, no popups and no forms', async () => {
+    const { AGENT_DETAILS_FRAME_SANDBOX } = await import('../../../shared/agentDetails')
+    expect(AGENT_DETAILS_FRAME_SANDBOX.split(' ')).toEqual(['allow-top-navigation-by-user-activation'])
+  })
+})

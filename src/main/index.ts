@@ -8,6 +8,8 @@ import { installDesktopFeatures } from './host/desktopFeatures'
 import { developmentAgentContext, contextForDevelopmentAgent, restoreDevelopmentContext } from './localdev/developmentSessionService'
 import { installRuntimeHost } from './host/runtimeHost'
 import { installEventPublisher } from './host/events'
+import { installAgentDetailsLocalFiles } from './services/agentDetails/agentDetails'
+import { agentFileService } from './host/desktop/agentFiles'
 import { createDesktopHost, desktopEventPublisher } from './host/desktop/runtimeHost'
 import { installDesktopVaultBackend } from './host/desktop/vault/installVaultBackend'
 import { vaultService } from './vault/vaultService'
@@ -132,6 +134,8 @@ installDesktopFeatures({
   restoreDevelopmentContext,
   developmentExecutionContext: (profileId) => localDevService.executionContext(profileId)
 })
+// A folder or vault agent's own Details file, read through the desktop's agent-file gate.
+installAgentDetailsLocalFiles((agentId, rel, maxBytes) => agentFileService.readReservedFile(agentId, rel, maxBytes))
 installEventPublisher(desktopEventPublisher(getMainWindow))
 installLogBroadcast(getMainWindow)
 installWindowResolver(getMainWindow)

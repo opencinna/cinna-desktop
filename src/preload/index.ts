@@ -2318,6 +2318,18 @@ const api = {
   },
 
   /**
+   * Agent Details: the view (markdown and the generated summary; never the
+   * publisher's HTML), a `cinna-preview://det-…/` frame for the HTML, and its release.
+   */
+  agentDetails: {
+    get: (target: import('../shared/agentDetails').AgentDetailsTarget): Promise<import('../shared/agentDetails').AgentDetailsResult> =>
+      ipcRenderer.invoke('agent-details:get', target),
+    openFrame: (target: import('../shared/agentDetails').AgentDetailsTarget): Promise<import('../shared/agentDetails').AgentDetailsFrameResult> =>
+      ipcRenderer.invoke('agent-details:open-frame', target),
+    releaseFrame: (token: string): Promise<{ success: true }> => ipcRenderer.invoke('agent-details:release-frame', token)
+  },
+
+  /**
    * Folder agents — agents that are a folder on disk. Everything here reads or
    * writes files through the main process; the renderer never touches a path
    * itself, and the only path it may send is agent-relative (`openPath`), which

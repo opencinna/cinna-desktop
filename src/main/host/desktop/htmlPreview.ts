@@ -12,6 +12,7 @@ import { runtimeHost } from '../runtimeHost'
 import { createArtifactPreviewServer } from '../../services/htmlPreview/artifactPreviewServer'
 import { artifactService } from '../../services/artifacts/artifactService'
 import { createDashboardFrameServer } from '../../services/htmlPreview/dashboardFrameServer'
+import { createAgentDetailsFrameServer } from '../../services/htmlPreview/agentDetailsFrameServer'
 import { dashboardService } from '../../services/dashboards/dashboardService'
 import { getDashboardDesignDir } from '../../services/dashboards/designPack'
 import { getLayoutView } from '../../kit/contractStore'
@@ -96,7 +97,13 @@ export const dashboardFrameServer = createDashboardFrameServer({
   }
 })
 
-/** Which of the scheme's three servers a request is for, by its host. */
+/**
+ * Agent Details pages on the same scheme (`cinna-preview://det-<token>/`):
+ * one document main already holds, nothing else.
+ */
+export const agentDetailsFrameServer = createAgentDetailsFrameServer({ currentUserId: getProfileScopeUserId })
+
+/** Which of the scheme's four servers a request is for, by its host. */
 function handlePreviewRequest(request: Request): Promise<Response> {
   let host = ''
   try {
@@ -105,6 +112,7 @@ function handlePreviewRequest(request: Request): Promise<Response> {
     // Unparseable: the HTML preview's handler answers it with a 404.
   }
   if (dashboardFrameServer.owns(host)) return dashboardFrameServer.handle(request)
+  if (agentDetailsFrameServer.owns(host)) return agentDetailsFrameServer.handle(request)
   return artifactPreviewServer.owns(host) ? artifactPreviewServer.handle(request) : htmlPreviewServer.handle(request)
 }
 
@@ -169,7 +177,13 @@ export function guardPreviewFrames(win: BrowserWindow, appUrl: string): void {
     const verdict = previewFrameNavigation({ isMainFrame: false, url: event.url, frameUrl, ancestorUrls })
     if (verdict === 'allow') return
     event.preventDefault()
-    logger.info('blocked a frame navigation', { verdict })
+    // Only a Details frame's `https:` link: the frame stays, the page opens in the browser.
+    if (verdict === 'open-external' && gate.mayOpen()) {
+      void shell.openExternal(event.url).catch(() => {})
+      logger.info('sent a details link to the browser')
+    } else {
+      logger.info('blocked a frame navigation', { verdict })
+    }
   })
   win.webContents.on('will-navigate', (event) => {
     const verdict = mainFrameNavigation({

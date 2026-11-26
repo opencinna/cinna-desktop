@@ -689,3 +689,38 @@ describe('openInBrowser', () => {
     })
   })
 })
+
+describe('readReservedFile', () => {
+  it('reads a fixed agent-relative path inside the folder, whole', async () => {
+    write(join(agent, 'docs/AGENT_DETAILS.md'), '# Details\n')
+    const read = await makeService().readReservedFile('folder:a', 'docs/AGENT_DETAILS.md', 1024)
+    expect(read.success && read.bytes.toString('utf8')).toBe('# Details\n')
+  })
+
+  it('refuses a file over the cap rather than cutting it', async () => {
+    write(join(agent, 'docs/AGENT_DETAILS.html'), 'x'.repeat(65))
+    expect(await makeService().readReservedFile('folder:a', 'docs/AGENT_DETAILS.html', 64)).toMatchObject({ success: false, code: 'too_large' })
+  })
+
+  it('never follows a link out of the folder, even to a path the user approved', async () => {
+    symlinkSync(join(outside, 'notes.md'), join(agent, 'docs-link.md'))
+    const service = makeService()
+    await service.authorize(at(join(agent, 'docs-link.md')), approve())
+    expect(await service.readPreview(at(join(agent, 'docs-link.md')))).toMatchObject({ success: true })
+    expect(await service.readReservedFile('folder:a', 'docs-link.md', 1024)).toMatchObject({ success: false, code: 'not_found' })
+    unlinkSync(join(agent, 'docs-link.md'))
+  })
+
+  it('answers not_found for a missing file and agent_not_found for an unknown agent', async () => {
+    const service = makeService()
+    expect(await service.readReservedFile('folder:a', 'docs/NOPE.md', 1024)).toMatchObject({ success: false, code: 'not_found' })
+    expect(await service.readReservedFile('folder:zz', 'docs/AGENT_DETAILS.md', 1024)).toMatchObject({ success: false, code: 'agent_not_found' })
+    expect(await service.readReservedFile('', 'docs/AGENT_DETAILS.md', 1024)).toMatchObject({ success: false, code: 'invalid_input' })
+  })
+
+  it('never reads a credential file or a folder', async () => {
+    const service = makeService()
+    expect(await service.readReservedFile('folder:a', '.env', 1024)).toMatchObject({ success: false, code: 'credential_file' })
+    expect(await service.readReservedFile('folder:a', 'data', 1024)).toMatchObject({ success: false, code: 'not_a_file' })
+  })
+})

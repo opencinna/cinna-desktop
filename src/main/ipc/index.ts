@@ -34,6 +34,7 @@ import { registerAgentFileHandlers } from './agent_files.ipc'
 import { registerArtifactHandlers } from './artifacts.ipc'
 import { registerImprovementRequestHandlers } from './improvementRequests.ipc'
 import { registerHtmlPreviewHandlers } from './html_preview.ipc'
+import { registerAgentDetailsHandlers } from './agent_details.ipc'
 import { registerDashboardHandlers } from './dashboards.ipc'
 import { registerEngineHandlers } from './engine.ipc'
 import { registerConnectHandlers } from './connect.ipc'
@@ -110,6 +111,8 @@ export function registerAllIpcHandlers(): void {
   // Improvement Request: send a cloud bundle agent's conversation to its publisher.
   registerImprovementRequestHandlers()
   registerHtmlPreviewHandlers()
+  // An agent's Details page: core's answer or a folder agent's own file, the HTML in a det- frame.
+  registerAgentDetailsHandlers()
   registerDashboardHandlers()
   registerEngineHandlers()
   registerConnectHandlers()

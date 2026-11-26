@@ -110,6 +110,11 @@ export function createVaultFileSource(deps: VaultFileSourceDeps): AgentFileSourc
   return {
     actions: VAULT_FILE_ACTIONS,
 
+    pathIn(agentId, rel) {
+      const located = locate(agentId)
+      return isFailure(located) ? located : joinIn(located.agentDir, rel)
+    },
+
     async resolve(agentId, entries) {
       const located = locate(agentId)
       if (isFailure(located)) return located

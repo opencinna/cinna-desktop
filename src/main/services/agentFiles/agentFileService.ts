@@ -209,6 +209,33 @@ export function createAgentFileService(deps: AgentFileServiceDeps) {
       return { success: true, text }
     },
 
+    /**
+     * A reserved file at a fixed agent-relative path (`docs/AGENT_DETAILS.md`),
+     * whole and as bytes, for a source that previews (a folder here or a
+     * vault). Stricter than a reference: inside the agent folder only — an
+     * approval for a path outside it does not count, and nothing asks — a
+     * file, never a credential file. Over `maxBytes` it is `too_large`; the
+     * caller decodes.
+     */
+    async readReservedFile(agentId: unknown, rel: string, maxBytes: number): Promise<AgentFileBytesResult> {
+      if (typeof agentId !== 'string' || agentId === '') return fail('invalid_input')
+      const source = sourceOf({ agentId })
+      if (isFailure(source)) return source
+      if (!source.actions.preview || !source.pathIn) return fail('unsupported')
+      const path = source.pathIn(agentId, rel)
+      if (typeof path !== 'string') return path
+      const found = await source.stat({ agentId, path })
+      if (isFailure(found)) return found
+      if (!found.inside) return fail('not_found')
+      if (found.kind !== 'file') return fail('not_a_file')
+      if (found.credential) return fail('credential_file')
+      const read = await source.read(found, { maxBytes, whole: true })
+      if (!read.success) return read
+      // Grew while being read, still under the cap: what was read is not the whole file.
+      if (read.bytes.length > read.size) return fail('read_failed')
+      return { success: true, bytes: read.bytes }
+    },
+
     /** Open with the strategy the source picks. Never executes the file. */
     async open(input: unknown): Promise<AgentFileActionResult> {
       const source = sourceOf(input)

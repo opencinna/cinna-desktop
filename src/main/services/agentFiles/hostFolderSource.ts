@@ -241,6 +241,11 @@ export function createHostFolderSource(deps: HostFolderSourceDeps) {
   const source = {
     actions: HOST_FILE_ACTIONS,
 
+    pathIn(agentId: string, rel: string): string | AgentFileFailure {
+      const agentDir = locate(agentId)
+      return typeof agentDir === 'string' ? join(agentDir, rel) : agentDir
+    },
+
     async resolve(agentId: string, entries: FileRefEntry[]) {
       const agentDir = locate(agentId)
       if (typeof agentDir !== 'string') return agentDir

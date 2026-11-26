@@ -30,6 +30,8 @@ export interface CinnaEndpoints {
   instance_name?: string
   /** Present (≥ 1) on instances that keep published artifacts; absent hides every artifact surface. */
   artifacts?: number
+  /** Present (≥ 1) on instances that serve Agent Details; absent hides every Details button. */
+  agent_details?: number
   /**
    * Optional. The origin of the instance's web app, where a browser opens an
    * install link, when it differs from the origin a desktop signed in with

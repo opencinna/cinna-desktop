@@ -1,6 +1,7 @@
 import { HTML_PREVIEW_SCHEME } from '../../services/htmlPreview/htmlPreviewServer'
 import { previewKindFor } from '../../../shared/filePreview'
 import { DASHBOARD_FRAME_HOST_PREFIX } from '../../../shared/htmlPreview'
+import { AGENT_DETAILS_FRAME_HOST_PREFIX } from '../../../shared/agentDetails'
 
 /**
  * The main-process rules that keep a previewed HTML page inside its frame.
@@ -22,6 +23,24 @@ function isPreviewUrl(url: string | undefined): boolean {
 function isWebUrl(url: string): boolean {
   const scheme = schemeOf(url)
   return scheme === 'http:' || scheme === 'https:'
+}
+
+/**
+ * An agent Details frame's URL (`cinna-preview://det-…/`). Such a page is a
+ * document with no scripts; it never navigates once it has loaded.
+ */
+export function isAgentDetailsUrl(url: string | undefined): boolean {
+  if (!isPreviewUrl(url)) return false
+  try {
+    return new URL(url as string).hostname.startsWith(AGENT_DETAILS_FRAME_HOST_PREFIX)
+  } catch {
+    return false
+  }
+}
+
+/** Where a navigation a Details page started may go: `https:` to the browser, nothing else anywhere. */
+function detailsExit(url: string): FrameNavigationVerdict {
+  return schemeOf(url) === 'https:' ? 'open-external' : 'block'
 }
 
 export type FrameNavigationVerdict = 'allow' | 'block' | 'open-external'
@@ -67,6 +86,8 @@ export function mainFrameNavigation(nav: MainFrameNavigation): FrameNavigationVe
   // A preview never navigates the app, not even to its own page: in
   // development that page is http(s), and a click could reload the app or
   // load another dev-server page into the window.
+  // A Details page's links are `https:` only (C5): plain `http:` stays blocked.
+  if (nav.initiatorUrls.some(isAgentDetailsUrl)) return detailsExit(nav.url)
   if (nav.initiatorUrls.some(isPreviewUrl)) return isWebUrl(nav.url) ? 'open-external' : 'block'
   if (nav.appUrls.some((appUrl) => isAppUrl(nav.url, appUrl))) return 'allow'
   return 'block'
@@ -86,6 +107,8 @@ export interface FrameNavigation {
  * What a navigation of a frame inside the app window may do.
  *
  * - The main frame is not this rule's business.
+ * - A Details frame (`det-`) loads once: after that, `https:` goes to the
+ *   browser and everything else is blocked, and nothing under it loads.
  * - A subframe may load `cinna-preview:` and `about:blank` / `about:srcdoc`.
  * - The preview document leaving for an `http(s)` page on its own (a form, a
  *   script, a link the helper did not retarget) is blocked — the frame never
@@ -101,6 +124,12 @@ export interface FrameNavigation {
 export function previewFrameNavigation(nav: FrameNavigation): FrameNavigationVerdict {
   if (nav.isMainFrame) return 'allow'
   const url = nav.url
+  // A Details page never navigates itself after its first load — not a
+  // `<meta http-equiv="refresh">`, a plain link or a reload, not even to
+  // another `cinna-preview:` URL. A web link (`https:` only) goes to the
+  // browser; everything else is dropped. Nothing may load under it either.
+  if (isAgentDetailsUrl(nav.frameUrl)) return detailsExit(url)
+  if (nav.ancestorUrls.some(isAgentDetailsUrl)) return 'block'
   // A dashboard tile stays inside its own path on the shared host: without
   // this, a page could load another tile's (or another preview's) URL.
   const tilePrefix = dashboardFramePrefix(nav.frameUrl)

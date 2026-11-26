@@ -81,6 +81,12 @@ export interface AgentFileSource {
    * grew shows as `bytes.length > size` (the caller decides).
    */
   read(target: AgentFileTarget, options: { maxBytes: number; whole: boolean }): Promise<AgentFileReadResult>
+  /**
+   * A fixed agent-relative path (`docs/AGENT_DETAILS.md`) spelled the way
+   * {@link stat} takes it: under the folder on this computer, or under the
+   * agent folder inside the vault. A failure when the agent is not there.
+   */
+  pathIn?(agentId: string, rel: string): string | AgentFileFailure
   /** Asks the user before a path outside the folder is used; absent, a path {@link stat} allows is approved. */
   authorize?(input: unknown, prompt: ConsentPrompt): Promise<AuthorizeAgentFileResult>
   open?(input: unknown): Promise<AgentFileActionResult>
