@@ -42,13 +42,15 @@ Builder change.
 - Inline `<style>` only. Images, and fonts if any, are `data:` URIs.
 - No `<script>` and no external loads (no remote images, fonts, stylesheets).
 - Responsive from 320 px wide up, with a viewport meta tag.
+- No `<meta http-equiv="refresh">`: the page must not reload or redirect itself.
 - Handle light and dark with `prefers-color-scheme`.
 - Links are plain `https:` anchors. Give each one `target="_blank"`: the page is
   shown in a sandboxed frame, and a link without a target tries to navigate that
   frame itself instead of opening outside the app.
 
 The platform adds the Content Security Policy tag and, when missing, the viewport
-tag. Nothing else in your file changes. The page is shown in a sandboxed frame of
+tag, and removes every `<meta http-equiv="refresh">` tag. Nothing else in your file
+changes. The page is shown in a sandboxed frame of
 fixed height that scrolls inside, so do not rely on script-driven resizing.
 
 ### Markdown rules

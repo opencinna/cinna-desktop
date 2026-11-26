@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `5cf7f1a0f9a7f9c5`.
+Your current kit is version `d52d71ef3172e980`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
