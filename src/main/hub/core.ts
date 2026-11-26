@@ -194,6 +194,8 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
   // Core, not the IPC handlers: a sync on its timer has no handler. Re-scans only when it moved.
   localAgentService.installRuntimeInputsFollow(getSettingsScopeUserId)
   userActivation.onProfileReady(() => localAgentService.runtimeInputsMayHaveMoved(getSettingsScopeUserId()))
+  // Leaving a profile forgets what its agents were resolved under, so the next profile's ready re-resolves them.
+  userActivation.onProfileClosing(() => localAgentService.runtimeInputsClosed())
   // A kit agent's folder moved: its warm process may sit in the old path, and the
   // Claude spec key does not include the cwd. `retire` lets a running turn finish.
   installFolderMovedListener((agentId) => acpProcessPool.retire(agentId))

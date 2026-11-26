@@ -891,6 +891,17 @@ export const localAgentService = {
    * switch is wired there too (`userActivation.onProfileReady`). Returns the
    * unsubscribe.
    */
+  /**
+   * The open profile is being left (`userActivation.onProfileClosing`, wired by
+   * `hub/core.ts`). What its agents were resolved under is no baseline for the
+   * next profile — whose credentials and Default runtime move with no signal of
+   * their own — so the next {@link runtimeInputsMayHaveMoved} (the profile made
+   * ready, or a sync) re-resolves every agent.
+   */
+  runtimeInputsClosed(): void {
+    runtimeInputsKey = null
+  },
+
   installRuntimeInputsFollow(getUserId: () => string): () => void {
     runtimeInputsKey = runtimeService.resolutionInputsKey()
     const follow = (): void => this.runtimeInputsMayHaveMoved(getUserId())
@@ -979,9 +990,17 @@ export const localAgentService = {
     } finally {
       handle.release()
     }
-    scannerService.markRootDirty(root.id)
-    this.reindexAgent(userId, root, agentDir)
-    publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId: root.id, agentId: input.agentId, reason: 'rescan' } satisfies LocalAgentChangedPayload, 'all')
+    const refusal = staleFailure ?? choiceFailure
+    try {
+      scannerService.markRootDirty(root.id)
+      this.reindexAgent(userId, root, agentDir)
+      publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId: root.id, agentId: input.agentId, reason: 'rescan' } satisfies LocalAgentChangedPayload, 'all')
+    } catch (err) {
+      // The refusal is the answer the renderer acts on; a re-index that fails
+      // beside it is logged, never returned in its place.
+      if (refusal === null) throw err
+      logger.warn('could not re-index the agent after a refused runtime answer', { agentId: input.agentId, error: err instanceof Error ? err.message : String(err) })
+    }
     if (staleFailure !== null) throw staleFailure
     if (choiceFailure !== null) throw choiceFailure
     logger.info('runtime conflict resolved', { agentId: input.agentId, action })

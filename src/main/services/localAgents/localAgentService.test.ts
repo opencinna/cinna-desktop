@@ -1163,6 +1163,19 @@ describe('resolveRuntimeConflict', () => {
     expect(currentAgent().stamps[MANIFEST]).not.toEqual(before)
   })
 
+  it('returns the stale-stamp refusal even when the re-index beside it fails', () => {
+    setUp({ engine: 'claude' })
+    const stale = currentAgent().stamps[MANIFEST]!
+    ageFile(manifestPath(agentDir))
+    writeFileSync(manifestPath(agentDir), readFileSync(manifestPath(agentDir), 'utf8').replace('\n}', ',\n  "x_note": "edited"\n}'))
+    const reindex = vi.spyOn(localAgentService, 'reindexAgent').mockImplementation(() => { throw new Error('index locked') })
+    try {
+      expect(() => act('use_default', stale)).toThrow(expect.objectContaining({ code: 'manifest_modified' }))
+    } finally {
+      reindex.mockRestore()
+    }
+  })
+
   it('re-indexes on a stale stamp, so the next try from the refreshed notice goes through', () => {
     setUp({ engine: 'claude' })
     // The list the composer and the sidebar read is the cached scan, unlike `get`.
@@ -1239,6 +1252,28 @@ describe('refreshing agents when what they resolve against moves', () => {
       off()
       rescan.mockRestore()
       installEventPublisher(() => {})
+    }
+  })
+
+  it('re-resolves on the next ready once a profile was closed, though no signal moved the inputs', async () => {
+    const { runtimeService } = await import('./runtimeService')
+    const key = vi.spyOn(runtimeService, 'resolutionInputsKey').mockReturnValue('k1')
+    const rescan = vi.spyOn(localAgentService, 'rescan').mockReturnValue([])
+    const off = localAgentService.installRuntimeInputsFollow(() => USER)
+    try {
+      localAgentService.runtimeInputsMayHaveMoved(USER)
+      expect(rescan).not.toHaveBeenCalled()
+      // Log out and back in, or switch away and back: the key reads the same
+      // afterwards, but the agents were last resolved before the close.
+      localAgentService.runtimeInputsClosed()
+      localAgentService.runtimeInputsMayHaveMoved(USER)
+      expect(rescan).toHaveBeenCalledTimes(1)
+      localAgentService.runtimeInputsMayHaveMoved(USER)
+      expect(rescan).toHaveBeenCalledTimes(1)
+    } finally {
+      off()
+      key.mockRestore()
+      rescan.mockRestore()
     }
   })
 
