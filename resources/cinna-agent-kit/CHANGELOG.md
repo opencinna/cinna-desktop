@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `2b232c5f1f28fdab`.
+Your current kit is version `5cf7f1a0f9a7f9c5`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,20 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.28.0 — an agent can carry its own Details page
+
+Additive. Every 1.x folder stays valid; the file is optional.
+
+- **`layout.json`** — `agent.details_files` names the reserved paths
+  `docs/AGENT_DETAILS.html` and `docs/AGENT_DETAILS.md` (HTML wins), and the `docs`
+  role description mentions the page. Hosts preserve it like any `docs/` file.
+- **`guides/16-agent-details.md`** (new) — when to write one (only when the user
+  asks), what the generated summary already covers, md vs html, the authoring rules,
+  the 1 MiB cap and the `both_present`, `too_large` and `invalid_encoding` warnings,
+  and how to preview.
+- **`templates/agent/AGENTS.md`** — one line sends the Builder to guide 16 when the
+  user asks for a Details page. Existing folders keep their `AGENTS.md`.
 
 ## 1.27.1 — the runtime block is set only when the user asks
 

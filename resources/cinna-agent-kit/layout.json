@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.27.1",
+  "contract_version": "1.28.0",
   "description": "The folder model as data. Every host that creates, refreshes, exports or validates an agent folder reads its rules from here instead of hard-coding them.",
   "workshop": {
     "kit_dir": ".cinna-kit",
@@ -78,6 +78,7 @@
       "refiner": "docs/REFINER_PROMPT.md"
     },
     "command_catalog": "docs/CLI_COMMANDS.yaml",
+    "details_files": ["docs/AGENT_DETAILS.html", "docs/AGENT_DETAILS.md"],
     "status_file": "app-data/storage/STATUS.md",
     "roles": [
       {
@@ -91,7 +92,7 @@
         "path": "docs",
         "kind": "directory",
         "role": "prompts_and_commands",
-        "description": "The three document-backed prompts, the command catalog, and one doc per local skill.",
+        "description": "The three document-backed prompts, the command catalog, one doc per local skill, and the optional Details page (docs/AGENT_DETAILS.html or .md).",
         "survives_update": true
       },
       {

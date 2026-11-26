@@ -33,6 +33,8 @@ Switch to the **Builder** role and say so in one line. Then:
 4. Run the ladder check and report the result in one line.
 5. Run `uv run ../../.cinna-kit/tools/kit.py validate .` before declaring done.
 
+When the user asks for a Details page for this agent, read `../../.cinna-kit/guides/16-agent-details.md` first.
+
 ## Quick reference
 
 ```bash
