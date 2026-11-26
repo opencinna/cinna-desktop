@@ -159,6 +159,7 @@ None.
 ## Services & Key Methods
 
 ### `src/main/services/agentFiles/agentFileService.ts`
+- `readReservedFile(agentId, rel, maxBytes)`: a fixed agent-relative file (Agent Details' `docs/AGENT_DETAILS.*`), whole, as bytes, for a source that previews and offers `pathIn`. Stricter than a reference: inside the agent folder only, no consent, a file, never a credential file; over the cap is `too_large`. See [Agent Details (tech)](../../agents/agent_details/agent_details_tech.md).
 - `createAgentFileService(deps)`: every external dependency is injected:
   - agent lookup: `locateAgent`, `agentName`;
   - consent: `getConsentUserId`, `consent`;
