@@ -74,6 +74,28 @@ async function recordOpenExternal(electronApp: ElectronApplication): Promise<voi
   })
 }
 
+/**
+ * Records what main's renderer-failure path would do — the "Cinna Desktop
+ * renderer failed" box and the exit after it — instead of doing it, so a
+ * frame's refused load that reached it fails the test rather than the run.
+ */
+async function recordRendererFailures(electronApp: ElectronApplication): Promise<void> {
+  await electronApp.evaluate(({ app, dialog }) => {
+    const globals = globalThis as unknown as { __rendererFailures: string[] }
+    globals.__rendererFailures = []
+    dialog.showErrorBox = (title: string, content: string): void => {
+      globals.__rendererFailures.push(`${title}: ${content.split('\n')[0]}`)
+    }
+    app.exit = (code?: number): void => {
+      globals.__rendererFailures.push(`exit ${code ?? 0}`)
+    }
+  })
+}
+
+async function rendererFailures(electronApp: ElectronApplication): Promise<string[]> {
+  return electronApp.evaluate(() => (globalThis as unknown as { __rendererFailures?: string[] }).__rendererFailures ?? [])
+}
+
 async function openedUrls(electronApp: ElectronApplication): Promise<string[]> {
   return electronApp.evaluate(() => (globalThis as unknown as { __detailsOpened?: string[] }).__detailsOpened ?? [])
 }
@@ -234,6 +256,7 @@ test.describe('a folder agent’s own Details file', () => {
     }
     await seedFolderAgents(cinna, agents)
     await recordOpenExternal(cinna.electronApp)
+    await recordRendererFailures(cinna.electronApp)
     const page = cinna.page
     const consoleLines: string[] = []
     page.on('console', (message) => consoleLines.push(message.text()))
@@ -252,6 +275,7 @@ test.describe('a folder agent’s own Details file', () => {
         expect(frame.url()).toBe(url)
         await expect(detailsModal(page, name).frameLocator('iframe').locator('#static')).toHaveText('Static text from the publisher.')
         expect(await openedUrls(cinna.electronApp)).toEqual([])
+        expect(await rendererFailures(cinna.electronApp)).toEqual([])
         await page.keyboard.press('Escape')
         await expect(detailsModal(page, name)).toHaveCount(0)
       })
@@ -283,8 +307,80 @@ test.describe('a folder agent’s own Details file', () => {
       await expect.poll(() => openedUrls(cinna.electronApp)).toEqual(['https://example.com/details-link-e2e'])
       expect(frame.url()).toBe(url)
       await expect(detailsModal(page, name).frameLocator('iframe').locator('#static')).toHaveText('Static text from the publisher.')
+      // No refused load reached main's renderer-failure dialog (or its exit).
+      expect(await rendererFailures(cinna.electronApp)).toEqual([])
     })
   }
+
+  test('V9 local: Escape closes Details after a click inside the HTML frame', async ({ cinna }) => {
+    const name = 'Escape Desk'
+    await seedFolderAgents(cinna, { [name]: { 'docs/AGENT_DETAILS.html': scriptedPage(name) } })
+    const page = cinna.page
+    await openAgentPage(page, name)
+    await openDetailsFromMenu(page, name)
+    await expectInertPage(page, name, name)
+    // Focus moves into the cross-origin frame, whose keys the app's document never hears.
+    await detailsModal(page, name).frameLocator('iframe').locator('#static').click()
+    await expect
+      .poll(() =>
+        cinna.electronApp.evaluate(
+          ({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows().find((w) => /\/index\.html$/.test(w.webContents.getURL().split(/[?#]/)[0]))?.webContents.focusedFrame?.url ?? ''
+        )
+      )
+      .toMatch(DET_URL)
+    // A key press through the window's native input path, which main's before-input-event
+    // sees (Playwright's keyboard dispatches over CDP, which it does not). sendInputEvent
+    // lands on the main frame's widget, so the app's own listener could close the modal
+    // too: what proves the forward is main sending it while the det- frame has focus. A
+    // real key in the out-of-process frame reaches only that frame, and main.
+    const forwarded = await cinna.electronApp.evaluate(async ({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows().find((w) => /\/index\.html$/.test(w.webContents.getURL().split(/[?#]/)[0]))
+      if (!main) return []
+      const sent: string[] = []
+      const send = main.webContents.send.bind(main.webContents)
+      main.webContents.send = (channel: string, ...args: unknown[]): void => {
+        sent.push(channel)
+        send(channel, ...args)
+      }
+      main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+      main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      main.webContents.send = send
+      return sent
+    })
+    expect(forwarded).toContain('agent-details:escape')
+    await expect(detailsModal(page, name)).toHaveCount(0)
+  })
+
+  test('a refused subframe load is not a renderer failure: no dialog, no exit', async ({ cinna }) => {
+    await recordRendererFailures(cinna.electronApp)
+    const page = cinna.page
+    await cinna.electronApp.evaluate(({ BrowserWindow }) => {
+      const globals = globalThis as unknown as { __subframeFailures: Array<{ code: number; isMainFrame: boolean }> }
+      globals.__subframeFailures = []
+      const main = BrowserWindow.getAllWindows().find((w) => /\/index\.html$/.test(w.webContents.getURL().split(/[?#]/)[0]))
+      main?.webContents.on('did-fail-load', (_event, code, _desc, url, isMainFrame) => {
+        if (url.includes('subframe-e2e')) globals.__subframeFailures.push({ code, isMainFrame })
+      })
+    })
+    const failures = () =>
+      cinna.electronApp.evaluate(() => (globalThis as unknown as { __subframeFailures?: Array<{ code: number; isMainFrame: boolean }> }).__subframeFailures ?? [])
+    // The app's own CSP refuses an https frame: the load fails in a subframe, as a Details link once did.
+    await page.evaluate(() => {
+      const frame = document.createElement('iframe')
+      frame.src = 'https://example.com/subframe-e2e'
+      frame.id = 'subframe-e2e'
+      document.body.append(frame)
+    })
+    await expect.poll(async () => (await failures()).length).toBeGreaterThan(0)
+    expect((await failures()).every((failure) => !failure.isMainFrame)).toBe(true)
+    await page.evaluate(() => document.getElementById('subframe-e2e')?.remove())
+    expect(await rendererFailures(cinna.electronApp)).toEqual([])
+    // Still answering, both sides.
+    expect(await page.evaluate(() => document.readyState)).toBe('complete')
+    expect(await cinna.electronApp.evaluate(({ app }) => app.isReady())).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
