@@ -261,6 +261,7 @@ export function createExternalOpenGate(cooldownMs = ACTIVATION_WINDOW_MS, now: (
  * document never hears (the frame is cross-origin, with no script to forward
  * it) — so main tells the renderer to close the Details modal.
  */
-export function isDetailsFrameEscape(input: { type: string; key: string }, focusedFrameUrl: string | undefined): boolean {
-  return input.type === 'keyDown' && input.key === 'Escape' && isAgentDetailsUrl(focusedFrameUrl)
+export function isDetailsFrameEscape(input: { type: string; key: string; isAutoRepeat?: boolean }, focusedFrameUrl: string | undefined): boolean {
+  // A held key's repeats are not new presses: one Escape, one close.
+  return input.type === 'keyDown' && input.key === 'Escape' && !input.isAutoRepeat && isAgentDetailsUrl(focusedFrameUrl)
 }

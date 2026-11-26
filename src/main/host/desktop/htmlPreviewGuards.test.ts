@@ -287,6 +287,7 @@ describe('an agent Details frame never navigates itself', () => {
   it('forwards Escape only from inside a Details frame', () => {
     expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Escape' }, DETAILS)).toBe(true)
     expect(isDetailsFrameEscape({ type: 'keyUp', key: 'Escape' }, DETAILS)).toBe(false)
+    expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Escape', isAutoRepeat: true }, DETAILS)).toBe(false)
     expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Enter' }, DETAILS)).toBe(false)
     // The app's own document hears its Escape itself; other previews are not this modal's.
     expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Escape' }, 'http://localhost:5173/')).toBe(false)
