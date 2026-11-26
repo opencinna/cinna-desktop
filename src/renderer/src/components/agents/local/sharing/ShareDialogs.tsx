@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, Globe, Loader2, X } from 'lucide-react'
+import { AlertTriangle, Check, FilePen, Globe, Loader2, Undo2, X } from 'lucide-react'
 import { DIALOG_POPOVER_ATTR, SettingsButton, SettingsSwitch, useDialogChrome } from '../../../settings/SettingsLayout'
 import { unwrapIpcError } from '../../../../utils/ipcError'
 import { useLocalAgent } from '../../../../hooks/useLocalAgents'
@@ -239,29 +239,53 @@ export function ErrorLine({ error }: { error: string | null }): React.JSX.Elemen
  * Sharing an agent whose file disagrees with what it runs on here
  * (`resolvedRuntime.conflict`): the file is what travels, so the people who
  * get it run what the file says. Warns, never blocks — Share stays live — and
- * offers the app's answer inline (Update file; Use Default runtime for a pin
- * the app never chose). Below the controls and above the footer, so arriving
- * with the agent's read moves nothing the user is about to click (rule 1).
+ * offers both answers inline: Update file / Use <engine>, or Use Default
+ * runtime / Keep <engine> for a pin the app never chose. Below the controls and
+ * above the footer, so arriving with the agent's read moves nothing the user
+ * is about to click (rule 1). Once answered, what the file lost ("Dropped …")
+ * takes its place.
  */
 export function RuntimeConflictWarning({ agentId }: { agentId: string }): React.JSX.Element | null {
   const { data: agent } = useLocalAgent(agentId)
-  const state = useRuntimeConflict(agent)
-  if (!state) return null
+  /** What an answer dropped from the file: said in the warning's place, for as long as the dialog is open. */
+  const [note, setNote] = useState<string | null>(null)
+  const state = useRuntimeConflict(agent, { onNote: setNote })
+  if (!state) {
+    if (note === null) return null
+    return (
+      <div role="status" data-runtime-conflict-note className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
+        <Check size={14} className="mt-[3px] shrink-0 text-[var(--color-success)]" aria-hidden="true" />
+        <p className={`min-w-0 flex-1 ${DIALOG_TEXT}`}>{note}</p>
+      </div>
+    )
+  }
   const { copy } = state
-  const label = copy.kind === 'choice' ? copy.primary.label : 'Use Default runtime'
+  /*
+   * Not a one-line row, so both answers are visible buttons rather than a
+   * split button (ux_rules rule 20 is about the line that has no room): the
+   * app's first, the file's beside it, with the icons the other surfaces use.
+   */
+  const actions = [
+    { choice: copy.primary, label: copy.kind === 'choice' ? copy.primary.label : 'Use Default runtime', Icon: FilePen },
+    { choice: copy.alternative, label: copy.alternative.label, Icon: Undo2 }
+  ]
+  const blocked = state.running || state.pending
   return (
     <div role="note" data-runtime-conflict className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
       <AlertTriangle size={14} className="mt-[3px] shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
-      <div className="min-w-0 flex-1 space-y-1">
-        <p className={DIALOG_TEXT}>{copy.text} People who get it run what the file says.</p>
+      <div className="min-w-0 flex-1 space-y-2">
+        <p className={DIALOG_TEXT}>{copy.sentence} People who get it run what the file says.</p>
         {state.failure && <p role="alert" className="text-[13px] text-[var(--color-danger)]">{state.failure}</p>}
+        <div className="flex flex-wrap gap-2" aria-busy={state.pending || undefined}>
+          {actions.map(({ choice, label, Icon }) => (
+            <button key={choice.action} type="button" className={SECONDARY} title={state.running ? RUNTIME_CONFLICT_BUSY : choice.title}
+              aria-disabled={blocked || undefined} onClick={() => state.run(choice.action)}>
+              <Icon size={13} aria-hidden="true" />
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
-      <button type="button" className={`${SECONDARY} shrink-0`} title={state.running ? RUNTIME_CONFLICT_BUSY : copy.primary.title}
-        aria-disabled={state.running || state.pending || undefined} aria-busy={state.pending || undefined}
-        onClick={() => state.run(copy.primary.action)}>
-        {state.pending && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
-        {label}
-      </button>
     </div>
   )
 }

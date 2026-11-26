@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowLeftRight, ArrowUpRight, Check, Copy, Cpu, Download
 import { SafeIcon } from '../ui/SafeIcon'
 import type { LucideIcon } from 'lucide-react'
 import { FindingText, NoticeButton, NoticeSplitButton, StableLabel } from './ComposerNoticePanel'
-import { RUNTIME_CONFLICT_BUSY, useRuntimeConflict, type RuntimeConflictState } from '../agents/local/runtimeConflict'
+import { useRuntimeConflict, type RuntimeConflictState } from '../agents/local/runtimeConflict'
 import type { ComposerNotice } from './ComposerNoticePanel'
 import { AntigravityTermsTip } from '../settings/AntigravityTermsTip'
 import { useCheckAgentReadiness } from '../../hooks/useAgents'
@@ -720,22 +720,51 @@ export function useStaleModelNotice(folder: LocalAgentDto | null): ComposerNotic
  * lock, and a row that came and went mid-turn would be noise — so it appears
  * once the turn ends, as the AI-credential row would. A refusal stands in for
  * the sentence until the next try (rule 6). It does not block Send.
+ *
+ * One line (`singleLine`), the short form, with the whole sentence naming the
+ * file as its title and description. Once an answer lands and what the file
+ * lost comes back (`note`, "Dropped “gpt-5.5-pro”."), the same row — same key,
+ * same height, the strut holding it one button tall — says that instead, with
+ * no action, until the next send or another agent.
  */
-export function runtimeConflictNotice(state: RuntimeConflictState | null): ComposerNotice | null {
-  if (!state || state.running) return null
-  const { copy } = state
-  return {
-    key: 'runtime-conflict',
-    tone: 'warning',
-    icon: ArrowLeftRight,
-    text: state.failure ?? copy.text,
-    title: state.failure ?? copy.text,
-    action: <NoticeSplitButton label={copy.primary.label} icon={FilePen} title={state.running ? RUNTIME_CONFLICT_BUSY : copy.primary.title}
-      pending={state.pending} pendingLabel="Saving…" disabled={state.pending}
-      onClick={() => state.run(copy.primary.action)}
-      moreLabel="More ways to settle the runtime"
-      items={[{ label: copy.alternative.label, icon: Undo2, title: copy.alternative.title, disabled: state.pending, onSelect: () => state.run(copy.alternative.action) }]} />
+export function runtimeConflictNotice(state: RuntimeConflictState | null, note: string | null = null): ComposerNotice | null {
+  if (state && !state.running) {
+    const { copy } = state
+    const text = state.failure ?? copy.text
+    return {
+      key: 'runtime-conflict',
+      tone: 'warning',
+      icon: ArrowLeftRight,
+      text: <span aria-description={state.failure ? undefined : copy.sentence}>{text}</span>,
+      title: state.failure ?? copy.sentence,
+      singleLine: true,
+      action: <NoticeSplitButton label={copy.primary.label} icon={FilePen} title={copy.primary.title}
+        pending={state.pending} pendingLabel="Saving…" disabled={state.pending}
+        onClick={() => state.run(copy.primary.action)}
+        moreLabel="More ways to settle the runtime"
+        items={[{ label: copy.alternative.label, icon: Undo2, title: copy.alternative.title, disabled: state.pending, onSelect: () => state.run(copy.alternative.action) }]} />
+    }
   }
+  if (note === null || state?.running) return null
+  return { key: 'runtime-conflict', tone: 'accent', icon: Check, text: note, title: note, singleLine: true, panelLabel: 'Agent status' }
+}
+
+/**
+ * The composer's runtime-conflict row ({@link runtimeConflictNotice}) with the
+ * note an answer returns. The note is held here, by the composer, because the
+ * conflict itself is gone the moment the answer lands: it stays in the row's
+ * place until the next send (`turnRunning`) or another agent.
+ */
+export function useRuntimeConflictRow(folder: LocalAgentDto | null, turnRunning: boolean): ComposerNotice | null {
+  const [conflictNote, setConflictNote] = useState<{ agentId: string; text: string } | null>(null)
+  const folderId = folder?.id ?? null
+  const state = useRuntimeConflict(folder, {
+    turnRunning,
+    onNote: (text) => { if (folderId) setConflictNote({ agentId: folderId, text }) }
+  })
+  useEffect(() => { if (turnRunning) setConflictNote(null) }, [turnRunning])
+  useEffect(() => { setConflictNote((current) => (current && current.agentId !== folderId ? null : current)) }, [folderId])
+  return runtimeConflictNotice(state, conflictNote && conflictNote.agentId === folderId ? conflictNote.text : null)
 }
 
 export interface ComposerNotices {
@@ -827,7 +856,8 @@ export function assembleNoticeRows(parts: NoticeRowParts): ComposerNotice[] {
  */
 export function useComposerNotices(target: AgentData | null, readiness: ComposerReadiness, reasonId: string, draftKey: string | null = null, turnRunning = false): ComposerNotices {
   const folder = useComposerFolder(target)
-  const runtimeConflict = useRuntimeConflict(folder, { turnRunning })
+  const folderId = folder?.id ?? null
+  const runtimeConflict = useRuntimeConflictRow(folder, turnRunning)
   const findings = useFolderFindingsNotice(folder)
   const finishSetup = useFinishSetup(folder?.id ?? null, folder?.name ?? '', { followRequests: false, draftKey })
   const aiIssue = useAgentAiCredentialIssue(folder)
@@ -835,7 +865,6 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
   const accounts = useAccountNotices(folder, draftKey)
   const staleModel = useStaleModelNotice(folder)
   const { data: providers } = useProviders()
-  const folderId = folder?.id ?? null
   const prompted = useSkillCredentialPromptStore((s) => (folderId ? s.prompts[folderId] : undefined))
   useDropSettledPrompts(folder, prompted)
   // One missing Google slot is authorized from the row itself, as main judges it (`setupState`): only
@@ -869,7 +898,7 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
     accounts,
     skillCredentials,
     aiCredential: aiCredentialNotice(folder, aiIssue, providers?.length === 0),
-    runtimeConflict: runtimeConflictNotice(runtimeConflict),
+    runtimeConflict,
     staleModel,
     findings
   })

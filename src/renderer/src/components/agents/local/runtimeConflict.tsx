@@ -42,7 +42,16 @@ export interface RuntimeConflictChoice {
 
 export interface RuntimeConflictCopy {
   kind: LocalAgentRuntimeConflict['kind']
+  /**
+   * The one-line form, for the panel's status line and the composer's row:
+   * short enough that both sides survive at the 800px minimum (ux rule 7/12).
+   */
   text: string
+  /**
+   * The whole sentence, naming the file: the line's `title` and
+   * `aria-description`, and the share dialog, which has the room.
+   */
+  sentence: string
   primary: RuntimeConflictChoice
   alternative: RuntimeConflictChoice
 }
@@ -54,28 +63,32 @@ export type ConflictModelName = (side: LocalAgentRuntimeSide) => string | null
  * The sentence and the two actions. Pure, so the wording is tested once.
  *
  * Each side names its engine and, when known, the model it would run — the
- * cost is what hurt in the report this exists for. When both sides are
- * OpenCode the difference is the credential, so both sides name it.
+ * cost is what hurt in the report this exists for. When both sides are the
+ * same engine (OpenCode) the difference is the credential, so each side names
+ * its own, or says it has none: "OpenCode (GPT-5.5 Pro); runs on OpenCode"
+ * would name no difference at all.
  */
 export function runtimeConflictCopy(conflict: LocalAgentRuntimeConflict, modelName: ConflictModelName): RuntimeConflictCopy {
   const credentialOnly = conflict.file.engine === conflict.app.engine
   const side = (value: LocalAgentRuntimeSide): string => {
     const model = modelName(value)
-    const on = credentialOnly && value.credentialName ? ` on ${value.credentialName}` : ''
+    const on = !credentialOnly ? '' : value.credentialName ? ` on ${value.credentialName}` : ' with no AI credential'
     return `${RUNTIME_MODE_NAMES[value.engine]}${on}${model ? ` (${model})` : ''}`
   }
   const fileName = RUNTIME_MODE_NAMES[conflict.file.engine]
   if (conflict.kind === 'choice') {
     return {
       kind: 'choice',
-      text: `${MANIFEST_FILE} asks for ${side(conflict.file)}; this agent runs on ${side(conflict.app)}.`,
+      text: `File asks for ${side(conflict.file)}; runs on ${side(conflict.app)}.`,
+      sentence: `${MANIFEST_FILE} asks for ${side(conflict.file)}; this agent runs on ${side(conflict.app)}.`,
       primary: { action: 'update_file', label: 'Update file', title: `Rewrite ${MANIFEST_FILE} to say ${side(conflict.app)}` },
       alternative: { action: 'use_file', label: `Use ${fileName}`, title: `Run this agent on ${side(conflict.file)}, as ${MANIFEST_FILE} asks` }
     }
   }
   return {
     kind: 'unrecorded',
-    text: `${MANIFEST_FILE} pins ${side(conflict.file)}; your Default runtime is ${side(conflict.app)}.`,
+    text: `File pins ${side(conflict.file)}; Default runtime is ${side(conflict.app)}.`,
+    sentence: `${MANIFEST_FILE} pins ${side(conflict.file)}; your Default runtime is ${side(conflict.app)}.`,
     primary: { action: 'use_default', label: 'Use Default', title: `Use Default runtime — removes the pin from ${MANIFEST_FILE}` },
     alternative: { action: 'use_file', label: `Keep ${fileName}`, title: `Keep running this agent on ${side(conflict.file)}` }
   }
@@ -182,8 +195,9 @@ export function RuntimeConflictLine({ state, tone, danger }: {
     <div className="flex h-4 min-w-0 items-center gap-2">
       {failure
         ? <div role="alert" className={`min-w-0 truncate ${danger}`} title={failure}>{failure}</div>
-        : <div className={`min-w-0 truncate ${tone}`} title={copy.text}>{copy.text}</div>}
-      <div className="flex shrink-0 items-stretch">
+        : <div className={`min-w-0 truncate ${tone}`} title={copy.sentence} aria-description={copy.sentence}>{copy.text}</div>}
+      {/* Pinned to the line's end: a sentence or a refusal of another length never moves it (rules 1, 19). */}
+      <div data-conflict-actions className="ml-auto flex shrink-0 items-stretch">
         <button type="button" className={`${LINE_BUTTON} rounded-r-none`} aria-label={copy.primary.label}
           title={busyTitle ?? copy.primary.title} aria-disabled={blocked || undefined}
           onClick={() => state.run(copy.primary.action)}>

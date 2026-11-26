@@ -205,6 +205,8 @@ const RUNS_ON_ENGINE_OPTION: Record<AgentEngine, string> = {
 const NOTE = 'text-[10px] text-[var(--color-text-muted)]'
 const WARN = 'text-[10px] text-[var(--color-warning)]'
 const DANGER = 'text-[10px] text-[var(--color-danger)]'
+/** The tooltip of the Model, Effort and Advanced controls while a choice conflict locks them. */
+export const MODEL_LOCKED_TITLE = `${MANIFEST_FILE} disagrees with Runs on — update the file or use its engine first`
 
 /** One line of the panel's reserved status slot; `login` makes it the logged-out line with its button. */
 /**
@@ -704,6 +706,8 @@ export function RuntimePanel({
    * effective block keeps it.
    */
   const modelLocked = runsOn.conflict?.kind === 'choice'
+  /** Why the locked controls are locked, as their tooltip. */
+  const lockedTitle = modelLocked ? MODEL_LOCKED_TITLE : undefined
   /**
    * The Claude Code this agent would run on, or undefined — **the pinned CLI's
    * state, not PATH detection**, on exactly `codexTool`'s terms below: Cinna
@@ -815,6 +819,15 @@ export function RuntimePanel({
     : null
   /** `runtime.effort`, read only beside a declared model, as the launchers read it. */
   const declaredEffort = declaredEffortOf(fileRuntime)
+  /**
+   * **The model and effort the turn runs**, for what the panel shows. The
+   * file's own while it and the app agree; during a choice conflict the
+   * effective block's (`agent.runtime`, the choice's block, which dropped the
+   * file's model for the other engine), so the badges and the locked Model
+   * select describe the side that runs, not a model that never will (ux rule 13).
+   */
+  const runningModel = modelLocked ? (agent.runtime?.model ?? null) : declaredModel
+  const runningEffort = modelLocked ? declaredEffortOf(agent.runtime) : declaredEffort
 
   /**
    * **The CLI runtime's own model list**, for the Advanced picker on Claude,
@@ -1107,11 +1120,12 @@ export function RuntimePanel({
       resolveRuntimeModel({
         chosen: effectiveProvider,
         fallback,
-        declaredModel,
+        // What runs: during a choice conflict the file's model is not it.
+        declaredModel: runningModel,
         declaredComplexity,
         catalogue
       }),
-    [effectiveProvider, fallback, declaredModel, declaredComplexity, catalogue]
+    [effectiveProvider, fallback, runningModel, declaredComplexity, catalogue]
   )
   const inherited = useMemo(
     () =>
@@ -1525,7 +1539,9 @@ export function RuntimePanel({
    * truth, and the conflict returns once they are settled.
    */
   const lineIsTransient = !!error || !!secrets || (!!dropped && dropped.agentId === agent.id && noteStillTrue(dropped))
-  const lineBlocks = !!baseStatus && (baseStatus.tone === DANGER || !!baseStatus.login || !!baseStatus.account || !!baseStatus.refresh)
+  // Not a model list that needs a refresh (`refresh`): that is about the picker the conflict has
+  // locked, and the conflict is what the user has to settle first.
+  const lineBlocks = !!baseStatus && (baseStatus.tone === DANGER || !!baseStatus.login || !!baseStatus.account)
   const status: StatusLine | null = conflict && !lineIsTransient && !lineBlocks
     ? { text: conflict.copy.text, tone: WARN, conflict: true }
     : baseStatus
@@ -2088,9 +2104,10 @@ export function RuntimePanel({
       : onAntigravity ? 'Antigravity'
       : onClaude ? `Claude Agent${subscription ? ' with subscription' : ''}`
       : effectiveProvider && !credentialMissing ? `OpenCode with ${effectiveProvider.name}` : 'OpenCode'
-    const model = onCodex ? `${cliNameOf(declaredModel) ?? cliDefaultName ?? 'CLI default'} · ${codexEffortForRuntime(agent.runtime)} effort`
-      : onAntigravity ? (cliNameOf(declaredModel) ?? cliDefaultName)
-      : onClaude ? `${cliNameOf(declaredModel) ?? cliDefaultName}${declaredEffort ? ` · ${declaredEffort} effort` : ''}`
+    // The side that runs (`runningModel`): during a choice conflict the file's model is not it.
+    const model = onCodex ? `${cliNameOf(runningModel) ?? cliDefaultName ?? 'CLI default'} · ${codexEffortForRuntime(agent.runtime)} effort`
+      : onAntigravity ? (cliNameOf(runningModel) ?? cliDefaultName)
+      : onClaude ? `${cliNameOf(runningModel) ?? cliDefaultName}${runningEffort ? ` · ${runningEffort} effort` : ''}`
       : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
     const issue = onCodex ? (codexFailure ? codexFailure.badge : codexAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
       : onAntigravity
@@ -2304,14 +2321,14 @@ export function RuntimePanel({
               // action the checkbox can no longer perform. Over a model no tier
               // describes it says what unticking will do, since that drops it.
               title={
-                untiered && advanced
+                lockedTitle ?? (untiered && advanced
                   ? (cliEngine && declaredModel && declaredEffort && cliModelTier(cliEngine, declaredModel, null, cliCatalog)
                     ? `No work complexity has “${declaredEffort}” effort — unticking drops the effort and keeps the model’s tier.`
                     : `No work complexity matches “${onCli ? cliNameOf(declaredModel) : nameOf(declaredModel)}” — unticking drops it for Default.`)
                   : cliConversionPending
                     ? (cliRefreshError ? `Couldn’t list ${cliName}’s models: ${cliRefreshError}`
                       : cliRefreshing ? `Checking ${cliName}’s models…` : `${cliName} has not listed its models yet.`)
-                    : 'Pick the exact model instead of how hard the work is'
+                    : 'Pick the exact model instead of how hard the work is')
               }
             >
               <input
@@ -2342,9 +2359,9 @@ export function RuntimePanel({
                 id="runtime-model"
                 aria-label="Model"
                 className={`${FIELD_IN_ROW} min-w-0 flex-1`}
-                title={declaredModel ?? undefined}
+                title={lockedTitle ?? declaredModel ?? undefined}
                 disabled={disabled || cliCatalogLoading || !cliCatalogKnown || modelLocked}
-                value={cliCatalogLoading ? '' : (declaredModel ?? '')}
+                value={cliCatalogLoading ? '' : (runningModel ?? '')}
                 onChange={(event) => changeCliModel(event.target.value || null)}
               >
                 {cliCatalogLoading ? (
@@ -2360,8 +2377,8 @@ export function RuntimePanel({
                     */}
                     <option value="">{cliUnsetLabel}</option>
                     {/* Still selectable when the list lacks it, so the select never misreports the file. */}
-                    {declaredModel && !(cliCatalog?.models ?? []).some((model) => model.id === declaredModel) && (
-                      <option value={declaredModel}>{declaredModel}</option>
+                    {runningModel && !(cliCatalog?.models ?? []).some((model) => model.id === runningModel) && (
+                      <option value={runningModel}>{runningModel}</option>
                     )}
                     {(cliCatalog?.models ?? []).map((model) => (
                       <option key={model.id} value={model.id} title={model.description ? `${model.id} — ${model.description}` : model.id}>
@@ -2375,16 +2392,16 @@ export function RuntimePanel({
                 <select
                   id="runtime-effort"
                   aria-label="Effort"
-                  title={declaredModel ? 'Reasoning effort' : 'Pick a model to set its reasoning effort'}
+                  title={lockedTitle ?? (declaredModel ? 'Reasoning effort' : 'Pick a model to set its reasoning effort')}
                   // Compact and fixed: the model name gets the room (`Xhigh` fits).
                   className={`${FIELD_IN_ROW} w-[4.75rem] shrink-0`}
                   disabled={disabled || cliCatalogLoading || !cliCatalogKnown || declaredModel === null || cliEfforts.length === 0 || modelLocked}
-                  value={declaredEffort ?? ''}
+                  value={runningEffort ?? ''}
                   onChange={(event) => commit(null, declaredModel, null, { effort: event.target.value || null })}
                 >
                   <option value="">Default</option>
-                  {declaredEffort && !cliEfforts.some((effort) => effort.id === declaredEffort) && (
-                    <option value={declaredEffort}>{declaredEffort}</option>
+                  {runningEffort && !cliEfforts.some((effort) => effort.id === runningEffort) && (
+                    <option value={runningEffort}>{runningEffort}</option>
                   )}
                   {cliEfforts.map((effort) => (
                     <option key={effort.id} value={effort.id} title={effort.name}>
@@ -2399,9 +2416,9 @@ export function RuntimePanel({
               id="runtime-model"
               aria-label="Model"
               className={FIELD}
-              title={inheritedName ? `Default: ${inheritedName}` : undefined}
+              title={lockedTitle ?? (inheritedName ? `Default: ${inheritedName}` : undefined)}
               disabled={disabled || modelLocked}
-              value={declaredModel ?? ''}
+              value={runningModel ?? ''}
               onChange={(event) =>
                 commit(commitCredential(fileCredential), event.target.value || null, null)
               }
@@ -2415,8 +2432,8 @@ export function RuntimePanel({
                 reset the agent's model to the default the moment the user
                 touched the credential picker.
               */}
-              {declaredModel && !modelChoices.some((model) => model.id === declaredModel) && (
-                <option value={declaredModel}>{declaredModel}</option>
+              {runningModel && !modelChoices.some((model) => model.id === runningModel) && (
+                <option value={runningModel}>{runningModel}</option>
               )}
               {modelChoices.map((model) => (
                 <option key={model.id} value={model.id}>

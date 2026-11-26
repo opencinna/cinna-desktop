@@ -194,6 +194,36 @@ describe('the runtime-conflict warning in the share dialogs', () => {
     await waitFor(() => expect(resolveConflict).toHaveBeenCalledWith(expect.objectContaining({ action: 'use_default' })))
   })
 
+  it('shows both answers as buttons — the app’s and the file’s — with no menu', async () => {
+    api('choice')
+    render(changes())
+    const update = await screen.findByRole('button', { name: 'Update file' })
+    const useFile = screen.getByRole('button', { name: 'Use OpenCode' })
+    expect(update.parentElement).toBe(useFile.parentElement)
+    expect(screen.queryByRole('button', { name: 'More ways to settle the runtime' })).toBeNull()
+    fireEvent.click(useFile)
+    await waitFor(() => expect(resolveConflict).toHaveBeenCalledWith(expect.objectContaining({ action: 'use_file' })))
+    cleanup()
+    api('unrecorded')
+    render(changes())
+    expect(await screen.findByRole('button', { name: 'Use Default runtime' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Keep OpenCode' })).toBeTruthy()
+  })
+
+  it('says what the file lost in the warning’s place once answered', async () => {
+    let kind: 'choice' | null = 'choice'
+    api('choice')
+    const localAgents = (window as unknown as { api: { localAgents: Record<string, unknown> } }).api.localAgents
+    localAgents.get = async () => conflictAgent(kind)
+    resolveConflict.mockImplementation(async () => { kind = null; return { ok: true, note: 'Dropped “gpt-5.5-pro”.' } })
+    render(changes())
+    fireEvent.click(await screen.findByRole('button', { name: 'Update file' }))
+    const note = await screen.findByRole('status')
+    expect(note.textContent).toBe('Dropped “gpt-5.5-pro”.')
+    expect(document.querySelector('[data-runtime-conflict]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Update file' })).toBeNull()
+  })
+
   it('says nothing when the file and the app agree', async () => {
     api(null)
     render(changes())

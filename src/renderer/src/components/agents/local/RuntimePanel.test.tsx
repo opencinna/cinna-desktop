@@ -1815,7 +1815,10 @@ describe('the conflict line', () => {
   it('says what the file asks for and what runs, naming the models, with Update file and Use OpenCode', () => {
     defaultRuntime = { engine: 'claude' }
     render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', model: 'claude-sonnet-4-5', complexity: 'complex' }, { complexity: 'complex' })} />)
-    expect(screen.getByText('cinna-agent.json asks for OpenCode (Claude Sonnet 4.5); this agent runs on Claude Agent (opus).')).toBeTruthy()
+    // The short form on the line; the whole sentence, naming the file, as its title and description.
+    const line = screen.getByText('File asks for OpenCode (Claude Sonnet 4.5); runs on Claude Agent (opus).')
+    expect(line.getAttribute('title')).toBe('cinna-agent.json asks for OpenCode (Claude Sonnet 4.5); this agent runs on Claude Agent (opus).')
+    expect(line.getAttribute('aria-description')).toBe(line.getAttribute('title'))
     fireEvent.click(screen.getByRole('button', { name: 'Update file' }))
     expect(resolveConflict.mock.calls[0][0]).toEqual({ agentId: 'folder:a', action: 'update_file', stamp: { size: 1, mtimeMs: 1 } })
     fireEvent.click(screen.getByRole('button', { name: 'More ways to settle the runtime' }))
@@ -1826,12 +1829,29 @@ describe('the conflict line', () => {
   it('offers Use Default and Keep OpenCode for a pin the app never chose', () => {
     defaultRuntime = { engine: 'claude' }
     render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
-    expect(screen.getByText('cinna-agent.json pins OpenCode; your Default runtime is Claude Agent (opus).')).toBeTruthy()
+    expect(screen.getByText('File pins OpenCode; Default runtime is Claude Agent (opus).').getAttribute('title'))
+      .toBe('cinna-agent.json pins OpenCode; your Default runtime is Claude Agent (opus).')
     fireEvent.click(screen.getByRole('button', { name: 'Use Default' }))
     expect(resolveConflict.mock.calls[0][0]).toMatchObject({ action: 'use_default' })
     fireEvent.click(screen.getByRole('button', { name: 'More ways to settle the runtime' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Keep OpenCode' }))
     expect(resolveConflict.mock.calls[1][0]).toMatchObject({ action: 'use_file' })
+  })
+
+  it('pins the actions to the line’s end, whatever the sentence or a refusal is long', () => {
+    defaultRuntime = { engine: 'claude' }
+    resolveConflict.mockImplementation((_input: unknown, options: { onSuccess: (outcome: unknown) => void }) =>
+      options.onSuccess({ ok: false, code: 'manifest_modified', name: 'KitError', message: 'changed' }))
+    render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
+    const primary = screen.getByRole('button', { name: 'Use Default' })
+    const group = primary.parentElement!
+    expect(group.hasAttribute('data-conflict-actions')).toBe(true)
+    expect(group.className.split(' ')).toEqual(expect.arrayContaining(['ml-auto', 'shrink-0']))
+    expect(group.contains(screen.getByRole('button', { name: 'More ways to settle the runtime' }))).toBe(true)
+    // A refusal stands in for the sentence; the group is the same element, still pinned.
+    fireEvent.click(primary)
+    expect(screen.getByRole('alert').nextElementSibling).toBe(group)
+    expect(group.className.split(' ')).toContain('ml-auto')
   })
 
   it('waits while the agent’s turn runs, and says so', () => {
