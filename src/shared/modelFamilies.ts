@@ -86,6 +86,14 @@ export interface ClassifiedModel {
   snapshot: boolean
   /** The id names a preview / experimental / beta build. */
   preview: boolean
+  /**
+   * The line-up a family belongs to within its tier. Lower is preferred, and it
+   * outranks version: OpenAI's named tiers (`*-luna`, `*-terra`, `*-sol`, rank 0)
+   * are the ones to run whenever the catalogue lists them, however new a legacy
+   * `mini` / `gpt-*` / `o*` id (rank 1) is. Every other family is rank 1, so for
+   * them the order is unchanged: version, then {@link preference}.
+   */
+  rank: number
   /** Tiebreak within a tier at equal version. Lower is preferred. */
   preference: number
 }
@@ -97,6 +105,8 @@ interface FamilyRule {
   types: readonly string[]
   match: RegExp
   preference: number
+  /** See {@link ClassifiedModel.rank}. Defaults to 1. */
+  rank?: number
   /**
    * Matches anything, and therefore applies **only** to the types that declare
    * it. The "match a gateway against every rule" fallback exists because an id
@@ -186,7 +196,18 @@ const PARAMS_LARGE = /(?<![\d.])(?:[2-9]\d(?:\.\d+)?|\d{3,})b(?:[-_.:]|$)/i
  * The access-gated Anthropic tiers are classified but never auto-chosen —
  * {@link bestInTier} drops them via `isDefaultEligibleModelId`, because they are
  * listed to accounts that cannot call them. They stay reachable by picking the
- * model by hand.
+ * model by hand. OpenAI's `pro` builds get the same treatment for a different
+ * reason (cost, not access): Complex, family `pro`, so a hand pin and
+ * {@link sameFamilyFallback} still work, but never chosen for the user. Gemini's
+ * `pro` is its ordinary top tier and is chosen as before — the exclusion lives in
+ * `isDefaultEligibleModelId`, keyed on an OpenAI base, not on this rule.
+ *
+ * OpenAI's named tiers — `*-luna` Simple, `*-terra` Medium, `*-sol` Complex — sit
+ * above `nano` / `mini` / `gpt` so `gpt-5.6-luna` is not read as a plain `gpt-*`,
+ * and carry rank 0 so they beat the legacy members of their tier at any version.
+ * Within a tier the order is therefore: Simple luna > mini > nano, Medium terra >
+ * other `gpt-*`, Complex sol > o-series (`pro` never auto-chosen). Between mini
+ * and nano, version still comes first, as it always has.
  */
 const RULES: readonly FamilyRule[] = [
   { family: 'haiku', tier: 'simple', types: ['anthropic'], match: /haiku/i, preference: 0 },
@@ -197,6 +218,9 @@ const RULES: readonly FamilyRule[] = [
   { family: 'flash-lite', tier: 'simple', types: ['gemini'], match: /flash-lite/i, preference: 0 },
   { family: 'flash', tier: 'medium', types: ['gemini'], match: /flash/i, preference: 0 },
   { family: 'ultra', tier: 'complex', types: ['gemini'], match: token('ultra'), preference: 1 },
+  { family: 'luna', tier: 'simple', types: ['openai'], match: token('luna'), preference: 0, rank: 0 },
+  { family: 'terra', tier: 'medium', types: ['openai'], match: token('terra'), preference: 0, rank: 0 },
+  { family: 'sol', tier: 'complex', types: ['openai'], match: token('sol'), preference: 0, rank: 0 },
   { family: 'nano', tier: 'simple', types: ['openai'], match: token('nano'), preference: 1 },
   { family: 'mini', tier: 'simple', types: ['openai'], match: token('mini'), preference: 0 },
   { family: 'pro', tier: 'complex', types: ['openai', 'gemini'], match: token('pro'), preference: 0 },
@@ -268,6 +292,7 @@ export function classifyModel(modelId: string, providerType: string): Classified
     version: versionOf(id),
     snapshot: SNAPSHOT.test(id),
     preview: PREVIEW.test(id),
+    rank: rule.rank ?? 1,
     preference: rule.preference
   }
 }
@@ -281,11 +306,13 @@ export function classifyModel(modelId: string, providerType: string): Classified
  * membership is preview still resolves to its best preview. After that: newest,
  * then the family we would rather run at equal version, then a stable alias over
  * a pinned snapshot of it, then the id — so the answer is deterministic and a
- * test can assert it.
+ * test can assert it. Rank sits between preview and version — see
+ * {@link ClassifiedModel.rank}.
  */
 function compareClassified(a: ClassifiedModel, b: ClassifiedModel): number {
   return (
     Number(a.preview) - Number(b.preview) ||
+    a.rank - b.rank ||
     (b.version ?? -1) - (a.version ?? -1) ||
     a.preference - b.preference ||
     Number(a.snapshot) - Number(b.snapshot) ||
@@ -313,7 +340,8 @@ function classifyAll(
  * Two exclusions, both from `modelDefaults`: a non-chat model (an embedding, a
  * TTS voice) is never a runtime, and an access-gated tier is listed to accounts
  * that cannot call it — auto-selecting one produces a 404 on the agent's first
- * turn rather than an error the user can act on. Neither is hidden from the
+ * turn rather than an error the user can act on. The second also refuses OpenAI's
+ * `pro` builds, on cost: Complex with only `o3-pro` listed resolves to null. Neither is hidden from the
  * by-hand model picker; they are only excluded from being *chosen for* the user.
  */
 export function bestInTier(

@@ -40,6 +40,11 @@ const cases: [id: string, type: string, tier: WorkComplexity | null, family: str
   ['o3', 'openai', 'complex', 'o-series'],
   ['o1-pro', 'openai', 'complex', 'pro'],
   ['gpt-5-pro', 'openai', 'complex', 'pro'],
+  // OpenAI's named tiers, read before the `gpt-` catch that would file them Medium.
+  ['gpt-5.6-luna', 'openai', 'simple', 'luna'],
+  ['gpt-5.6-terra', 'openai', 'medium', 'terra'],
+  ['gpt-5.6-sol', 'openai', 'complex', 'sol'],
+  ['gpt-5.6-pro', 'openai', 'complex', 'pro'],
   // Gemini — `flash-lite` before `flash`, and `gemini` must not read as `mini`.
   ['gemini-2.0-flash-lite', 'gemini', 'simple', 'flash-lite'],
   ['gemini-2.5-flash', 'gemini', 'medium', 'flash'],
@@ -174,6 +179,72 @@ describe('bestInTier', () => {
   it('prefers mini over nano at the same version, and version over both', () => {
     expect(bestInTier('simple', catalogue('gpt-5-nano', 'gpt-5-mini'), 'openai')).toBe('gpt-5-mini')
     expect(bestInTier('simple', catalogue('gpt-5-nano', 'gpt-4o-mini'), 'openai')).toBe('gpt-5-nano')
+  })
+
+  describe('OpenAI tier order', () => {
+    // Shuffled on purpose, so the answer cannot come from catalogue order.
+    const full = catalogue(
+      'gpt-5-nano',
+      'o3',
+      'gpt-5.6-pro',
+      'gpt-5.6-luna',
+      'gpt-5.7',
+      'gpt-5.6-sol',
+      'gpt-5.7-mini',
+      'gpt-5.6-terra',
+      'o4-mini',
+      'o5'
+    )
+
+    it('Simple: luna, then mini, then nano', () => {
+      expect(bestInTier('simple', full, 'openai')).toBe('gpt-5.6-luna')
+      const noLuna = full.filter((m) => m.id !== 'gpt-5.6-luna')
+      expect(bestInTier('simple', noLuna, 'openai')).toBe('gpt-5.7-mini')
+      const nanoOnly = noLuna.filter((m) => !m.id.endsWith('-mini'))
+      expect(bestInTier('simple', nanoOnly, 'openai')).toBe('gpt-5-nano')
+    })
+
+    it('Medium: terra, then any other gpt-*', () => {
+      expect(bestInTier('medium', full, 'openai')).toBe('gpt-5.6-terra')
+      const noTerra = full.filter((m) => m.id !== 'gpt-5.6-terra')
+      expect(bestInTier('medium', noTerra, 'openai')).toBe('gpt-5.7')
+    })
+
+    it('Complex: sol, then the o-series, never pro', () => {
+      expect(bestInTier('complex', full, 'openai')).toBe('gpt-5.6-sol')
+      const noSol = full.filter((m) => m.id !== 'gpt-5.6-sol')
+      expect(bestInTier('complex', noSol, 'openai')).toBe('o5')
+      const proOnly = catalogue('gpt-5.6-pro', 'o3-pro', 'gpt-5.6')
+      expect(bestInTier('complex', proOnly, 'openai')).toBeNull()
+    })
+
+    it('ranks a named tier above a newer legacy id in the same tier', () => {
+      expect(bestInTier('simple', catalogue('gpt-6-mini', 'gpt-5.6-luna'), 'openai')).toBe(
+        'gpt-5.6-luna'
+      )
+      expect(bestInTier('complex', catalogue('o9', 'gpt-5.6-sol'), 'openai')).toBe('gpt-5.6-sol')
+    })
+
+    it('still prefers a stable legacy id over a preview named tier', () => {
+      expect(
+        bestInTier('simple', catalogue('gpt-5-mini', 'gpt-5.7-luna-preview'), 'openai')
+      ).toBe('gpt-5-mini')
+    })
+
+    it('excludes an OpenAI pro on a gateway too, but not a Gemini pro', () => {
+      const proxied = catalogue('openai/gpt-5.6-pro', 'openai/o3-pro', 'gemini-2.5-pro')
+      expect(bestInTier('complex', proxied, 'openai_compatible')).toBe('gemini-2.5-pro')
+    })
+
+    it('keeps a pinned pro reachable through its own family', () => {
+      const models = catalogue('gpt-5.6-pro', 'gpt-5.6-sol', 'o3')
+      expect(sameFamilyFallback('gpt-5.4-pro', models, 'openai')).toBe('gpt-5.6-pro')
+    })
+  })
+
+  it('still auto-chooses Gemini pro for Complex', () => {
+    const models = catalogue('gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite')
+    expect(bestInTier('complex', models, 'gemini')).toBe('gemini-2.5-pro')
   })
 
   it('returns null when the credential lists nothing in the tier', () => {

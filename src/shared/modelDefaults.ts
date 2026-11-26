@@ -20,9 +20,20 @@
  */
 const GATED_DEFAULT_MODEL = /fable|mythos/i
 
+/**
+ * OpenAI's `pro` builds (`gpt-5-pro`, `gpt-5.4-pro-2025-10-06`, `o3-pro`): callable,
+ * but priced and paced far above anything a user would expect to land on without
+ * asking — a silent default or a Complex tier resolving to one turns an ordinary
+ * agent into the most expensive model the account can reach. They stay classified
+ * (Complex, family `pro`) and selectable by hand; only being *chosen for* the user
+ * is refused. Anchored on an OpenAI base (`gpt-` / `chatgpt-` / `o<N>`) so Gemini's
+ * `gemini-2.5-pro` — Gemini's ordinary top tier — is untouched, on a gateway too.
+ */
+const OPENAI_PRO_MODEL = /(?:^|[-_/])(?:(?:chat)?gpt-[\w.-]*?|o\d+)-pro(?:[-_./]|$)/i
+
 /** True when a model id is fine to use as an auto-default. */
 export function isDefaultEligibleModelId(id: string): boolean {
-  return !GATED_DEFAULT_MODEL.test(id)
+  return !GATED_DEFAULT_MODEL.test(id) && !OPENAI_PRO_MODEL.test(id)
 }
 
 /**
@@ -43,14 +54,20 @@ export function isChatCapableModelId(id: string): boolean {
 
 /**
  * Choose an auto-default model id from a candidate list (assumed newest-first).
- * Prefers a model that is both chat-capable and generally available, then falls
- * back to any non-gated model, then the first entry. Returns null for an empty
- * list. Used for the silent default only — gated/non-chat models stay otherwise
- * selectable for accounts that want them.
+ * Prefers a model that is both chat-capable and default-eligible, then any
+ * chat-capable one, then any eligible one, then the first entry. Returns null
+ * for an empty list. Used for the silent default only — gated/pro/non-chat
+ * models stay otherwise selectable for accounts that want them.
+ *
+ * The middle step is for a list holding only ineligible chat models — an OpenAI
+ * key whose catalogue lists nothing but `*-pro` builds, an account that sees
+ * only gated tiers: returning one of those beats returning null (no default at
+ * all) and beats falling through to an embedding model the list also carries.
  */
 export function pickDefaultModelId(ids: readonly string[]): string | null {
   return (
     ids.find((id) => isChatCapableModelId(id) && isDefaultEligibleModelId(id)) ??
+    ids.find(isChatCapableModelId) ??
     ids.find(isDefaultEligibleModelId) ??
     ids[0] ??
     null
