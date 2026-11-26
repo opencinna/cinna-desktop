@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import { AlertTriangle, Globe, Loader2, X } from 'lucide-react'
 import { DIALOG_POPOVER_ATTR, SettingsButton, SettingsSwitch, useDialogChrome } from '../../../settings/SettingsLayout'
 import { unwrapIpcError } from '../../../../utils/ipcError'
+import { useLocalAgent } from '../../../../hooks/useLocalAgents'
+import { RUNTIME_CONFLICT_BUSY, useRuntimeConflict } from '../runtimeConflict'
 import { unwrapCatalogOutcome } from '../../../../../../shared/catalog'
 import type {
   LibraryAccess,
@@ -233,6 +235,37 @@ export function ErrorLine({ error }: { error: string | null }): React.JSX.Elemen
  * inside a send is what the session replaces. The same width as the field
  * step, so moving between them changes only the height (ux_rules rule 1).
  */
+/**
+ * Sharing an agent whose file disagrees with what it runs on here
+ * (`resolvedRuntime.conflict`): the file is what travels, so the people who
+ * get it run what the file says. Warns, never blocks — Share stays live — and
+ * offers the app's answer inline (Update file; Use Default runtime for a pin
+ * the app never chose). Below the controls and above the footer, so arriving
+ * with the agent's read moves nothing the user is about to click (rule 1).
+ */
+export function RuntimeConflictWarning({ agentId }: { agentId: string }): React.JSX.Element | null {
+  const { data: agent } = useLocalAgent(agentId)
+  const state = useRuntimeConflict(agent)
+  if (!state) return null
+  const { copy } = state
+  const label = copy.kind === 'choice' ? copy.primary.label : 'Use Default runtime'
+  return (
+    <div role="note" data-runtime-conflict className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
+      <AlertTriangle size={14} className="mt-[3px] shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className={DIALOG_TEXT}>{copy.text} People who get it run what the file says.</p>
+        {state.failure && <p role="alert" className="text-[13px] text-[var(--color-danger)]">{state.failure}</p>}
+      </div>
+      <button type="button" className={`${SECONDARY} shrink-0`} title={state.running ? RUNTIME_CONFLICT_BUSY : copy.primary.title}
+        aria-disabled={state.running || state.pending || undefined} aria-busy={state.pending || undefined}
+        onClick={() => state.run(copy.primary.action)}>
+        {state.pending && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
+        {label}
+      </button>
+    </div>
+  )
+}
+
 export function ShareChangesDialog({
   agentId,
   pending,
@@ -354,6 +387,7 @@ export function ShareChangesDialog({
           className={`${FIELD} resize-none`}
         />
       </label>
+      <RuntimeConflictWarning agentId={agentId} />
       <DialogFooter error={error}>
         <button type="button" onClick={onCancel} disabled={pending} className={CANCEL}>
           {SHARE_UI_TEXT.cancel}
@@ -1081,6 +1115,7 @@ export function ShareWithTeamDialog({
         emptyText={everyone ? SHARE_UI_TEXT.peopleNoOneNamed : undefined}
         everyone={{ on: everyone, onRemove: () => setEveryone(false), removeRef: removeEveryoneRef }}
       />
+      <RuntimeConflictWarning agentId={agentId} />
       <DialogFooter error={error ?? draftError}>
         <button type="button" onClick={onCancel} disabled={pending} className={CANCEL}>
           {SHARE_UI_TEXT.cancel}

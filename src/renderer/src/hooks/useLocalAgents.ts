@@ -25,6 +25,8 @@ import type {
   LocalAgentDocKind,
   LocalAgentFieldUpdate,
   RenameKitAgentInput,
+  ResolveRuntimeConflictInput,
+  RuntimeConflictOutcome,
   UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
 import type { ClaudeApproval, LocalAgentRuntimeInput } from '../../../shared/engine'
@@ -585,6 +587,25 @@ export function useSetLocalAgentRuntime() {
     onSuccess: (agent) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
+/**
+ * Answer an agent's runtime conflict (Update file, Use / Keep the file's
+ * engine, Use Default runtime). The outcome is data — `turn_in_progress`,
+ * `manifest_modified` and `no_conflict` are states the caller words — and the
+ * agent is re-read on **every** outcome, from the hook rather than the call
+ * site, so a stale notice recomputes even when the row that asked has gone.
+ */
+export function useResolveRuntimeConflict() {
+  const queryClient = useQueryClient()
+  return useMutation<RuntimeConflictOutcome, Error, ResolveRuntimeConflictInput>({
+    mutationFn: (input) => window.api.localAgents.resolveRuntimeConflict(input),
+    onSettled: (_data, _error, input) => {
+      void queryClient.invalidateQueries({ queryKey: localAgentKey(input.agentId) })
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
     }
   })
 }

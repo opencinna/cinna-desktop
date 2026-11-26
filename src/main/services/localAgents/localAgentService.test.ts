@@ -1032,6 +1032,144 @@ describe('the stored Runs-on choice', () => {
   })
 })
 
+describe('resolveRuntimeConflict', () => {
+  /** Put `runtime` in the file and, optionally, a stored choice beside it; this test machine's default is OpenCode. */
+  function setUp(runtime: Record<string, unknown> | null, runsOn: unknown = null): void {
+    const manifest = readManifest(manifestPath(agentDir))
+    if (runtime) manifest.runtime = runtime as never
+    else delete manifest.runtime
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(manifest, null, 2)}\n`)
+    desktopStateService.patch(agentDir, 'kit', { runsOn: runsOn as never })
+    localAgentService.reindexAgent(USER, agentRootRepo.getDefault(USER)!, agentDir)
+  }
+  const act = (action: 'update_file' | 'use_file' | 'use_default', stamp = currentAgent().stamps[MANIFEST]!) =>
+    localAgentService.resolveRuntimeConflict(USER, { agentId, action, stamp })
+  const fileRuntime = (): unknown => readManifest(manifestPath(agentDir)).runtime
+
+  it('update_file rewrites the file to the stored choice, keeping keys it does not own, and says what it dropped', () => {
+    setUp({ engine: 'opencode', model: 'gpt-5.5-pro', complexity: 'complex', permissions: { bash: 'ask' } }, { kind: 'engine', engine: 'claude' })
+    expect(currentAgent().resolvedRuntime.conflict?.kind).toBe('choice')
+    expect(act('update_file')).toEqual({ note: 'Dropped “gpt-5.5-pro”.' })
+    expect(fileRuntime()).toEqual({ engine: 'claude', complexity: 'complex', permissions: { bash: 'ask' } })
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'engine', engine: 'claude' })
+    expect(localAgentService.get(USER, agentId).resolvedRuntime.conflict).toBeNull()
+  })
+
+  it('update_file for a stored Default removes the engine, and the runtime block when nothing is left', () => {
+    setUp({ engine: 'claude' }, { kind: 'default' })
+    expect(act('update_file')).toEqual({ note: null })
+    expect(fileRuntime()).toBeUndefined()
+  })
+
+  it('use_file adopts the file’s outcome as the choice and writes no file — on either kind', () => {
+    setUp({ engine: 'claude', complexity: 'simple' }, { kind: 'default' })
+    const before = readFileSync(manifestPath(agentDir), 'utf8')
+    expect(act('use_file')).toEqual({ note: null })
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'engine', engine: 'claude' })
+    expect(readFileSync(manifestPath(agentDir), 'utf8')).toBe(before)
+    expect(localAgentService.get(USER, agentId).resolvedRuntime).toMatchObject({ engine: 'claude', conflict: null })
+
+    setUp({ engine: 'codex' })
+    expect(currentAgent().resolvedRuntime.conflict?.kind).toBe('unrecorded')
+    act('use_file')
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'engine', engine: 'codex' })
+  })
+
+  it('use_file names the file’s credential, and adopts an engine this build cannot run as OpenCode', () => {
+    setUp({ credential: 'Somebody’s key' }, { kind: 'engine', engine: 'claude' })
+    act('use_file')
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'credential', name: 'Somebody’s key' })
+
+    setUp({ engine: 'gemini' }, { kind: 'engine', engine: 'codex' })
+    act('use_file')
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'engine', engine: 'opencode' })
+    expect(localAgentService.get(USER, agentId).resolvedRuntime.conflict).toBeNull()
+  })
+
+  it('use_default records the Default runtime and rewrites the pin away, dropping a bare model', () => {
+    setUp({ engine: 'claude', model: 'opus', effort: 'high', complexity: 'medium' })
+    expect(act('use_default')).toEqual({ note: 'Dropped “opus”.' })
+    expect(fileRuntime()).toEqual({ effort: 'high', complexity: 'medium' })
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'default' })
+    expect(localAgentService.get(USER, agentId).resolvedRuntime).toMatchObject({ engine: 'opencode', source: 'choice', conflict: null })
+  })
+
+  it('refuses an action for the other kind, or with no conflict at all, as no_conflict', () => {
+    setUp({ engine: 'claude' })
+    expect(() => act('update_file')).toThrow(expect.objectContaining({ code: 'no_conflict' }))
+    setUp({ engine: 'claude' }, { kind: 'default' })
+    expect(() => act('use_default')).toThrow(expect.objectContaining({ code: 'no_conflict' }))
+    setUp(null)
+    expect(() => act('use_file')).toThrow(expect.objectContaining({ code: 'no_conflict' }))
+  })
+
+  it('refuses a notice drawn from a file that has since changed, and writes and records nothing', () => {
+    setUp({ engine: 'claude' })
+    const stale = currentAgent().stamps[MANIFEST]!
+    writeFileSync(manifestPath(agentDir), readFileSync(manifestPath(agentDir), 'utf8').replace('\n}', ',\n  "x_note": "edited"\n}'))
+    const before = readFileSync(manifestPath(agentDir), 'utf8')
+    for (const action of ['use_default', 'use_file'] as const) {
+      expect(() => act(action, stale)).toThrow(expect.objectContaining({ code: 'manifest_modified' }))
+    }
+    expect(readFileSync(manifestPath(agentDir), 'utf8')).toBe(before)
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toBeNull()
+  })
+
+  it('refuses while a turn holds the agent', () => {
+    setUp({ engine: 'claude' })
+    const handle = turnLock.acquireShared(agentId, 'turn')
+    try {
+      expect(() => act('use_default')).toThrow(expect.objectContaining({ code: 'turn_in_progress' }))
+      expect(fileRuntime()).toEqual({ engine: 'claude' })
+    } finally {
+      handle.release()
+    }
+  })
+
+  it('refuses an action it does not know', () => {
+    setUp({ engine: 'claude' })
+    expect(() => localAgentService.resolveRuntimeConflict(USER, { agentId, action: 'fix' as never, stamp: currentAgent().stamps[MANIFEST]! }))
+      .toThrow(expect.objectContaining({ code: 'invalid_input' }))
+  })
+
+  it('re-indexes the folder when the choice cannot be saved after the file was', () => {
+    // updateField: a Runs-on pick whose desktop.json write fails still leaves the
+    // index describing the manifest it just wrote.
+    const patch = vi.spyOn(desktopStateService, 'patch').mockImplementationOnce(() => { throw new Error('disk full') })
+    try {
+      expect(() => localAgentService.updateField(USER, {
+        agentId,
+        update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: null, runsOn: { kind: 'engine', engine: 'claude' } } },
+        expectedStamp: currentAgent().stamps[MANIFEST]!
+      })).toThrow('disk full')
+    } finally {
+      patch.mockRestore()
+    }
+    expect(agentRepo.getOwned(USER, agentId)?.driverConfig?.launcher).toBe('claude')
+  })
+})
+
+describe('refreshing agents when what they resolve against moves', () => {
+  it('re-resolves after a chat-mode edit only when the Default runtime moved, and always after a credential change', async () => {
+    const { runtimeService } = await import('./runtimeService')
+    const spy = vi.spyOn(localAgentService, 'runtimeDefaultsChanged').mockImplementation(() => undefined)
+    try {
+      const before = runtimeService.defaultRuntimeKey()
+      localAgentService.refreshIfDefaultRuntimeMoved(USER, before)
+      expect(spy).not.toHaveBeenCalled()
+      localAgentService.refreshIfDefaultRuntimeMoved(USER, `${before}|something else`)
+      expect(spy).toHaveBeenCalledTimes(1)
+      localAgentService.credentialsChanged(USER)
+      expect(spy).toHaveBeenCalledTimes(2)
+      // Never fails the edit the user made.
+      spy.mockImplementation(() => { throw new Error('scan failed') })
+      expect(() => localAgentService.credentialsChanged(USER)).not.toThrow()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
 describe('openPath', () => {
   it('refuses a path that escapes the agent folder', () => {
     expect(() =>

@@ -319,6 +319,13 @@ export type LocalAgentErrorCode =
    * commands, schedules) can reach it. See `vault/isVaultAgent.ts`.
    */
   | 'vault_agent'
+  /**
+   * A runtime-conflict action (`resolveRuntimeConflict`) found no conflict of
+   * its kind: the file and the app already agree, or the other kind of
+   * conflict is the one on record. The notice is stale; the renderer
+   * re-reads the agent rather than reporting a failure.
+   */
+  | 'no_conflict'
 
 /**
  * The local developer tooling around an agent folder: detecting installed

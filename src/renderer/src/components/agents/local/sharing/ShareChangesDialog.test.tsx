@@ -1,4 +1,6 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render as renderPlain, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactElement, ReactNode } from 'react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,8 +10,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * Finish — and the Discard confirm, which cannot be dismissed while it runs.
  */
 
-const { DiscardAdoptionDialog, ShareChangesDialog } = await import('./ShareDialogs')
+const { DiscardAdoptionDialog, ShareChangesDialog, ShareWithTeamDialog } = await import('./ShareDialogs')
 const { SHARE_UI_TEXT } = await import('../../../../utils/shareText')
+
+/** The dialogs read the agent (its runtime-conflict warning) through the query cache. */
+function render(element: ReactElement): ReturnType<typeof renderPlain> {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return renderPlain(element, { wrapper: ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children) })
+}
 
 const ok = <T,>(value: T) => ({ success: true as const, value })
 
@@ -135,3 +143,63 @@ describe('DiscardAdoptionDialog', () => {
     expect(onCancel).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * Sharing an agent whose file disagrees with what it runs on here: the file
+ * is what travels. A warning with the app's answer inline; Share stays live.
+ */
+describe('the runtime-conflict warning in the share dialogs', () => {
+  const conflictAgent = (kind: 'choice' | 'unrecorded' | null) => ({
+    ok: true,
+    value: {
+      id: 'folder:alpha', kind: 'kit', stamps: { 'cinna-agent.json': { size: 1, mtimeMs: 1, hash: 'h' } },
+      resolvedRuntime: {
+        engine: 'claude', credentialId: null, source: 'choice', choice: kind === 'choice' ? { kind: 'default' } : null,
+        conflict: kind && {
+          kind,
+          file: { engine: 'opencode', credentialName: 'Managed OpenAI', modelId: null },
+          app: { engine: 'claude', credentialName: null, modelId: null }
+        }
+      }
+    }
+  })
+  let resolveConflict: ReturnType<typeof vi.fn>
+  const api = (kind: 'choice' | 'unrecorded' | null): void => {
+    resolveConflict = vi.fn().mockResolvedValue({ ok: true })
+    ;(window as unknown as { api: unknown }).api = {
+      sharing: { draftMessage, shareWithTeamDraft: async () => ({ success: true, value: { name: 'Alpha' } }) },
+      localAgents: { get: async () => conflictAgent(kind), resolveRuntimeConflict: resolveConflict },
+      providers: { listModels: async () => [] },
+      agentSessions: { active: async () => ({ ok: true, sessions: [] }), onChanged: () => () => {} },
+      taskDispatch: { onChanged: () => () => {} },
+      chat: { onTitleUpdated: () => () => {} },
+      engine: { modelCatalog: async () => ({ engine: 'claude', models: [], source: 'unavailable', updatedAt: null }) }
+    }
+  }
+  const changes = () => createElement(ShareChangesDialog, { agentId: 'folder:alpha', pending: false, error: null, onShare: vi.fn(), onCancel: vi.fn() })
+
+  it('warns on Share changes with Update file inline, and leaves Share live', async () => {
+    api('choice')
+    render(changes())
+    expect(await screen.findByText(/cinna-agent\.json asks for OpenCode; this agent runs on Claude Agent\. People who get it run what the file says\./)).toBeTruthy()
+    expect((screen.getByRole('button', { name: SHARE_UI_TEXT.share }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Update file' }))
+    await waitFor(() => expect(resolveConflict).toHaveBeenCalledWith({ agentId: 'folder:alpha', action: 'update_file', stamp: { size: 1, mtimeMs: 1, hash: 'h' } }))
+  })
+
+  it('offers Use Default runtime for a pin the app never chose, on Share with the team too', async () => {
+    api('unrecorded')
+    render(createElement(ShareWithTeamDialog, { agentId: 'folder:alpha', pending: false, error: null, onShare: vi.fn(), onCancel: vi.fn() }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use Default runtime' }))
+    await waitFor(() => expect(resolveConflict).toHaveBeenCalledWith(expect.objectContaining({ action: 'use_default' })))
+  })
+
+  it('says nothing when the file and the app agree', async () => {
+    api(null)
+    render(changes())
+    await waitFor(() => expect(screen.getByRole('button', { name: SHARE_UI_TEXT.share })).toBeTruthy())
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(document.querySelector('[data-runtime-conflict]')).toBeNull()
+  })
+})
+

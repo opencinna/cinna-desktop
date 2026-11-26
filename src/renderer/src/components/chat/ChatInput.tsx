@@ -1256,7 +1256,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // The readiness answer, and what the folder agent's own state adds to it —
   // findings, missing credentials, its AI credential — with Finish setup
   // owned here, so a dialog opened from the panel outlives nothing it needs.
-  const { notices: readinessNotices, dialog: finishSetupDialog } = useComposerNotices(directTarget, readiness, readinessReasonId, draftKey)
+  const { notices: readinessNotices, dialog: finishSetupDialog } = useComposerNotices(directTarget, readiness, readinessReasonId, draftKey, isStreaming)
   // Only on the new-chat screen, before the session exists: each picked agent
   // already running a session elsewhere gets a warning row, after the
   // readiness rows. It never blocks Send.

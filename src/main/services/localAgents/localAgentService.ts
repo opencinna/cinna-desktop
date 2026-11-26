@@ -70,6 +70,7 @@ import {
   isFolderAgentId,
   LOCAL_AGENT_CHANGED_CHANNEL,
   type LocalAgentChangedPayload,
+  type ResolveRuntimeConflictInput,
   LOCAL_AGENT_DOC_PATHS,
   LOCAL_AGENT_PROMPT_PATHS,
   type AddAgentFolderInput,
@@ -95,7 +96,7 @@ import {
   slugifyAgentName,
   type UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
-import { coerceRunsOnChoice, isClaudeApproval, type LocalAgentRuntimeInput, type RunsOnChoice } from '../../../shared/engine'
+import { coerceRunsOnChoice, isClaudeApproval, isEngineLoginId, type LocalAgentRuntimeInput, type RunsOnChoice } from '../../../shared/engine'
 import { allowsAuto, type HandoverIgnoreCheck } from '../../../shared/handovers'
 import { handoverGit } from '../handoverGit'
 import { desktopStatePath, desktopStateService, emptyDesktopState } from './desktopStateService'
@@ -121,7 +122,7 @@ import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
 import { agentUploadsDir } from '../agentUploads'
 import { runtimeService } from './runtimeService'
-import { resolveVaultRunsOn } from './runsOn'
+import { resolveVaultRunsOn, runtimeForChoice } from './runsOn'
 import { publishEvent } from '../../host/events'
 import { permissionGrantService, type StoredPermissionGrant } from './permissionGrantService'
 
@@ -839,6 +840,113 @@ export const localAgentService = {
     }
   },
 
+  /**
+   * The credential list changed (a credential added, removed, switched on or
+   * off, or given a key; an account sync). Which row a manifest's credential
+   * names, and what the Default runtime falls back to, are both read off it in
+   * the cached scan, so every agent is resolved again. Never throws: the
+   * credential change the user made is saved either way.
+   */
+  credentialsChanged(userId: string): void {
+    try {
+      this.runtimeDefaultsChanged(userId)
+    } catch (err) {
+      logger.warn('could not refresh agents after the credentials changed', { error: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  /**
+   * {@link runtimeDefaultsChanged}, only when the Default runtime's credential
+   * or model actually moved since `before` (`runtimeService.defaultRuntimeKey`).
+   * For the default chat mode's edits, which usually move nothing an agent
+   * runs on. Never throws: the edit the user made is saved either way.
+   */
+  refreshIfDefaultRuntimeMoved(userId: string, before: string): void {
+    try {
+      if (runtimeService.defaultRuntimeKey() !== before) this.runtimeDefaultsChanged(userId)
+    } catch (err) {
+      logger.warn('could not refresh agents after the default chat mode changed', { error: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  /**
+   * Answer a kit agent's runtime conflict (`LocalAgentResolvedRuntime.conflict`)
+   * — the one operation behind the panel's line, the composer's notice and the
+   * publish warning. See `RuntimeConflictAction` for the three answers.
+   *
+   * Recomputed here from the file as it is now, never trusted from the
+   * renderer: under the turn lock (`turn_in_progress` while a turn runs), and
+   * against the stamp the notice was drawn from (`manifest_modified` when the
+   * file moved — the notice stays and is recomputed, rule 6). `no_conflict`
+   * when there is none of that kind any more. A file write keeps every key it
+   * does not own (`runtimeForChoice`); a recorded choice is written after the
+   * file, so a refused write records nothing.
+   *
+   * @returns what the file lost, for the line under the action
+   */
+  resolveRuntimeConflict(userId: string, input: ResolveRuntimeConflictInput): { note: string | null } {
+    const action = input?.action
+    if (action !== 'update_file' && action !== 'use_file' && action !== 'use_default') {
+      throw new LocalAgentError('invalid_input', 'That is not a way to settle this agent’s runtime.')
+    }
+    const expected = input?.stamp
+    if (!expected || typeof expected.mtimeMs !== 'number' || typeof expected.size !== 'number' || typeof expected.hash !== 'string') {
+      throw new LocalAgentError('invalid_input', 'This notice is out of date. Reload the agent and try again.')
+    }
+    const { root, agentDir } = this.locate(userId, input.agentId)
+    let note: string | null = null
+    // As `updateField`: a choice write failing after the file's is returned once the folder is re-indexed.
+    let choiceFailure: unknown = null
+    const handle = turnLock.acquire(input.agentId, 'editor')
+    try {
+      const path = manifestPath(agentDir)
+      const { manifest } = readWithStamp(path)
+      if (!stampsMatch(readStamp(path), expected)) {
+        throw new KitError('manifest_modified', `${MANIFEST_FILE} changed on disk since it was read. Reload before saving.`, path)
+      }
+      const file = manifest.runtime && typeof manifest.runtime === 'object' ? manifest.runtime : null
+      const stored = desktopStateService.read(agentDir, 'kit').runsOn ?? null
+      const conflict = runtimeService.resolveRunsOn(file, stored).resolved.conflict
+      const wanted = action === 'update_file' ? 'choice' : action === 'use_default' ? 'unrecorded' : conflict?.kind
+      if (!conflict || conflict.kind !== wanted) {
+        throw new LocalAgentError('no_conflict', 'The file and the app already agree about what this agent runs on.')
+      }
+      if (action === 'use_file') {
+        // The file's own outcome, as a choice: its credential when it runs on
+        // OpenCode on one it names, else its engine (an engine this build
+        // cannot run is OpenCode, which is what the outcome already says).
+        const credential = typeof file?.credential === 'string' ? file.credential.trim() : ''
+        const choice: RunsOnChoice = !isEngineLoginId(conflict.file.engine) && credential !== ''
+          ? { kind: 'credential', name: credential }
+          : { kind: 'engine', engine: conflict.file.engine }
+        desktopStateService.patch(agentDir, 'kit', { runsOn: choice })
+      } else {
+        const choice: RunsOnChoice = action === 'use_default' ? { kind: 'default' } : (stored as RunsOnChoice)
+        const next = runtimeForChoice(file, choice)
+        const model = typeof file?.model === 'string' ? file.model.trim() : ''
+        if (model !== '' && next?.model === undefined) note = `Dropped “${model}”.`
+        if (next) manifest.runtime = next
+        else delete manifest.runtime
+        writeIfUnchanged(path, manifest, expected)
+        if (action === 'use_default') {
+          try {
+            desktopStateService.patch(agentDir, 'kit', { runsOn: choice })
+          } catch (err) {
+            choiceFailure = err
+          }
+        }
+      }
+    } finally {
+      handle.release()
+    }
+    scannerService.markRootDirty(root.id)
+    this.reindexAgent(userId, root, agentDir)
+    publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId: root.id, agentId: input.agentId, reason: 'rescan' } satisfies LocalAgentChangedPayload, 'all')
+    if (choiceFailure !== null) throw choiceFailure
+    logger.info('runtime conflict resolved', { agentId: input.agentId, action })
+    return { note }
+  },
+
   /** Scan one root, or every root when `rootId` is omitted. */
   rescan(userId: string, rootId?: string): RescanResult[] {
     const roots = rootId
@@ -937,6 +1045,9 @@ export const localAgentService = {
     let stampedId: string | null = null
     // Set by a Runs-on pick: the choice recorded once the manifest write lands.
     let runsOn: RunsOnChoice | null = null
+    // The choice's own write failing after the manifest's landed: the folder
+    // still changed, so it is re-indexed before the failure is returned.
+    let choiceFailure: unknown = null
     const handle = turnLock.acquire(input.agentId, 'editor')
     try {
       if (update.field === 'prompt') {
@@ -1061,7 +1172,13 @@ export const localAgentService = {
         // a refused write (stale stamp, a turn running) records no choice, so
         // the app can never claim a pick the file did not take. Then the
         // choice, which from now on outranks what the file says.
-        if (runsOn !== null) desktopStateService.patch(agentDir, 'kit', { runsOn })
+        if (runsOn !== null) {
+          try {
+            desktopStateService.patch(agentDir, 'kit', { runsOn })
+          } catch (err) {
+            choiceFailure = err
+          }
+        }
       }
     } finally {
       handle.release()
@@ -1089,6 +1206,7 @@ export const localAgentService = {
     scannerService.markRootDirty(root.id)
     const dto = this.reindexAgent(userId, root, agentDir) ??
       scannerService.scanAgentFolder(agentDir, root)
+    if (choiceFailure !== null) throw choiceFailure
     logger.info('local agent field saved', {
       agentId: input.agentId,
       field: update.field === 'prompt' ? `prompt:${update.prompt}` : update.field

@@ -706,6 +706,36 @@ export interface LocalAgentRuntimeConflict {
   app: LocalAgentRuntimeSide
 }
 
+/**
+ * An answer to a {@link LocalAgentRuntimeConflict}, from the panel's status
+ * line, the composer's notice or the publish warning
+ * (`local-agent:resolve-runtime-conflict`).
+ *
+ * - `update_file` (a `choice` conflict) — rewrite the file's `runtime` to the
+ *   stored choice (`runtimeForChoice`). The choice is unchanged.
+ * - `use_file` (either kind) — record the file's own outcome as the choice:
+ *   "Use OpenCode" / "Keep OpenCode". No file write.
+ * - `use_default` (an `unrecorded` conflict) — record the Default runtime
+ *   and rewrite the file to follow it.
+ */
+export type RuntimeConflictAction = 'update_file' | 'use_file' | 'use_default'
+
+export interface ResolveRuntimeConflictInput {
+  agentId: string
+  action: RuntimeConflictAction
+  /** The manifest stamp the notice was computed from; a changed file is refused. */
+  stamp: FileStamp
+}
+
+/**
+ * The outcome, as data (a thrown code never reaches the renderer):
+ * `turn_in_progress`, `manifest_modified`, `no_conflict`, `invalid_input`,
+ * `not_found`, `write_failed`. `note` says what the file lost ("Dropped “gpt-5.5-pro”.").
+ */
+export type RuntimeConflictOutcome =
+  | { ok: true; note?: string }
+  | { ok: false; code: string; name: string; message: string }
+
 /** {@link LocalAgentDto.resolvedRuntime}. */
 export interface LocalAgentResolvedRuntime {
   /** The engine a turn starts on. A vault agent's is its vault engine. */

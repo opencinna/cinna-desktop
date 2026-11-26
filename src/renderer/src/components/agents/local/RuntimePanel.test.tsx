@@ -60,6 +60,7 @@ const MODELS = [
  * back would make every one of those assertions vacuous.
  */
 let writeFails = false
+const resolveConflict = vi.fn()
 const save = vi.fn(
   (_vars: unknown, options?: { onSuccess?: () => void; onError?: (e: Error) => void }) =>
     void (writeFails
@@ -91,8 +92,12 @@ const saveBare = vi.fn(
 vi.mock('../../../hooks/useLocalAgents', () => ({
   useOpenAgentCredentials: () => ({ mutate: openCredentials }),
   useSetLocalAgentRuntime: () => ({ mutate: save, isPending: false }),
-  useSetBareAgentRuntime: () => ({ mutate: saveBare, isPending: false })
+  useSetBareAgentRuntime: () => ({ mutate: saveBare, isPending: false }),
+  useResolveRuntimeConflict: () => ({ mutate: resolveConflict, isPending: false })
 }))
+/** Main's running sessions, for whether a conflict's answer must wait for a turn. */
+let activeSessions: { agentId: string; chatId: string; title: string | null }[] = []
+vi.mock('../../../hooks/useAgentSessions', () => ({ useAgentActiveSessions: () => ({ data: activeSessions }) }))
 vi.mock('../../../hooks/useChatModes', () => ({ useDefaultChatMode: () => ({ data: defaultMode }) }))
 vi.mock('../../../hooks/useModels', () => ({
   useModels: () => ({ data: models, isError: modelsFailed })
@@ -276,7 +281,7 @@ const { useUIStore } = await import('../../../stores/ui.store')
  * resolver (`runsOn.ts`) is unit-tested beside it; a test here that needs a
  * stored choice or a conflict passes `resolved` itself.
  */
-function resolvedFor(runtime: Record<string, string> | null, bare = false): LocalAgentResolvedRuntime {
+function resolvedFor(runtime: Record<string, string> | null, bare = false, unrecorded = false): LocalAgentResolvedRuntime {
   const machine = (defaultRuntime?.engine ?? 'opencode') as AgentEngine
   const engine = effectiveEngine(runtime, machine)
   const side = { engine, credentialName: null, modelId: null }
@@ -285,7 +290,9 @@ function resolvedFor(runtime: Record<string, string> | null, bare = false): Loca
     credentialId: null,
     source: runtime && (runtime.engine || runtime.credential || runtime.model) ? (bare ? 'choice' : 'file') : 'default',
     choice: null,
-    conflict: !bare && engine !== machine ? { kind: 'unrecorded', file: side, app: { ...side, engine: machine } } : null
+    // Only where a test asks for it: the suites written before conflicts
+    // existed are about the line a healthy agent shows.
+    conflict: unrecorded && !bare && engine !== machine ? { kind: 'unrecorded', file: side, app: { ...side, engine: machine } } : null
   }
 }
 
@@ -297,7 +304,7 @@ function resolvedFor(runtime: Record<string, string> | null, bare = false): Loca
  */
 function agent(
   runtime: Record<string, string> | null,
-  options: { effective?: Record<string, string> | null; resolved?: LocalAgentResolvedRuntime; runsOn?: RunsOnChoice } = {}
+  options: { effective?: Record<string, string> | null; resolved?: LocalAgentResolvedRuntime; runsOn?: RunsOnChoice; unrecorded?: boolean } = {}
 ): LocalAgentDto {
   return {
     id: 'folder:a',
@@ -308,7 +315,7 @@ function agent(
     manifest: { runtime },
     runtime: options.effective !== undefined ? options.effective : runtime,
     get resolvedRuntime(): LocalAgentResolvedRuntime {
-      return options.resolved ?? resolvedFor(options.effective !== undefined ? options.effective : runtime)
+      return options.resolved ?? resolvedFor(options.effective !== undefined ? options.effective : runtime, false, options.unrecorded === true)
     }
   } as unknown as LocalAgentDto
 }
@@ -354,6 +361,8 @@ beforeEach(() => {
   loginPhase = null
   loginFailure = null
   save.mockClear()
+  resolveConflict.mockReset()
+  activeSessions = []
   saveBare.mockClear()
   setSetting.mockClear()
   openCredentials.mockReset()
@@ -1703,7 +1712,7 @@ describe('Runs on against the file (stored choice)', () => {
 
   it('shows an OpenCode pin with no credential as OpenCode, not as the Default runtime', () => {
     defaultRuntime = { engine: 'claude' }
-    render(<RuntimePanel agent={agent({ engine: 'opencode', complexity: 'complex' })} />)
+    render(<RuntimePanel agent={agent({ engine: 'opencode', complexity: 'complex' }, { unrecorded: true })} />)
     const runsOn = screen.getByLabelText('Runs on') as HTMLSelectElement
     expect(runsOn.value).not.toBe('')
     expect(runsOn.selectedOptions[0]?.textContent).toBe('OpenCode (Anthropic)')
@@ -1712,14 +1721,14 @@ describe('Runs on against the file (stored choice)', () => {
 
   it('removes the engine and records the Default choice when Default runtime is picked', () => {
     defaultRuntime = { engine: 'claude' }
-    render(<RuntimePanel agent={agent({ engine: 'opencode', complexity: 'complex' })} />)
+    render(<RuntimePanel agent={agent({ engine: 'opencode', complexity: 'complex' }, { unrecorded: true })} />)
     fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: '' } })
     expect(sent()).toMatchObject({ engine: null, credential: null, complexity: 'complex', runsOn: { kind: 'default' } })
   })
 
   it('drops a bare model, with a note, when Default runtime is not OpenCode', () => {
     defaultRuntime = { engine: 'claude' }
-    render(<RuntimePanel agent={agent({ model: 'gpt-5' })} />)
+    render(<RuntimePanel agent={agent({ model: 'gpt-5' }, { unrecorded: true })} />)
     const runsOn = screen.getByLabelText('Runs on') as HTMLSelectElement
     expect(runsOn.selectedOptions[0]?.textContent).toBe('OpenCode (Anthropic)')
     fireEvent.change(runsOn, { target: { value: '' } })
@@ -1780,6 +1789,100 @@ describe('Runs on against the file (stored choice)', () => {
       resolved: { engine: 'opencode', credentialId: null, source: 'choice', choice: { kind: 'engine', engine: 'opencode' }, conflict: null }
     })} />)
     expect((screen.getByLabelText('Runs on') as HTMLSelectElement).selectedOptions[0]?.textContent).toBe('OpenCode (Anthropic)')
+  })
+})
+
+describe('the conflict line', () => {
+  const CHOICE = {
+    engine: 'claude', credentialId: null, source: 'choice', choice: { kind: 'default' },
+    conflict: {
+      kind: 'choice',
+      file: { engine: 'opencode', credentialName: 'Anthropic', modelId: 'claude-sonnet-4-5' },
+      app: { engine: 'claude', credentialName: null, modelId: 'opus' }
+    }
+  } as const
+  const UNRECORDED = {
+    engine: 'opencode', credentialId: null, source: 'file', choice: null,
+    conflict: {
+      kind: 'unrecorded',
+      file: { engine: 'opencode', credentialName: 'Anthropic', modelId: null },
+      app: { engine: 'claude', credentialName: null, modelId: 'opus' }
+    }
+  } as const
+  const conflictAgent = (resolved: typeof CHOICE | typeof UNRECORDED, file: Record<string, string>, effective: Record<string, string> | null = file) =>
+    agent(file, { effective, resolved: resolved as unknown as LocalAgentResolvedRuntime })
+
+  it('says what the file asks for and what runs, naming the models, with Update file and Use OpenCode', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', model: 'claude-sonnet-4-5', complexity: 'complex' }, { complexity: 'complex' })} />)
+    expect(screen.getByText('cinna-agent.json asks for OpenCode (Claude Sonnet 4.5); this agent runs on Claude Agent (opus).')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Update file' }))
+    expect(resolveConflict.mock.calls[0][0]).toEqual({ agentId: 'folder:a', action: 'update_file', stamp: { size: 1, mtimeMs: 1 } })
+    fireEvent.click(screen.getByRole('button', { name: 'More ways to settle the runtime' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Use OpenCode' }))
+    expect(resolveConflict.mock.calls[1][0]).toMatchObject({ action: 'use_file' })
+  })
+
+  it('offers Use Default and Keep OpenCode for a pin the app never chose', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
+    expect(screen.getByText('cinna-agent.json pins OpenCode; your Default runtime is Claude Agent (opus).')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Use Default' }))
+    expect(resolveConflict.mock.calls[0][0]).toMatchObject({ action: 'use_default' })
+    fireEvent.click(screen.getByRole('button', { name: 'More ways to settle the runtime' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Keep OpenCode' }))
+    expect(resolveConflict.mock.calls[1][0]).toMatchObject({ action: 'use_file' })
+  })
+
+  it('waits while the agent’s turn runs, and says so', () => {
+    defaultRuntime = { engine: 'claude' }
+    activeSessions = [{ agentId: 'folder:a', chatId: 'c1', title: null }]
+    render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
+    const button = screen.getByRole('button', { name: 'Use Default' })
+    expect(button.getAttribute('aria-disabled')).toBe('true')
+    expect(button.getAttribute('title')).toBe('Wait for this agent’s turn to finish.')
+    fireEvent.click(button)
+    expect(resolveConflict).not.toHaveBeenCalled()
+  })
+
+  it('words a refusal in place of the sentence, and a stale notice as a change to look at', () => {
+    defaultRuntime = { engine: 'claude' }
+    resolveConflict.mockImplementation((_input: unknown, options: { onSuccess: (outcome: unknown) => void }) =>
+      options.onSuccess({ ok: false, code: 'manifest_modified', name: 'KitError', message: 'changed' }))
+    render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Use Default' }))
+    expect(screen.getByRole('alert').textContent).toBe('cinna-agent.json just changed — check this again.')
+  })
+
+  it('shows what the file lost as the panel’s note once the answer lands', () => {
+    defaultRuntime = { engine: 'claude' }
+    resolveConflict.mockImplementation((_input: unknown, options: { onSuccess: (outcome: unknown) => void }) =>
+      options.onSuccess({ ok: true, note: 'Dropped “claude-sonnet-4-5”.' }))
+    render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', model: 'claude-sonnet-4-5' }, null)} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Update file' }))
+    expect(screen.getByText('Dropped “claude-sonnet-4-5”.')).toBeTruthy()
+  })
+
+  it('locks the model and effort while a stored choice disagrees, and leaves complexity editable', () => {
+    // The running side is Claude with its list known, so nothing but the conflict disables these.
+    defaultRuntime = { engine: 'claude' }
+    advanced = true
+    cliCatalogs = { ...cliCatalogs, claude: CLAUDE_CATALOG }
+    render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', model: 'opus', effort: 'high' }, null)} />)
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Effort') as HTMLSelectElement).disabled).toBe(true)
+    expect((screen.getByRole('checkbox', { name: /Advanced/ }) as HTMLInputElement).disabled).toBe(true)
+    cleanup()
+    advanced = false
+    render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', complexity: 'simple' }, { complexity: 'simple' })} />)
+    expect((screen.getByLabelText('Work complexity') as HTMLSelectElement).disabled).toBe(false)
+  })
+
+  it('gives the line to an engine that cannot run, over the conflict', () => {
+    defaultRuntime = { engine: 'claude' }
+    claudeBinary = { state: 'failed', error: 'Could not download Claude Code.' }
+    render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode' }, null)} />)
+    expect(screen.queryByRole('button', { name: 'Update file' })).toBeNull()
   })
 })
 

@@ -36,6 +36,8 @@ import type {
   OpenLocalAgentPathInput,
   RenameKitAgentInput,
   RescanResult,
+  ResolveRuntimeConflictInput,
+  RuntimeConflictOutcome,
   UpdateLocalAgentFieldInput
 } from '../../shared/localAgents'
 import type { LocalAgentOutcome } from '../../shared/localAgents'
@@ -266,6 +268,21 @@ export function registerLocalAgentHandlers(): void {
        * on the turn lock used to buy.
        */
       return outcome
+    }
+  )
+
+  /**
+   * The runtime-conflict notice's actions. An adapter: the conflict is
+   * recomputed, refused and written in `localAgentService`; failures come back
+   * as data because a thrown code never reaches the renderer.
+   */
+  ipcHandle(
+    'local-agent:resolve-runtime-conflict',
+    (_event, input: ResolveRuntimeConflictInput): RuntimeConflictOutcome => {
+      userActivation.requireActivated()
+      const outcome = withCode(() => localAgentService.resolveRuntimeConflict(getSettingsScopeUserId(), input))
+      if (!outcome.ok) return outcome
+      return outcome.value.note ? { ok: true, note: outcome.value.note } : { ok: true }
     }
   )
 

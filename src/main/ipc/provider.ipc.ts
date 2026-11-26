@@ -5,6 +5,7 @@ import { ollamaService } from '../services/ollamaService'
 import { runAccountConfigSyncOnce } from '../services/account-config-sync'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
+import { localAgentService } from '../services/localAgents/localAgentService'
 
 export function registerProviderHandlers(): void {
   ipcHandle('provider:list', async () => {
@@ -17,6 +18,8 @@ export function registerProviderHandlers(): void {
   ipcHandle('provider:sync-account-config', async () => {
     userActivation.requireActivated()
     await runAccountConfigSyncOnce(getProfileScopeUserId())
+    // Managed credentials and modes may have moved what agents resolve to.
+    localAgentService.credentialsChanged(getSettingsScopeUserId())
     return { success: true }
   })
 
@@ -37,6 +40,8 @@ export function registerProviderHandlers(): void {
     ) => {
       userActivation.requireActivated()
       const { id } = await providerService.upsert(getSettingsScopeUserId(), data)
+      // A folder agent's credential and its runtime conflict are resolved against this list.
+      localAgentService.credentialsChanged(getSettingsScopeUserId())
       return { id, success: true }
     }
   )
@@ -44,6 +49,7 @@ export function registerProviderHandlers(): void {
   ipcHandle('provider:delete', async (_event, providerId: string) => {
     userActivation.requireActivated()
     providerService.delete(getSettingsScopeUserId(), providerId)
+    localAgentService.credentialsChanged(getSettingsScopeUserId())
     return { success: true }
   })
 

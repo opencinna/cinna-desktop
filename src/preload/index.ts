@@ -43,6 +43,8 @@ import type {
   ReadLocalAgentDocInput,
   RenameKitAgentInput,
   RescanResult,
+  ResolveRuntimeConflictInput,
+  RuntimeConflictOutcome,
   UpdateLocalAgentFieldInput
 } from '../shared/localAgents'
 import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
@@ -2390,6 +2392,13 @@ const api = {
       input: UpdateLocalAgentFieldInput
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:update-field', input),
+    /**
+     * Answer the agent's runtime conflict — Update file, Use / Keep the file's
+     * engine, Use Default runtime. An outcome, so `turn_in_progress`,
+     * `manifest_modified` and `no_conflict` survive the crossing.
+     */
+    resolveRuntimeConflict: (input: ResolveRuntimeConflictInput): Promise<RuntimeConflictOutcome> =>
+      ipcRenderer.invoke('local-agent:resolve-runtime-conflict', input),
     /**
      * Move the folder to the Trash and forget the agent. An outcome, so
      * `turn_in_progress` survives the crossing — see `get` above.

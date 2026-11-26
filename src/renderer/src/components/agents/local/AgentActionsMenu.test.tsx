@@ -38,8 +38,13 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useRenameKitAgent: () => ({ mutate: vi.fn(), isPending: false }),
   useRenameLocalAgent: () => ({ mutate: vi.fn(), isPending: false }),
   useRescanLocalAgents: () => ({ mutate: vi.fn(), isPending: false }),
-  useStampAgentIdentity: () => ({ mutate: vi.fn(), isPending: false })
+  useStampAgentIdentity: () => ({ mutate: vi.fn(), isPending: false }),
+  // The share dialog's runtime-conflict warning: no conflict here.
+  useLocalAgent: () => ({ data: undefined }),
+  useResolveRuntimeConflict: () => ({ mutate: vi.fn(), isPending: false })
 }))
+// No runtime conflict in these agents; the warning's own tests are ShareChangesDialog's.
+vi.mock('./runtimeConflict', () => ({ useRuntimeConflict: () => null, RUNTIME_CONFLICT_BUSY: '' }))
 vi.mock('../../../hooks/useLocalTools', () => ({
   useOpenIn: () => ({ mutate: vi.fn() })
 }))

@@ -63,6 +63,7 @@ import {
   opencodeVersionLabel
 } from '../../../../../shared/engine'
 import { FIELD, FIELD_IN_ROW, LABEL, LINE_BUTTON, SUMMARY_BADGE } from './fieldClasses'
+import { RuntimeConflictLine, useRuntimeConflict } from './runtimeConflict'
 import { useRuntimeModelCatalog, useRuntimeModelCatalogRefresh } from '../../../hooks/useRuntimeModelCatalog'
 import { useUIStore } from '../../../stores/ui.store'
 import {
@@ -212,7 +213,7 @@ const DANGER = 'text-[10px] text-[var(--color-danger)]'
  * `account` is the unavailable account the AI credential comes from, whose
  * action (the composer's) follows the text.
  */
-type StatusLine = { text: string; tone: string; login?: EngineLoginId; title?: string; refresh?: true; account?: UnavailableCredentialAccount }
+type StatusLine = { text: string; tone: string; login?: EngineLoginId; title?: string; refresh?: true; account?: UnavailableCredentialAccount; conflict?: true }
 
 /** The panel's line button, as {@link UnavailableAccountButton} draws the account's action on the status line. */
 function AccountLineButton({ children, ...props }: AccountButtonProps): React.JSX.Element {
@@ -695,6 +696,15 @@ export function RuntimePanel({
    */
   const fileOnCli = isEngineLoginId(runsOn.conflict?.file.engine ?? runsOn.engine)
   /**
+   * **A model or an effort cannot be chosen while a stored choice disagrees
+   * with the file.** The turn runs the choice's block, which drops the file's
+   * model (it belonged to the other engine), so a pick here would land in the
+   * file and never run — on the wrong engine's terms, too. The status line
+   * says why and offers the answer; complexity stays editable, because the
+   * effective block keeps it.
+   */
+  const modelLocked = runsOn.conflict?.kind === 'choice'
+  /**
    * The Claude Code this agent would run on, or undefined — **the pinned CLI's
    * state, not PATH detection**, on exactly `codexTool`'s terms below: Cinna
    * verifies its own Claude Code (or runs the explicit path), so it is *here* in
@@ -949,6 +959,14 @@ export function RuntimePanel({
   const aiAccount = aiAccounts.data?.accounts.find((account) => account.aiCredential) ?? null
   const aiAccountsAnswered = aiAccounts.data !== undefined || aiAccounts.isError
   const { actions: accountActions, prompt: accountPrompt } = useUnavailableAccountActions()
+  /**
+   * The file and the app disagree about what this agent runs on (resolved in
+   * main). Told on the reserved line with its two answers; what the answer
+   * dropped from the file comes back as this panel's note.
+   */
+  const conflict = useRuntimeConflict(bare ? null : agent, {
+    onNote: (text) => note(text, { model: null, complexity: declaredComplexity })
+  })
 
   const modelChoices = useMemo(
     () => (models ?? []).filter((model) => model.providerId === effectiveProvider?.id),
@@ -1244,7 +1262,7 @@ export function RuntimePanel({
     return null
   }
 
-  const status = ((): StatusLine | null => {
+  const baseStatus = ((): StatusLine | null => {
     if (error) return { text: error, tone: DANGER }
     // What the user just clicked outranks a note about a write before it.
     if (secrets) return secrets
@@ -1497,6 +1515,20 @@ export function RuntimePanel({
     if (modelChoices.length === 0) return toned(NO_CATALOGUE)
     return null
   })()
+  /**
+   * **A runtime conflict owns the line** over everything about which model or
+   * credential: those sentences describe the running side, while the pickers
+   * show the file's complexity and model, and the two disagree exactly when
+   * this is set. Not over what the user just did (a failed write, a note), and
+   * not over a line that blocks the agent or carries its own action (an
+   * engine that cannot run, a sign-in, an account) — those are the more urgent
+   * truth, and the conflict returns once they are settled.
+   */
+  const lineIsTransient = !!error || !!secrets || (!!dropped && dropped.agentId === agent.id && noteStillTrue(dropped))
+  const lineBlocks = !!baseStatus && (baseStatus.tone === DANGER || !!baseStatus.login || !!baseStatus.account || !!baseStatus.refresh)
+  const status: StatusLine | null = conflict && !lineIsTransient && !lineBlocks
+    ? { text: conflict.copy.text, tone: WARN, conflict: true }
+    : baseStatus
 
   /**
    * The Runs-on select's value.
@@ -2286,7 +2318,7 @@ export function RuntimePanel({
                 type="checkbox"
                 className="size-3 accent-[var(--color-accent)]"
                 checked={advanced}
-                disabled={disabled || cliConversionPending}
+                disabled={disabled || cliConversionPending || modelLocked}
                 onChange={(event) => toggleAdvanced(event.target.checked)}
               />
               Advanced
@@ -2311,7 +2343,7 @@ export function RuntimePanel({
                 aria-label="Model"
                 className={`${FIELD_IN_ROW} min-w-0 flex-1`}
                 title={declaredModel ?? undefined}
-                disabled={disabled || cliCatalogLoading || !cliCatalogKnown}
+                disabled={disabled || cliCatalogLoading || !cliCatalogKnown || modelLocked}
                 value={cliCatalogLoading ? '' : (declaredModel ?? '')}
                 onChange={(event) => changeCliModel(event.target.value || null)}
               >
@@ -2346,7 +2378,7 @@ export function RuntimePanel({
                   title={declaredModel ? 'Reasoning effort' : 'Pick a model to set its reasoning effort'}
                   // Compact and fixed: the model name gets the room (`Xhigh` fits).
                   className={`${FIELD_IN_ROW} w-[4.75rem] shrink-0`}
-                  disabled={disabled || cliCatalogLoading || !cliCatalogKnown || declaredModel === null || cliEfforts.length === 0}
+                  disabled={disabled || cliCatalogLoading || !cliCatalogKnown || declaredModel === null || cliEfforts.length === 0 || modelLocked}
                   value={declaredEffort ?? ''}
                   onChange={(event) => commit(null, declaredModel, null, { effort: event.target.value || null })}
                 >
@@ -2368,7 +2400,7 @@ export function RuntimePanel({
               aria-label="Model"
               className={FIELD}
               title={inheritedName ? `Default: ${inheritedName}` : undefined}
-              disabled={disabled}
+              disabled={disabled || modelLocked}
               value={declaredModel ?? ''}
               onChange={(event) =>
                 commit(commitCredential(fileCredential), event.target.value || null, null)
@@ -2511,7 +2543,9 @@ export function RuntimePanel({
         wrap into a second row and reintroduce the shift.
       */}
       <div className="mt-2 h-4">
-        {status?.login ? (
+        {status?.conflict && conflict ? (
+          <RuntimeConflictLine state={conflict} tone={WARN} danger={DANGER} />
+        ) : status?.login ? (
           <LoginLine text={status.text} tone={status.tone} engine={status.login} login={login} />
         ) : status?.account ? (
           /*

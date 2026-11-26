@@ -90,7 +90,7 @@ export function registerSettingsHandlers(): void {
        * engine, its credential, and whether its file disagrees with the app)
        * is resolved in main against both, and every window is told.
        */
-      if (key === 'localAgentsDefaultEngine' || key === 'localAgentsDefaultCredentialId') {
+      if (key === 'localAgentsDefaultEngine' || key === 'localAgentsDefaultCredentialId' || key === 'prioritizeAccountDefaults') {
         try {
           localAgentService.runtimeDefaultsChanged(getSettingsScopeUserId())
         } catch (err) {

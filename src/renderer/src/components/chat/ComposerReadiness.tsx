@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowUpRight, Check, Copy, Cpu, Download, ExternalLink, FileWarning, FolderOpen, KeyRound, Loader2, Lock, LockOpen, LogIn, Plus, RefreshCw, WifiOff, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, ArrowUpRight, Check, Copy, Cpu, Download, ExternalLink, FileWarning, FilePen, FolderOpen, KeyRound, Loader2, Lock, LockOpen, LogIn, Plus, RefreshCw, Undo2, WifiOff, X } from 'lucide-react'
 import { SafeIcon } from '../ui/SafeIcon'
 import type { LucideIcon } from 'lucide-react'
-import { FindingText, NoticeButton, StableLabel } from './ComposerNoticePanel'
+import { FindingText, NoticeButton, NoticeSplitButton, StableLabel } from './ComposerNoticePanel'
+import { RUNTIME_CONFLICT_BUSY, useRuntimeConflict, type RuntimeConflictState } from '../agents/local/runtimeConflict'
 import type { ComposerNotice } from './ComposerNoticePanel'
 import { AntigravityTermsTip } from '../settings/AntigravityTermsTip'
 import { useCheckAgentReadiness } from '../../hooks/useAgents'
@@ -712,6 +713,31 @@ export function useStaleModelNotice(folder: LocalAgentDto | null): ComposerNotic
   return staleModelNotice(folder, cli, catalog)
 }
 
+/**
+ * The file and the app disagree about what this agent runs on, as a row: the
+ * app's answer is the one labelled action, the file's behind its chevron
+ * (rule 20). Never while a turn of the agent runs — the answer needs the turn
+ * lock, and a row that came and went mid-turn would be noise — so it appears
+ * once the turn ends, as the AI-credential row would. A refusal stands in for
+ * the sentence until the next try (rule 6). It does not block Send.
+ */
+export function runtimeConflictNotice(state: RuntimeConflictState | null): ComposerNotice | null {
+  if (!state || state.running) return null
+  const { copy } = state
+  return {
+    key: 'runtime-conflict',
+    tone: 'warning',
+    icon: ArrowLeftRight,
+    text: state.failure ?? copy.text,
+    title: state.failure ?? copy.text,
+    action: <NoticeSplitButton label={copy.primary.label} icon={FilePen} title={state.running ? RUNTIME_CONFLICT_BUSY : copy.primary.title}
+      pending={state.pending} pendingLabel="Saving…" disabled={state.pending}
+      onClick={() => state.run(copy.primary.action)}
+      moreLabel="More ways to settle the runtime"
+      items={[{ label: copy.alternative.label, icon: Undo2, title: copy.alternative.title, disabled: state.pending, onSelect: () => state.run(copy.alternative.action) }]} />
+  }
+}
+
 export interface ComposerNotices {
   notices: ComposerNotice[]
   /** Finish setup, opened from the credentials row; rendered by the composer (it portals). */
@@ -742,6 +768,8 @@ export interface NoticeRowParts {
   accounts: { rows: ComposerNotice[]; loaded: boolean; failed?: boolean; aiCredentialCovered: boolean }
   skillCredentials: ComposerNotice | null
   aiCredential: ComposerNotice | null
+  /** The file and the app disagree about the runtime; absent in callers that predate it. */
+  runtimeConflict?: ComposerNotice | null
   staleModel: ComposerNotice | null
   findings: ComposerNotice | null
 }
@@ -776,6 +804,7 @@ export function assembleNoticeRows(parts: NoticeRowParts): ComposerNotice[] {
     // Held back until main has said whose it is: an AI credential another profile provisioned is
     // the account row's to tell, and a "No AI credential" row shown first would go again.
     accounts.loaded && !accounts.aiCredentialCovered ? parts.aiCredential : null,
+    parts.runtimeConflict ?? null,
     parts.staleModel,
     findings
   ].filter((row): row is ComposerNotice => row !== null)
@@ -796,8 +825,9 @@ export function assembleNoticeRows(parts: NoticeRowParts): ComposerNotice[] {
  * Finish setup is owned here, so by the composer (which outlives the click),
  * and opens only when clicked: the agent page answers team library requests.
  */
-export function useComposerNotices(target: AgentData | null, readiness: ComposerReadiness, reasonId: string, draftKey: string | null = null): ComposerNotices {
+export function useComposerNotices(target: AgentData | null, readiness: ComposerReadiness, reasonId: string, draftKey: string | null = null, turnRunning = false): ComposerNotices {
   const folder = useComposerFolder(target)
+  const runtimeConflict = useRuntimeConflict(folder, { turnRunning })
   const findings = useFolderFindingsNotice(folder)
   const finishSetup = useFinishSetup(folder?.id ?? null, folder?.name ?? '', { followRequests: false, draftKey })
   const aiIssue = useAgentAiCredentialIssue(folder)
@@ -839,6 +869,7 @@ export function useComposerNotices(target: AgentData | null, readiness: Composer
     accounts,
     skillCredentials,
     aiCredential: aiCredentialNotice(folder, aiIssue, providers?.length === 0),
+    runtimeConflict: runtimeConflictNotice(runtimeConflict),
     staleModel,
     findings
   })

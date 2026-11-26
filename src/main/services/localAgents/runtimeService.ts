@@ -502,6 +502,20 @@ export const runtimeService = {
     return resolveRunsOn(file, choice, this.runsOnDeps())
   },
 
+  /**
+   * What the Default runtime spends, as one comparable string (credential and
+   * model). A caller that may have moved it — a chat-mode edit — compares it
+   * before and after, and refreshes the agents only when it changed.
+   */
+  defaultRuntimeKey(): string {
+    try {
+      const fallback = this.resolveDefault()
+      return `${fallback.credentialId ?? ''}|${fallback.modelId ?? ''}`
+    } catch {
+      return ''
+    }
+  },
+
   /** {@link resolveRunsOn} for a bare agent, whose runtime is already the app's own. */
   resolveBareRunsOn(runtime: AgentRuntimeRef | null | undefined): RunsOnResult {
     return resolveBareRunsOn(runtime, this.runsOnDeps())
