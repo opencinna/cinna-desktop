@@ -9,6 +9,9 @@ describe('isDefaultEligibleModelId', () => {
     'o3-pro',
     'o1-pro',
     'openai/gpt-5.6-pro',
+    'gpt-5-pro:free',
+    'openai/gpt-5-pro:online',
+    'azure:gpt-5-pro',
     'claude-fable-5-1',
     'claude-mythos-preview'
   ])('refuses %s as an auto-default', (id) => {

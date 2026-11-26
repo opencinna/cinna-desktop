@@ -29,7 +29,9 @@ const GATED_DEFAULT_MODEL = /fable|mythos/i
  * is refused. Anchored on an OpenAI base (`gpt-` / `chatgpt-` / `o<N>`) so Gemini's
  * `gemini-2.5-pro` — Gemini's ordinary top tier — is untouched, on a gateway too.
  */
-const OPENAI_PRO_MODEL = /(?:^|[-_/])(?:(?:chat)?gpt-[\w.-]*?|o\d+)-pro(?:[-_./]|$)/i
+// `:` on both sides: a gateway's variant suffix (`gpt-5-pro:free`, `…:online`) and a
+// provider prefix (`azure:gpt-5-pro`).
+const OPENAI_PRO_MODEL = /(?:^|[-_/:])(?:(?:chat)?gpt-[\w.-]*?|o\d+)-pro(?:[-_./:]|$)/i
 
 /** True when a model id is fine to use as an auto-default. */
 export function isDefaultEligibleModelId(id: string): boolean {
