@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { createAgentDetailsFrameServer, stripMetaRefresh } from './agentDetailsFrameServer'
+import { createAgentDetailsFrameServer, retargetWebLinks, stripMetaRefresh } from './agentDetailsFrameServer'
 import { AGENT_DETAILS_CSP } from '../../../shared/agentDetails'
 
 /** The det- handler: one document per token, nothing else, under the C4 policy. */
@@ -50,7 +50,7 @@ describe('agentDetailsFrameServer', () => {
     expect(res.headers.get('referrer-policy')).toBe('no-referrer')
     expect(res.headers.get('x-content-type-options')).toBe('nosniff')
     const text = await res.text()
-    expect(text).toBe(HTML)
+    expect(text).toBe(HTML.replace('href="https://example.com/"', 'href="https://example.com/" target="_top"'))
     expect(text).not.toContain('<script')
   })
 
@@ -116,5 +116,32 @@ describe('stripMetaRefresh', () => {
       '<head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'">' +
       '<meta name="refresh" content="0"><meta name="viewport" content="width=device-width"></head><body>refresh</body>'
     expect(stripMetaRefresh(page)).toBe(page)
+  })
+})
+
+describe('retargetWebLinks', () => {
+  it('sends a plain https link to _top', () => {
+    expect(retargetWebLinks('<p><a href="https://x.test/a">x</a></p>')).toBe('<p><a href="https://x.test/a" target="_top">x</a></p>')
+  })
+
+  it('replaces an existing target, any case and quoting', () => {
+    expect(retargetWebLinks("<A TARGET=_blank HREF='HTTPS://x.test'>x</A>")).toBe(`<A HREF='HTTPS://x.test' target="_top">x</A>`)
+    expect(retargetWebLinks('<area href=https://x.test target="_self">')).toBe('<area href=https://x.test target="_top">')
+  })
+
+  it('reads a character-encoded scheme as the parser does', () => {
+    expect(retargetWebLinks('<a href="&#104;ttps://x.test">x</a>')).toBe('<a href="&#104;ttps://x.test" target="_top">x</a>')
+  })
+
+  it('leaves fragments, http, other schemes and non-link tags alone', () => {
+    const html = '<a href="#top">t</a><a href="http://x.test">h</a><a href="mailto:a@b.test">m</a><abbr title="https://x">a</abbr><a name="n">n</a>'
+    expect(retargetWebLinks(html)).toBe(html)
+  })
+
+  it('is applied to what the frame serves', async () => {
+    const server = createAgentDetailsFrameServer({ currentUserId: () => 'u1' })
+    const { url } = server.register('<a href="https://x.test">x</a>', 'u1')
+    const answer = await server.handle({ url, method: 'GET' })
+    expect(await answer.text()).toBe('<a href="https://x.test" target="_top">x</a>')
   })
 })

@@ -63,12 +63,40 @@ export function stripMetaRefresh(html: string): string {
   return html.replace(META_TAG, (tag) => (isRefreshMeta(tag) ? '' : tag))
 }
 
+/** One `<a …>` or `<area …>` start tag, parsed like {@link META_TAG}. */
+const LINK_TAG = /<(a|area)(?=[\s/>])((?:[\s/]+(?:[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?))*)([\s/]*)>/gi
+
+/**
+ * Every `https:` link sent to `target="_top"`, its own target replaced. The
+ * app window's CSP refuses an `https:` load in a subframe before main's
+ * navigation guard sees it, so a plain link would turn the frame into an
+ * error page; a `_top` navigation inside a click (the sandbox's
+ * `allow-top-navigation-by-user-activation`) reaches the guard, which sends it
+ * to the browser. Fragment links stay in the frame. A link this misses only
+ * goes dead: the enforcement is the sandbox and the guard, not this.
+ */
+export function retargetWebLinks(html: string): string {
+  return html.replace(LINK_TAG, (tag, name: string, attributes: string, tail: string) => {
+    let href: string | null = null
+    const kept: string[] = []
+    for (const match of attributes.matchAll(ATTRIBUTE)) {
+      const attr = match[1].toLowerCase()
+      if (attr === 'href' && href === null) href = decodeAttribute(match[2] ?? match[3] ?? match[4] ?? '')
+      if (attr === 'target') continue
+      kept.push(match[0])
+    }
+    if (href === null || !/^\s*https:/i.test(href)) return tag
+    return `<${name}${kept.map((a) => ` ${a}`).join('')} target="_top"${tail.includes('/') ? ' /' : ''}>`
+  })
+}
+
 /**
  * An agent's Details page in the app: `cinna-preview://det-<token>/` serves one
  * HTML document main already holds (core's answer or a folder agent's file),
  * and nothing else — every other path is a 404, so the page can load nothing.
  * The C4 policy is sent as a header beside core's meta tag; the bytes are
- * served as received except for any `<meta http-equiv="refresh">`, with no link helper (no script could run it: the frame
+ * served as received except for any `<meta http-equiv="refresh">` and the
+ * target of `https:` links ({@link retargetWebLinks}), with no link helper (no script could run it: the frame
  * has no `allow-scripts` and the policy has no `script-src`).
  */
 export function createAgentDetailsFrameServer(deps: AgentDetailsFrameServerDeps) {
@@ -85,7 +113,7 @@ export function createAgentDetailsFrameServer(deps: AgentDetailsFrameServerDeps)
     /** A token for one document, served to `userId` (the active profile when omitted). */
     register(html: string, userId: string = deps.currentUserId()): { token: string; url: string } {
       const token = newToken()
-      entries.set(token, { html: Buffer.from(stripMetaRefresh(html), 'utf8'), userId })
+      entries.set(token, { html: Buffer.from(retargetWebLinks(stripMetaRefresh(html)), 'utf8'), userId })
       while (entries.size > maxTokens) {
         const oldest = entries.keys().next().value
         if (oldest === undefined) break
