@@ -50,6 +50,7 @@ import {
   registerHtmlPreviewScheme
 } from './host/desktop/htmlPreview'
 import { clearPastedFilesAtStart } from './host/desktop/clipboard'
+import { failedUrlScheme, isRendererLoadFailure } from './host/desktop/rendererFailure'
 import { mentionPathsFromArgv, pathMentionIntentService } from './host/desktop/pathMentionIntentService'
 import { BACKGROUND_WINDOW, focusMainWindow, installWindowCreator, installWindowResolver } from './window/focus'
 import { startupSplashArgs } from '../shared/startupSplash'
@@ -359,9 +360,13 @@ function createWindow(): void {
     )
   })
 
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    // -3 is ERR_ABORTED, fired during normal navigation cancellation.
-    if (errorCode === -3) return
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    // A subframe's failure (a Details page or preview refused a load) is that
+    // frame's, never the app's: logged, no dialog, no exit.
+    if (!isRendererLoadFailure({ errorCode, isMainFrame })) {
+      if (!isMainFrame) bootLogger.warn('subframe-load-failed', { code: errorCode, scheme: failedUrlScheme(validatedURL) })
+      return
+    }
     handleRendererFailure(
       'did-fail-load',
       `code: ${errorCode}, desc: ${errorDescription}, url: ${validatedURL}`
