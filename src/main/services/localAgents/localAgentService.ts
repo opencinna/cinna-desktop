@@ -53,7 +53,7 @@ import {
 } from '../../kit/manifestIo'
 import { sha256Hex } from '../../kit/hash'
 import { isIgnoredPath, validateAgentFolder } from '../../kit/validator'
-import { KitError, LocalAgentError } from '../../errors'
+import { DomainError, KitError, LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { MANIFEST_FILE, SLUG_PATTERN } from '../../../shared/kit/manifest'
 import { isWorkComplexity } from '../../../shared/modelFamilies'
@@ -124,6 +124,8 @@ import { agentUploadsDir } from '../agentUploads'
 import { runtimeService } from './runtimeService'
 import { resolveVaultRunsOn, runtimeForChoice } from './runsOn'
 import { publishEvent } from '../../host/events'
+import { onAiCredentialsChanged } from '../aiCredentialChanges'
+import { onChatModesChanged } from '../chatModeChanges'
 import { permissionGrantService, type StoredPermissionGrant } from './permissionGrantService'
 
 const logger = createLogger('local-agents')
@@ -255,6 +257,28 @@ function optionalString(value: unknown, label: string, max: number): string | nu
 }
 
 let started = false
+
+/**
+ * `runtimeService.resolutionInputsKey()` as it was when every agent was last
+ * resolved ({@link localAgentService.runtimeDefaultsChanged}); null until
+ * `installRuntimeInputsFollow` reads it.
+ */
+let runtimeInputsKey: string | null = null
+
+/**
+ * A Runs-on choice that could not be written to the agent's desktop state, as
+ * the coded refusal the renderer can read: a thrown plain `Error` reaches it
+ * as `Error invoking remote method …`, never as data (`withCode` maps only a
+ * `DomainError`). `desktopStateService`'s own `write_failed` passes through.
+ */
+function choiceWriteFailure(err: unknown): DomainError {
+  if (err instanceof DomainError) return err
+  return new LocalAgentError(
+    'write_failed',
+    'Could not save which runtime this agent runs on.',
+    err instanceof Error ? err.message : String(err)
+  )
+}
 
 /**
  * Told an agent's folder moved, while the move's lock is still held. The
@@ -835,38 +859,43 @@ export const localAgentService = {
    * no longer works out an agent's engine for itself.
    */
   runtimeDefaultsChanged(userId: string): void {
+    // What the rows are about to be resolved under, so a later signal that moved nothing re-scans nothing.
+    runtimeInputsKey = runtimeService.resolutionInputsKey()
     for (const result of this.rescan(userId)) {
-      publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId: result.rootId, agentId: null, reason: 'rescan' } satisfies LocalAgentChangedPayload, 'all')
+      publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId: result.rootId, agentId: null, reason: 'runtime-defaults' } satisfies LocalAgentChangedPayload, 'all')
     }
   },
 
   /**
-   * The credential list changed (a credential added, removed, switched on or
-   * off, or given a key; an account sync). Which row a manifest's credential
-   * names, and what the Default runtime falls back to, are both read off it in
-   * the cached scan, so every agent is resolved again. Never throws: the
-   * credential change the user made is saved either way.
+   * Something an agent's `resolvedRuntime` is resolved against **may** have
+   * moved: a credential saved, removed or switched (`aiCredentialChanges`, also
+   * raised by every account-config sync), a chat mode edited
+   * (`chatModeChanges`), a profile made ready. Re-resolves every agent
+   * ({@link runtimeDefaultsChanged}) only when `runtimeService.resolutionInputsKey`
+   * differs from the one the agents were last resolved under — so the
+   * five-minute sync and a chat-mode edit that moved nothing an agent runs on
+   * re-scan nothing. Never throws: the change that raised it is saved either way.
    */
-  credentialsChanged(userId: string): void {
+  runtimeInputsMayHaveMoved(userId: string): void {
     try {
+      if (runtimeService.resolutionInputsKey() === runtimeInputsKey) return
       this.runtimeDefaultsChanged(userId)
     } catch (err) {
-      logger.warn('could not refresh agents after the credentials changed', { error: err instanceof Error ? err.message : String(err) })
+      logger.warn('could not refresh agents after what they run on changed', { error: err instanceof Error ? err.message : String(err) })
     }
   },
 
   /**
-   * {@link runtimeDefaultsChanged}, only when the Default runtime's credential
-   * or model actually moved since `before` (`runtimeService.defaultRuntimeKey`).
-   * For the default chat mode's edits, which usually move nothing an agent
-   * runs on. Never throws: the edit the user made is saved either way.
+   * Follow the core signals behind {@link runtimeInputsMayHaveMoved}, from
+   * the inputs as they are now. Installed once by `hub/core.ts`; the profile
+   * switch is wired there too (`userActivation.onProfileReady`). Returns the
+   * unsubscribe.
    */
-  refreshIfDefaultRuntimeMoved(userId: string, before: string): void {
-    try {
-      if (runtimeService.defaultRuntimeKey() !== before) this.runtimeDefaultsChanged(userId)
-    } catch (err) {
-      logger.warn('could not refresh agents after the default chat mode changed', { error: err instanceof Error ? err.message : String(err) })
-    }
+  installRuntimeInputsFollow(getUserId: () => string): () => void {
+    runtimeInputsKey = runtimeService.resolutionInputsKey()
+    const follow = (): void => this.runtimeInputsMayHaveMoved(getUserId())
+    const off = [onAiCredentialsChanged(follow), onChatModesChanged(follow)]
+    return () => { for (const unsubscribe of off) unsubscribe() }
   },
 
   /**
@@ -896,13 +925,18 @@ export const localAgentService = {
     const { root, agentDir } = this.locate(userId, input.agentId)
     let note: string | null = null
     // As `updateField`: a choice write failing after the file's is returned once the folder is re-indexed.
-    let choiceFailure: unknown = null
+    let choiceFailure: DomainError | null = null
+    // A refusal for a stale stamp: the cached scan still carries that stamp, so
+    // the folder is re-indexed before it is returned — the notice recomputes
+    // against the file as it is, and a retry is not refused again.
+    let staleFailure: KitError | null = null
     const handle = turnLock.acquire(input.agentId, 'editor')
     try {
       const path = manifestPath(agentDir)
       const { manifest } = readWithStamp(path)
       if (!stampsMatch(readStamp(path), expected)) {
-        throw new KitError('manifest_modified', `${MANIFEST_FILE} changed on disk since it was read. Reload before saving.`, path)
+        staleFailure = new KitError('manifest_modified', `${MANIFEST_FILE} changed on disk since it was read. Reload before saving.`, path)
+        throw staleFailure
       }
       const file = manifest.runtime && typeof manifest.runtime === 'object' ? manifest.runtime : null
       const stored = desktopStateService.read(agentDir, 'kit').runsOn ?? null
@@ -919,7 +953,11 @@ export const localAgentService = {
         const choice: RunsOnChoice = !isEngineLoginId(conflict.file.engine) && credential !== ''
           ? { kind: 'credential', name: credential }
           : { kind: 'engine', engine: conflict.file.engine }
-        desktopStateService.patch(agentDir, 'kit', { runsOn: choice })
+        try {
+          desktopStateService.patch(agentDir, 'kit', { runsOn: choice })
+        } catch (err) {
+          throw choiceWriteFailure(err)
+        }
       } else {
         const choice: RunsOnChoice = action === 'use_default' ? { kind: 'default' } : (stored as RunsOnChoice)
         const next = runtimeForChoice(file, choice)
@@ -932,16 +970,19 @@ export const localAgentService = {
           try {
             desktopStateService.patch(agentDir, 'kit', { runsOn: choice })
           } catch (err) {
-            choiceFailure = err
+            choiceFailure = choiceWriteFailure(err)
           }
         }
       }
+    } catch (err) {
+      if (err !== staleFailure) throw err
     } finally {
       handle.release()
     }
     scannerService.markRootDirty(root.id)
     this.reindexAgent(userId, root, agentDir)
     publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId: root.id, agentId: input.agentId, reason: 'rescan' } satisfies LocalAgentChangedPayload, 'all')
+    if (staleFailure !== null) throw staleFailure
     if (choiceFailure !== null) throw choiceFailure
     logger.info('runtime conflict resolved', { agentId: input.agentId, action })
     return { note }
@@ -1047,7 +1088,7 @@ export const localAgentService = {
     let runsOn: RunsOnChoice | null = null
     // The choice's own write failing after the manifest's landed: the folder
     // still changed, so it is re-indexed before the failure is returned.
-    let choiceFailure: unknown = null
+    let choiceFailure: DomainError | null = null
     const handle = turnLock.acquire(input.agentId, 'editor')
     try {
       if (update.field === 'prompt') {
@@ -1176,7 +1217,7 @@ export const localAgentService = {
           try {
             desktopStateService.patch(agentDir, 'kit', { runsOn })
           } catch (err) {
-            choiceFailure = err
+            choiceFailure = choiceWriteFailure(err)
           }
         }
       }

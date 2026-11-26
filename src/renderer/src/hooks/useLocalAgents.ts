@@ -40,6 +40,7 @@ import {
 } from '../../../shared/localAgents'
 // A cycle (useAppSettings imports this module's keys), safe: used only inside a callback.
 import { APP_SETTINGS_KEY } from './useAppSettings'
+import { DEFAULT_RUNTIME_KEY } from './useEngine'
 import { useAgentsHomeStore } from '../stores/agentsHome.store'
 import {
   editFileText,
@@ -382,6 +383,9 @@ export function useLocalAgentWatch(): void {
       // Finish setup reads `credentials/.env` through its own key; a hand edit
       // from Open credentials/.env arrives only as this push.
       void queryClient.invalidateQueries({ queryKey: ['service-credentials', 'setup'] })
+      // Main re-resolved every agent because the Default runtime or the credentials moved: the
+      // Default runtime's own answer (`staleTime: Infinity`, the Runs-on option's label) moved with it.
+      if (payload.reason === 'runtime-defaults') void queryClient.invalidateQueries({ queryKey: DEFAULT_RUNTIME_KEY })
       // The prompt documents live in their own cache entries — the DTO carries
       // their stamps but not their text — so a folder edit has to drop those
       // too, or an assistant's rewrite would never appear.

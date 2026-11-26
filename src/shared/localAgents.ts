@@ -913,8 +913,12 @@ export interface LocalAgentChangedPayload {
   rootId: string
   /** The agent that changed, or null when the whole root was rescanned. */
   agentId: string | null
-  /** `vault`: the agent moved into or out of an Agent Vault; its chats' detail (their vault readiness) changed too. */
-  reason: 'watch' | 'rescan' | 'create' | 'vault'
+  /**
+   * `vault`: the agent moved into or out of an Agent Vault; its chats' detail (their vault readiness) changed too.
+   * `runtime-defaults`: every agent was re-resolved because what they run on moved outside their folders
+   * (the Default runtime, the credentials); the Default runtime's own answer may have moved with it.
+   */
+  reason: 'watch' | 'rescan' | 'create' | 'vault' | 'runtime-defaults'
 }
 
 /** What a rescan did, for the caller's log line. */

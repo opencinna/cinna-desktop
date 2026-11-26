@@ -189,6 +189,11 @@ export function initializeHubCore(openDatabase?: Parameters<typeof initDatabase>
     if (userActivation.isActivated() && getCurrentUserId() === userId) void remoteTurnRecoveryService.resume(userId)
   })
   localAgentService.configure(getSettingsScopeUserId)
+  // Credentials, account syncs, chat-mode edits and profile switches move what an agent's
+  // resolvedRuntime (its credential, the Default runtime, a runtime conflict) is resolved against.
+  // Core, not the IPC handlers: a sync on its timer has no handler. Re-scans only when it moved.
+  localAgentService.installRuntimeInputsFollow(getSettingsScopeUserId)
+  userActivation.onProfileReady(() => localAgentService.runtimeInputsMayHaveMoved(getSettingsScopeUserId()))
   // A kit agent's folder moved: its warm process may sit in the old path, and the
   // Claude spec key does not include the cwd. `retire` lets a running turn finish.
   installFolderMovedListener((agentId) => acpProcessPool.retire(agentId))

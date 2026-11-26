@@ -48,3 +48,26 @@ describe('useLocalAgentWatch on a vault move', () => {
     expect(stale(client, 'with-agent')).toBe(false)
   })
 })
+
+/**
+ * Main re-resolved every agent because the Default runtime or the credentials
+ * moved: the Default runtime's own answer (`staleTime: Infinity`, the label of
+ * the Runs-on option) is refetched with them, and only then.
+ */
+describe('useLocalAgentWatch when the runtime defaults move', () => {
+  const defaultRuntimeStale = (client: QueryClient): boolean | undefined => client.getQueryState(['default-runtime'])?.isInvalidated
+
+  it('refetches the Default runtime', () => {
+    const client = setup()
+    client.setQueryData(['default-runtime'], { engine: 'claude' })
+    act(() => push!({ rootId: 'r', agentId: null, reason: 'runtime-defaults' }))
+    expect(defaultRuntimeStale(client)).toBe(true)
+  })
+
+  it('leaves it alone on a folder change', () => {
+    const client = setup()
+    client.setQueryData(['default-runtime'], { engine: 'claude' })
+    act(() => push!({ rootId: 'r', agentId: null, reason: 'watch' }))
+    expect(defaultRuntimeStale(client)).toBe(false)
+  })
+})

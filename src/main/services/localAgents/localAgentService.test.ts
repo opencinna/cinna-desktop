@@ -1132,40 +1132,128 @@ describe('resolveRuntimeConflict', () => {
       .toThrow(expect.objectContaining({ code: 'invalid_input' }))
   })
 
-  it('re-indexes the folder when the choice cannot be saved after the file was', () => {
+  it('re-indexes the folder when the choice cannot be saved after the file was, and returns write_failed', () => {
     // updateField: a Runs-on pick whose desktop.json write fails still leaves the
-    // index describing the manifest it just wrote.
+    // index describing the manifest it just wrote; the failure is a coded one.
     const patch = vi.spyOn(desktopStateService, 'patch').mockImplementationOnce(() => { throw new Error('disk full') })
     try {
       expect(() => localAgentService.updateField(USER, {
         agentId,
         update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: null, runsOn: { kind: 'engine', engine: 'claude' } } },
         expectedStamp: currentAgent().stamps[MANIFEST]!
-      })).toThrow('disk full')
+      })).toThrow(expect.objectContaining({ code: 'write_failed', detail: 'disk full' }))
     } finally {
       patch.mockRestore()
     }
     expect(agentRepo.getOwned(USER, agentId)?.driverConfig?.launcher).toBe('claude')
   })
+
+  it('returns a failed choice write as write_failed, for use_file and for use_default', () => {
+    setUp({ engine: 'claude' })
+    const before = currentAgent().stamps[MANIFEST]!
+    const patch = vi.spyOn(desktopStateService, 'patch').mockImplementation(() => { throw new Error('disk full') })
+    try {
+      expect(() => act('use_file')).toThrow(expect.objectContaining({ name: 'LocalAgentError', code: 'write_failed' }))
+      // use_default writes the file first; the folder is re-indexed before the failure returns.
+      expect(() => act('use_default')).toThrow(expect.objectContaining({ name: 'LocalAgentError', code: 'write_failed' }))
+    } finally {
+      patch.mockRestore()
+    }
+    expect(fileRuntime()).toBeUndefined()
+    expect(currentAgent().stamps[MANIFEST]).not.toEqual(before)
+  })
+
+  it('re-indexes on a stale stamp, so the next try from the refreshed notice goes through', () => {
+    setUp({ engine: 'claude' })
+    // The list the composer and the sidebar read is the cached scan, unlike `get`.
+    const listed = () => localAgentService.list(USER).agents.find((agent) => agent.id === agentId)!
+    const stale = listed().stamps[MANIFEST]!
+    ageFile(manifestPath(agentDir))
+    writeFileSync(manifestPath(agentDir), readFileSync(manifestPath(agentDir), 'utf8').replace('\n}', ',\n  "x_note": "edited"\n}'))
+    expect(() => act('use_default', stale)).toThrow(expect.objectContaining({ code: 'manifest_modified' }))
+    const fresh = listed().stamps[MANIFEST]!
+    expect(fresh).not.toEqual(stale)
+    expect(fresh).toEqual(currentAgent().stamps[MANIFEST])
+    expect(act('use_default', fresh)).toEqual({ note: null })
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'default' })
+  })
 })
 
 describe('refreshing agents when what they resolve against moves', () => {
-  it('re-resolves after a chat-mode edit only when the Default runtime moved, and always after a credential change', async () => {
+  it('re-resolves only when the credentials or the Default runtime moved, from any core signal', async () => {
     const { runtimeService } = await import('./runtimeService')
-    const spy = vi.spyOn(localAgentService, 'runtimeDefaultsChanged').mockImplementation(() => undefined)
+    const { notifyAiCredentialsChanged } = await import('../aiCredentialChanges')
+    const { notifyChatModesChanged } = await import('../chatModeChanges')
+    const key = vi.spyOn(runtimeService, 'resolutionInputsKey').mockReturnValue('k1')
+    const rescan = vi.spyOn(localAgentService, 'rescan').mockReturnValue([])
+    const off = localAgentService.installRuntimeInputsFollow(() => USER)
     try {
-      const before = runtimeService.defaultRuntimeKey()
-      localAgentService.refreshIfDefaultRuntimeMoved(USER, before)
-      expect(spy).not.toHaveBeenCalled()
-      localAgentService.refreshIfDefaultRuntimeMoved(USER, `${before}|something else`)
-      expect(spy).toHaveBeenCalledTimes(1)
-      localAgentService.credentialsChanged(USER)
-      expect(spy).toHaveBeenCalledTimes(2)
-      // Never fails the edit the user made.
-      spy.mockImplementation(() => { throw new Error('scan failed') })
-      expect(() => localAgentService.credentialsChanged(USER)).not.toThrow()
+      // A sync, or a chat-mode edit, that moved nothing re-scans nothing.
+      notifyAiCredentialsChanged()
+      notifyChatModesChanged()
+      localAgentService.runtimeInputsMayHaveMoved(USER)
+      expect(rescan).not.toHaveBeenCalled()
+      key.mockReturnValue('k2')
+      notifyChatModesChanged()
+      expect(rescan).toHaveBeenCalledTimes(1)
+      notifyAiCredentialsChanged()
+      expect(rescan).toHaveBeenCalledTimes(1)
+      key.mockReturnValue('k3')
+      notifyAiCredentialsChanged()
+      expect(rescan).toHaveBeenCalledTimes(2)
+      // Never fails the change that raised it.
+      key.mockReturnValue('k4')
+      rescan.mockImplementation(() => { throw new Error('scan failed') })
+      expect(() => notifyAiCredentialsChanged()).not.toThrow()
     } finally {
-      spy.mockRestore()
+      off()
+      key.mockRestore()
+      rescan.mockRestore()
+    }
+  })
+
+  it('against the real credential list: a sync that moved nothing publishes nothing; a new credential re-resolves every root as runtime-defaults', async () => {
+    const { notifyAiCredentialsChanged } = await import('../aiCredentialChanges')
+    const { installEventPublisher } = await import('../../host/events')
+    const { llmProviderRepo } = await import('../../db/llmProviders')
+    const published: { channel: string; payload: unknown }[] = []
+    installEventPublisher((channel, payload) => { published.push({ channel, payload }) })
+    const rescan = vi.spyOn(localAgentService, 'rescan')
+    const off = localAgentService.installRuntimeInputsFollow(() => USER)
+    try {
+      notifyAiCredentialsChanged()
+      notifyAiCredentialsChanged()
+      expect(rescan).not.toHaveBeenCalled()
+      expect(published).toEqual([])
+      llmProviderRepo.upsert(USER, { type: 'anthropic', name: 'Work Anthropic', apiKeyEncrypted: Buffer.from('sealed'), enabled: true })
+      notifyAiCredentialsChanged()
+      expect(rescan).toHaveBeenCalledTimes(1)
+      const root = agentRootRepo.getDefault(USER)!
+      expect(published).toContainEqual({ channel: 'local-agent:changed', payload: { rootId: root.id, agentId: null, reason: 'runtime-defaults' } })
+      // Resolved under the new list: the next sync with nothing new is quiet again.
+      published.length = 0
+      notifyAiCredentialsChanged()
+      expect(rescan).toHaveBeenCalledTimes(1)
+      expect(published).toEqual([])
+    } finally {
+      off()
+      rescan.mockRestore()
+      installEventPublisher(() => {})
+    }
+  })
+
+  it('raises the chat-mode signal from the service, not the IPC handler', async () => {
+    const { onChatModesChanged } = await import('../chatModeChanges')
+    const { chatModeService } = await import('../chatModeService')
+    const heard = vi.fn()
+    const off = onChatModesChanged(heard)
+    try {
+      const { id } = chatModeService.upsert(USER, { name: 'Mine', isDefault: false } as never)
+      expect(heard).toHaveBeenCalledTimes(1)
+      chatModeService.delete(USER, id)
+      expect(heard).toHaveBeenCalledTimes(2)
+    } finally {
+      off()
     }
   })
 })

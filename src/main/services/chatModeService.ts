@@ -18,6 +18,7 @@ import {
 import { isWorkComplexity } from '../../shared/modelFamilies'
 import type { AgentEngine } from '../../shared/engine'
 import { createLogger } from '../logger/logger'
+import { notifyChatModesChanged } from './chatModeChanges'
 
 const logger = createLogger('chatmode')
 
@@ -119,6 +120,7 @@ export const chatModeService = {
     if (!row || !row.managed) throw new ChatModeError('not_found', 'Managed chat mode not found')
     managedOverrideRepo.set(profileUserId, 'mode', id, enabled)
     logger.info('managed chat mode toggled', { modeId: id, enabled })
+    notifyChatModesChanged()
   },
 
   /**
@@ -132,6 +134,7 @@ export const chatModeService = {
     if (!row || !row.managed) throw new ChatModeError('not_found', 'Managed chat mode not found')
     managedOverrideRepo.setModel(profileUserId, 'mode', id, modelId)
     logger.info('managed chat mode model set', { modeId: id, modelId })
+    notifyChatModesChanged()
   },
 
   /**
@@ -161,7 +164,7 @@ export const chatModeService = {
     }
     // Runtime modes are made by `ensureRuntimeModes` only; an upsert never creates one.
     const { builtinEngine: _ignored, ...fields } = input
-    return getDb().transaction((tx) => {
+    const saved = getDb().transaction((tx) => {
       const existing = fields.id ? chatModeRepo.getOwned(userId, fields.id, tx) : undefined
       if (fields.id && !existing) throw new ChatModeError('not_found', 'Chat mode not found')
       if (existing?.builtinEngine) guardRuntimeModeEdit(existing, fields)
@@ -185,6 +188,9 @@ export const chatModeService = {
       logger.info('chat mode created', { modeId: id })
       return { id }
     })
+    // After the commit, so a listener reads the saved row.
+    notifyChatModesChanged()
+    return saved
   },
 
   delete(userId: string, id: string): void {
@@ -198,7 +204,10 @@ export const chatModeService = {
       throw new ChatModeError('read_only', 'A runtime mode cannot be deleted. Reset it to its defaults instead.')
     }
     const removed = chatModeRepo.delete(userId, id)
-    if (removed) logger.info('chat mode deleted', { modeId: id })
+    if (removed) {
+      logger.info('chat mode deleted', { modeId: id })
+      notifyChatModesChanged()
+    }
   },
 
   /**
@@ -273,6 +282,7 @@ export const chatModeService = {
     if (!row.builtinEngine) throw new ChatModeError('read_only', 'Only a runtime mode can be reset to its defaults.')
     chatModeRepo.update(userId, id, { ...runtimeModeResetFields(row.builtinEngine, row), isDefault: row.isDefault })
     logger.info('runtime mode reset', { modeId: id, engine: row.builtinEngine })
+    notifyChatModesChanged()
   }
 }
 

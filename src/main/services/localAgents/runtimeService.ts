@@ -516,6 +516,27 @@ export const runtimeService = {
     }
   },
 
+  /**
+   * Everything a folder agent's `resolvedRuntime` is resolved against outside
+   * its own folder and the settings, as one comparable string: the Default
+   * runtime ({@link defaultRuntimeKey}) and the credential list a manifest's
+   * credential name is looked up in. A signal that something *may* have moved
+   * (a credential saved, an account sync, a chat-mode edit, a profile switch)
+   * compares it with the last one the agents were resolved under, so a sync
+   * that changed nothing re-scans nothing.
+   */
+  resolutionInputsKey(): string {
+    let credentials: unknown[] = []
+    try {
+      credentials = providerService.listMerged()
+        .map((p) => [p.id, p.type, p.name, p.enabled, p.hasApiKey, p.unsupported, p.defaultModelId, p.baseUrl])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    } catch {
+      credentials = []
+    }
+    return JSON.stringify([this.defaultRuntimeKey(), credentials])
+  },
+
   /** {@link resolveRunsOn} for a bare agent, whose runtime is already the app's own. */
   resolveBareRunsOn(runtime: AgentRuntimeRef | null | undefined): RunsOnResult {
     return resolveBareRunsOn(runtime, this.runsOnDeps())

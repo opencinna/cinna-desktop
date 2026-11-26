@@ -4,21 +4,6 @@ import { chatModeService } from '../services/chatModeService'
 import { listChatModesWithRuntimes } from '../services/localAgents/runtimeModeAvailability'
 import { notifyAccountConfigSynced } from '../services/account-config-sync'
 import { ipcHandle } from './_wrap'
-import { runtimeService } from '../services/localAgents/runtimeService'
-import { localAgentService } from '../services/localAgents/localAgentService'
-
-/**
- * Run a chat-mode edit, then refresh the folder agents if it moved what the
- * Default runtime spends: an OpenCode agent with no credential of its own runs
- * on the default chat mode's credential, and its `resolvedRuntime` (credential,
- * and the names a runtime conflict shows) is resolved in the cached scan.
- */
-function movingDefault<T>(edit: () => T): T {
-  const before = runtimeService.defaultRuntimeKey()
-  const result = edit()
-  localAgentService.refreshIfDefaultRuntimeMoved(getSettingsScopeUserId(), before)
-  return result
-}
 
 export function registerChatModeHandlers(): void {
   ipcHandle('chatmode:list', async () => {
@@ -39,7 +24,7 @@ export function registerChatModeHandlers(): void {
     'chatmode:set-managed-enabled',
     async (_event, data: { id: string; enabled: boolean }) => {
       userActivation.requireActivated()
-      movingDefault(() => chatModeService.setManagedEnabled(data.id, data.enabled))
+      chatModeService.setManagedEnabled(data.id, data.enabled)
       notifyAccountConfigSynced()
       return { success: true }
     }
@@ -51,7 +36,7 @@ export function registerChatModeHandlers(): void {
     'chatmode:set-managed-model',
     async (_event, data: { id: string; modelId: string | null }) => {
       userActivation.requireActivated()
-      movingDefault(() => chatModeService.setManagedModel(data.id, data.modelId))
+      chatModeService.setManagedModel(data.id, data.modelId)
       notifyAccountConfigSynced()
       return { success: true }
     }
@@ -76,7 +61,7 @@ export function registerChatModeHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
-      const { id } = movingDefault(() => chatModeService.upsert(getSettingsScopeUserId(), data))
+      const { id } = chatModeService.upsert(getSettingsScopeUserId(), data)
       return { id, success: true }
     }
   )
@@ -84,13 +69,13 @@ export function registerChatModeHandlers(): void {
   // Restore a runtime mode's defaults (keeps whether it is the default).
   ipcHandle('chatmode:reset', async (_event, id: string) => {
     userActivation.requireActivated()
-    movingDefault(() => chatModeService.reset(getSettingsScopeUserId(), id))
+    chatModeService.reset(getSettingsScopeUserId(), id)
     return { success: true }
   })
 
   ipcHandle('chatmode:delete', async (_event, id: string) => {
     userActivation.requireActivated()
-    movingDefault(() => chatModeService.delete(getSettingsScopeUserId(), id))
+    chatModeService.delete(getSettingsScopeUserId(), id)
     return { success: true }
   })
 }
