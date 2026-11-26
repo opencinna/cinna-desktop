@@ -106,7 +106,7 @@ Inbox and transcript share the durable answer path. ACP still writes its local g
 
 ### The folder decides its launcher; external configuration owns its binding
 
-A folder row always dispatches to ACP. Its stored launcher is a scanner cache: each turn re-reads the folder runtime and selects that launcher inside the same driver. A missing folder, or one that cannot be read as an agent, refuses rather than guessing. An engine the folder names but this build cannot run is not a refusal: it runs on OpenCode (`effectiveEngine`), the one fallback the contract defines. Historically separate OpenCode/Claude drivers had to hand off stale rows; that sibling-driver mechanism is gone.
+A folder row always dispatches to ACP. Its stored launcher is a scanner cache: each turn re-reads the folder runtime and selects that launcher inside the same driver. A missing folder, or one that cannot be read as an agent, refuses rather than guessing. An engine the folder names but this build cannot run is not a refusal: it runs on OpenCode (`effectiveEngine`, evaluated in main and shipped to the renderer as `LocalAgentDto.resolvedRuntime`), the one fallback the contract defines. For a kit agent a stored Runs-on choice outranks the file's engine; each turn logs `[runtime] turn … source=…` naming which won ([The Local Engine](../local_agents/engine.md#what-a-kit-agent-runs-on-the-apps-choice-then-the-file-then-the-default)). Historically separate OpenCode/Claude drivers had to hand off stale rows; that sibling-driver mechanism is gone.
 
 Custom commands instead capture their locally owned configuration and state authority. Managed sessions capture profile, agent and credential identity. Neither invents a folder or silently substitutes a new binding into existing work.
 
