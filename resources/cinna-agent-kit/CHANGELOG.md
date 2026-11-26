@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `6283f549374bf439`.
+Your current kit is version `2b232c5f1f28fdab`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,16 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## 1.27.1 — the runtime block is set only when the user asks
+
+Wording only. Every 1.x folder stays valid.
+
+- **`guides/13-design-patterns.md`** (section 10) and **`assistants/cinna-desktop.md`** —
+  set `runtime.engine`, `runtime.credential` and `runtime.model` only when the user
+  asks for them. Never rewrite the `runtime` block from an older copy of the file;
+  edit only the keys the user asked about. Cinna Desktop shows any difference
+  between the file and the app's choice and asks the user to confirm it.
 
 ## 1.27.0 — running agents find guide 15, and never set a commit identity
 

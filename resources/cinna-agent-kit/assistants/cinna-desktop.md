@@ -84,6 +84,14 @@ for this agent. See `guides/03-scripts-and-data.md`.
 - It is git-ignored and never travels to the cloud. Do not "fix" either of those.
 - Its absence means the agent is simply not connected. That is a state, not a fault.
 
+## The runtime block
+
+The app decides what a session runs on. Set `runtime.engine`, `runtime.credential`
+or `runtime.model` in `cinna-agent.json` only when the user asks for them, and edit
+only the keys they named; never rewrite the block from an older copy of the file.
+The app shows a difference between the file and its own choice and asks the user to
+confirm it, so do not change the block to steer your own next turn.
+
 ## Secrets
 
 Never open `credentials/.env` or `credentials/credentials.json`, not even to check the

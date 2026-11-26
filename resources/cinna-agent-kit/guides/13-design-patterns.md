@@ -415,7 +415,11 @@ and a mini-class model conversing.
   portable way to ask for a tier — prefer it to a concrete `model`, never write
   both. Both `model` and `complexity` stay local; the cloud import does not carry
   them. Record the intended conversation tier in `docs/AGENT_DEVELOPMENT.md` so it
-  is set once the agent is in the cloud.
+  is set once the agent is in the cloud. Set `runtime.engine`, `runtime.credential`
+  and `runtime.model` only when the user asks for them. Never rewrite the `runtime`
+  block from an older copy of the file; edit only the keys the user asked about.
+  Cinna Desktop shows any difference between the file and the app's choice and asks
+  the user to confirm it.
 
 ## 11. A development map with a defects log
 
