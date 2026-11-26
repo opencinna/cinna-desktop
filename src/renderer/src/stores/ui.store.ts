@@ -79,6 +79,7 @@ const SIDEBAR_DOCKING_KEY = 'cinna-sidebar-docking'
 // The microphone voice input records from; absent means the system default.
 const VOICE_INPUT_DEVICE_KEY = 'cinna-voice-input-device'
 const VOICE_INPUT_SHOWN_KEY = 'cinna-show-voice-input'
+const VOICE_MEDIA_CONTROLS_KEY = 'cinna-voice-media-controls'
 // Whether a long markdown preview opens with its Contents panel showing.
 const PREVIEW_CONTENTS_KEY = 'cinna-preview-contents-open'
 // How the Chats list is grouped, and which of its groups are collapsed.
@@ -303,6 +304,12 @@ interface UIStore {
   voiceInputDeviceId: string | null
   /** The composer's voice input button; Settings → Interface or its own menu turn it off. */
   showVoiceInput: boolean
+  /**
+   * The headphone button (EarPods click, the play/pause media key) drives voice
+   * input while a composer is focused. Off by default: while on, Cinna holds
+   * Now Playing, so other apps' media controls do not get the key.
+   */
+  voiceMediaControls: boolean
   /** Hover mode only: the sidebar is floating over the chat now. Not persisted. */
   sidebarPeek: boolean
   /**
@@ -382,6 +389,7 @@ interface UIStore {
   setSidebarDocking: (docking: SidebarDocking) => void
   setVoiceInputDeviceId: (deviceId: string | null) => void
   setShowVoiceInput: (show: boolean) => void
+  setVoiceMediaControls: (on: boolean) => void
   setSidebarPeek: (peek: boolean) => void
   setMinimalView: (on: boolean) => void
   /** Show the sidebar from code: opens it in fixed mode, peeks it in hover mode. */
@@ -439,6 +447,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   sidebarDocking: readSidebarDocking(),
   voiceInputDeviceId: localStorage.getItem(VOICE_INPUT_DEVICE_KEY) || null,
   showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) === '1',
+  voiceMediaControls: localStorage.getItem(VOICE_MEDIA_CONTROLS_KEY) === '1',
   sidebarPeek: false,
   minimalView: false,
   previewContentsOpen: localStorage.getItem(PREVIEW_CONTENTS_KEY) !== '0',
@@ -531,6 +540,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setShowVoiceInput: (showVoiceInput) => {
     localStorage.setItem(VOICE_INPUT_SHOWN_KEY, showVoiceInput ? '1' : '0')
     set({ showVoiceInput })
+  },
+  setVoiceMediaControls: (voiceMediaControls) => {
+    localStorage.setItem(VOICE_MEDIA_CONTROLS_KEY, voiceMediaControls ? '1' : '0')
+    set({ voiceMediaControls })
   },
   revealSidebar: () => {
     const state = get()
@@ -658,6 +671,9 @@ const syncAppearance = (event: StorageEvent): void => {
   }
   if (event.key === VOICE_INPUT_SHOWN_KEY || event.key === null) {
     useUIStore.setState({ showVoiceInput: localStorage.getItem(VOICE_INPUT_SHOWN_KEY) === '1' })
+  }
+  if (event.key === VOICE_MEDIA_CONTROLS_KEY || event.key === null) {
+    useUIStore.setState({ voiceMediaControls: localStorage.getItem(VOICE_MEDIA_CONTROLS_KEY) === '1' })
   }
   if (event.key === ANIMATION_KEY || event.key === null) {
     useUIStore.setState({ extraUIAnimation: localStorage.getItem(ANIMATION_KEY) !== '0' })

@@ -64,6 +64,7 @@ describe('FeaturesSettingsSection', () => {
 
     expect(screen.getAllByRole('heading').map((h) => h.textContent)).toEqual(['Capabilities', 'AI Functions', 'Interface'])
     // Audio input counts even with no speech engine: it is always rendered, disabled.
+    // Enable media controls does not: it shows only while Audio input is on.
     expect(screen.getAllByRole('switch')).toHaveLength(14)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
@@ -503,6 +504,34 @@ describe('voice input rows', () => {
     fireEvent.click(audioInput())
     expect(useUIStore.getState().showVoiceInput).toBe(true)
     expect(audioInput().getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('Enable media controls shows under Audio input only while Audio input is on, off by default, and warns what it takes from other apps', () => {
+    speech = ON_DEVICE
+    useUIStore.setState({ showVoiceInput: false, voiceMediaControls: false } as never)
+    const { rerender } = render(<FeaturesSettingsSection />)
+    const media = (): HTMLButtonElement | null => screen.queryByRole('switch', { name: 'Enable media controls' }) as HTMLButtonElement | null
+    expect(media()).toBeNull()
+    fireEvent.click(audioInput())
+    expect(audioInput().compareDocumentPosition(media()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(media()!.compareDocumentPosition(cloudGroup()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(media()!.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(media()!)
+    expect(useUIStore.getState().voiceMediaControls).toBe(true)
+    expect(localStorage.getItem('cinna-voice-media-controls')).toBe('1')
+    expect(media()!.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'About Enable media controls' }))
+    expect(screen.getByText(/can no longer pause a video playing in your browser/)).toBeTruthy()
+    // Hidden with Audio input off, the stored choice kept for when it returns.
+    fireEvent.click(audioInput())
+    expect(media()).toBeNull()
+    expect(useUIStore.getState().voiceMediaControls).toBe(true)
+    // Hidden too where Audio input cannot be on.
+    useUIStore.setState({ showVoiceInput: true } as never)
+    speech = NO_SPEECH
+    rerender(<FeaturesSettingsSection />)
+    expect(media()).toBeNull()
+    localStorage.removeItem('cinna-voice-media-controls')
   })
 
   it('a mode already on stays changeable after its provider is gone, so it can be turned off', () => {

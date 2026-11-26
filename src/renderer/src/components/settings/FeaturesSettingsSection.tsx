@@ -72,8 +72,10 @@ export const VOICE_INPUT_NO_CLOUD_SERVICE = 'Shows the microphone button beside 
  * Mac, to the Cinna server (which pays for it), or to Google under the user's
  * own Gemini key. It never says "on this Mac" for a dictation that is not.
  */
+export const VOICE_MEDIA_CONTROLS_DESCRIPTION = 'Lets the headphone button control dictation, so you can dictate straight from your EarPods or AirPods: click the stem, or press the play/pause key, to start or stop dictating, and double-click to send. While a Cinna window with a chat is focused, Cinna takes the media controls from other apps: the headphone button can no longer pause a video playing in your browser, for example.'
+
 export function voiceInputDescription(speech: SpeechStatus): string {
-  const lead = 'Shows the microphone button beside Send in the composer. Click it, or the headphone button, to dictate; double-click the headphone button to send.'
+  const lead = 'Shows the microphone button beside Send in the composer. Click it to dictate.'
   const mode = speech.cloud.mode
   const viaCloud = mode === 'always' || (mode === 'fallback' && !speech.supported)
   // A mode on with no service saved: main runs no cloud dictation (never one implicitly).
@@ -131,6 +133,8 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const setShowTasksButton = useUIStore((s) => s.setShowTasksButton)
   const showVoiceInput = useUIStore((s) => s.showVoiceInput)
   const setShowVoiceInput = useUIStore((s) => s.setShowVoiceInput)
+  const voiceMediaControls = useUIStore((s) => s.voiceMediaControls)
+  const setVoiceMediaControls = useUIStore((s) => s.setVoiceMediaControls)
   const { notesEnabled, dashboardsEnabled } = useCapabilities()
   const speech = useSpeechStatus()
   const { data: settings, isLoading, isError } = useAppSettings()
@@ -433,6 +437,17 @@ export function FeaturesSettingsSection(): React.JSX.Element {
                 : 'Cloud transcription below has no usable service yet'
               : showVoiceInput ? 'The audio input button is in the composer' : 'The audio input button is hidden'}
           />
+          {/* Only while Audio input is on: the headphone button drives the composer's voice button, so without it there is nothing to control. */}
+          {speech.available && showVoiceInput && (
+            <SettingsToggleRow
+              id="feature-voice-media-controls"
+              label="Enable media controls"
+              description={VOICE_MEDIA_CONTROLS_DESCRIPTION}
+              checked={voiceMediaControls}
+              onToggle={() => setVoiceMediaControls(!voiceMediaControls)}
+              title={voiceMediaControls ? 'The headphone button controls dictation' : 'The headphone button is left to other apps'}
+            />
+          )}
           {/* Shown without an on-device engine too: on Linux and Windows it is the way in. */}
           <SettingsRow>
             <div className="flex items-center justify-between gap-3">

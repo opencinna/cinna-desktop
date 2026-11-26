@@ -68,9 +68,9 @@ export function useVoiceInputShown(): boolean {
  * where main reports voice input available (on-device, or Gemini by the
  * user's setting); while a session runs on Gemini a small cloud mark sits in
  * the button's corner; the box is the same in every state, so
- * nothing beside it moves (ux_rules §1). The headphone button toggles it too
- * (see `mediaKeys.ts`); its double click sends the composer, and while
- * recording it stops, transcribes and sends. Errors go to the composer's
+ * nothing beside it moves (ux_rules §1). With Media controls on in Settings,
+ * the headphone button toggles it too (see `mediaKeys.ts`); its double click
+ * sends the composer, and while recording it stops, transcribes and sends. Errors go to the composer's
  * `onError` (a toast).
  */
 export function VoiceInputButton({
@@ -301,18 +301,23 @@ function VoiceInputControl({
   const sendRef = useRef(send)
   sendRef.current = send
   const mediaToggle = useRef<ReturnType<typeof registerMediaToggle> | null>(null)
+  // Off by default: while registered, Cinna holds Now Playing and other apps lose the key.
+  const mediaControls = useUIStore((s) => s.voiceMediaControls)
   useEffect(() => {
+    if (!mediaControls) return
     const registration = registerMediaToggle({ toggle: () => activateRef.current(), send: () => sendRef.current() })
     mediaToggle.current = registration
     const composer = composerRef?.current
     const promote = (): void => registration.promote()
     composer?.addEventListener('focus', promote)
+    // Turned on while this composer already has focus: no focus event comes to put it on top.
+    if (composer && document.activeElement === composer) promote()
     return () => {
       composer?.removeEventListener('focus', promote)
       registration.unregister()
       mediaToggle.current = null
     }
-  }, [composerRef])
+  }, [composerRef, mediaControls])
 
   // Listed while mounted, so the menu opens with the right row checked; a
   // menu open re-lists, since labels appear once mic permission is granted.

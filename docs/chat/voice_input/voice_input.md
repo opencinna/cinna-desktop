@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A microphone button in the chat composer, left of Send, turns what the user says into text in the draft, using macOS's own speech recognition on the Mac, or, when the user opts in, the cloud: the transcription relay of their Cinna server, or Google Gemini on their own API key. The words appear at the caret while the user is still speaking. The text is never sent by itself; the user reads it, edits it and sends it, or sends it from the headphone button.
+A microphone button in the chat composer, left of Send, turns what the user says into text in the draft, using macOS's own speech recognition on the Mac, or, when the user opts in, the cloud: the transcription relay of their Cinna server, or Google Gemini on their own API key. The words appear at the caret while the user is still speaking. The text is never sent by itself; the user reads it, edits it and sends it, or sends it from the headphone button when the user has turned on Enable media controls.
 
 ## Core Concepts
 
@@ -33,11 +33,13 @@ A microphone button in the chat composer, left of Send, turns what the user says
 1. **Typing.** The words are typed out like a quick typist's: about 45 characters a second, deleting about 90 a second. When the recognizer revises earlier words, they are backspaced to where old and new agree and retyped. A backlog is caught up in proportion, so the display trails the recognizer by well under a second. A revision that reaches back more than 24 characters (a confirmed segment re-punctuating itself) is swapped in place at once. With reduced motion, the text simply appears.
 2. **A keystroke, a paste or a file drop** ends the dictation and keeps all its words, lighter ones included, as plain text, even words the display had not typed out yet; the keystroke then does its normal work, as if the words had already been typed out (a key at the end goes after them).
 3. **Esc** stops listening and keeps only the confirmed text; the lighter words are dropped.
-4. **Enter** (not Shift+Enter), the **Send button** or a **headphone double click** stops listening, waits for the last words to land in the draft, and sends once.
+4. **Enter** (not Shift+Enter), the **Send button** or, with media controls on, a **headphone double click** stops listening, waits for the last words to land in the draft, and sends once.
 5. **The caret follows** the end of the dictated text. If the user clicks or arrows elsewhere, it stays where they put it (counted from the end when it sits after the dictation, since text grows only there) and a user selection is kept whole.
 6. **Silence** ends in silence: a dictation in which nothing was heard stops without a toast. Only a recording under a quarter of a second gets "Nothing was recorded."
 
 ### From the headphones (EarPods, AirPods)
+Off until the user turns on Settings → Features → Interface → **Enable media controls** (below Audio input, and shown only while Audio input is on). With it off, Cinna never registers the headphone button, so other apps keep it.
+
 1. A single click on the headphone button does what a click on the microphone does.
 2. A double click while idle sends the draft exactly as Send would, and does nothing where Send is disabled or where Stop stands in its place. A double click never stops a turn.
 3. A double click while recording stops, waits for the last words and sends once they are in the draft. A double click while the last words are finishing sends once they land. Any failure (permission denied, an error, a cancel or a freeze) drops the send, so a draft without the dictation never goes out.
@@ -89,12 +91,13 @@ A microphone button in the chat composer, left of Send, turns what the user says
 - **Recording red is not Stop red.** Recording shows the same microphone, red and pulsing; an earlier red square was rejected because it read as the turn's Stop button.
 - **Errors are toasts, not the composer's error line**, because voice input is often used from headphones, heard rather than watched. Starting the next recording takes down the error toast this composer showed, and never anyone else's toast.
 - **A chat switch ends the dictation.** A recording in progress is cancelled (the confirmed words already in that chat's draft stay). A dictation that is only waiting for its last words, or a batch transcription in flight, still lands in the draft of the chat it was dictated in, and is never sent from the new chat.
-- **The headphone button belongs to Cinna only while a composer with voice input is on screen and the window is focused.** On blur it is handed back to whatever else plays.
+- **The headphone button is opt-in**, because holding it means holding Now Playing, and a user who never dictates from headphones should not lose the play/pause key in their browser to a feature they did not ask for. Turning the setting off in one window unregisters it in all.
+- **When it is on, the headphone button belongs to Cinna only while a composer with voice input is on screen and the window is focused.** On blur it is handed back to whatever else plays.
 
 ### Headphone button limits (platform, not fixable here)
 - Works only in music mode. Opening an AirPods microphone switches them to the call profile, and the stem click may stop arriving; record with the Mac's microphone when using the headphone button.
 - No press-and-hold: holding is reserved for Siri or noise control, and apps receive only finished commands.
-- While Cinna is focused it owns Now Playing, so Music or Spotify do not get the headphone button.
+- With Enable media controls on and Cinna focused, it owns Now Playing, so Music or Spotify do not get the headphone button.
 
 ### Known gaps
 - SFSpeechRecognizer error 1110 during a long silence is treated as the end of the audio, so a session can end early in a long pause. Not yet observed to matter; not handled.

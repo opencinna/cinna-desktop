@@ -25,7 +25,7 @@ const media = vi.hoisted(() => ({ handlers: null as { toggle: () => void; send: 
 vi.mock('./mediaKeys', () => ({
   registerMediaToggle: (handlers: { toggle: () => void; send: () => void }) => {
     media.handlers = handlers
-    return { promote: () => {}, unregister: () => {} }
+    return { promote: () => {}, unregister: () => { if (media.handlers === handlers) media.handlers = null } }
   }
 }))
 
@@ -66,7 +66,7 @@ beforeEach(() => {
   recorder.continueOnRelay.mockReset()
   status.mockReset()
   localStorage.removeItem('cinna-voice-input-device')
-  useUIStore.setState({ voiceInputDeviceId: null, showVoiceInput: true })
+  useUIStore.setState({ voiceInputDeviceId: null, showVoiceInput: true, voiceMediaControls: true })
   useToastStore.setState({ toast: null })
   recorder.options = null
   media.handlers = null
@@ -260,6 +260,20 @@ describe('VoiceInputButton', () => {
       act(() => { recorder.options?.dictation?.onSessionEnd(true) })
       expect(props.onSend).not.toHaveBeenCalled()
     })
+  })
+
+  it('leaves the headphone button to other apps unless Enable media controls is on, and follows the setting live', async () => {
+    status.mockResolvedValue(supported)
+    useUIStore.setState({ voiceMediaControls: false })
+    render(createElement(VoiceInputButton, { onText: vi.fn(), onError: vi.fn(), onSend: vi.fn() }), { wrapper })
+    await screen.findByRole('button', { name: 'Audio input' })
+    expect(media.handlers).toBeNull()
+    act(() => useUIStore.setState({ voiceMediaControls: true }))
+    expect(media.handlers).not.toBeNull()
+    act(() => { media.handlers!.toggle() })
+    expect(recorder.toggle).toHaveBeenCalledTimes(1)
+    act(() => useUIStore.setState({ voiceMediaControls: false }))
+    expect(media.handlers).toBeNull()
   })
 
   it('toggles recording on click', async () => {
