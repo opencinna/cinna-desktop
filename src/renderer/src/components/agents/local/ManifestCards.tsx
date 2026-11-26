@@ -41,7 +41,14 @@ interface ManifestCardProps {
 }
 
 /** What the agent is for, in one sentence. Also the AI draft's only input. */
-export function DescriptionCard({ agent, readOnly = false }: ManifestCardProps): React.JSX.Element {
+export function DescriptionCard({
+  agent,
+  readOnly = false,
+  extraActions
+}: ManifestCardProps & {
+  /** Beside the save hint in the card's header (a vault agent's Details). */
+  extraActions?: React.ReactNode
+}): React.JSX.Element {
   const openPath = useOpenAgentPath()
   const snapshot = useManifestSnapshot(agent, agent.description)
   const toUpdate = useCallback(
@@ -63,7 +70,12 @@ export function DescriptionCard({ agent, readOnly = false }: ManifestCardProps):
       title="Description"
       file={MANIFEST_FILE}
       onReveal={readOnly ? undefined : () => openPath.mutate({ agentId: agent.id, relPath: MANIFEST_FILE })}
-      actions={<SavingHint saving={editor.isSaving} />}
+      actions={
+        <>
+          <SavingHint saving={editor.isSaving} />
+          {extraActions}
+        </>
+      }
     >
       <InlineFileEditor
         editor={editor}

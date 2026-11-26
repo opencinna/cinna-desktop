@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  BookOpenText,
   Fingerprint,
   FolderOpen,
   MoreHorizontal,
@@ -31,6 +32,8 @@ import { useAuthStore } from '../../../stores/auth.store'
 import { SHARE_UI_TEXT, shareRefusalSentence } from '../../../utils/shareText'
 import { ShareWithTeamDialog } from './sharing/ShareDialogs'
 import { DeleteAgentDialog, RenameAgentDialog, deleteActionLabel, hasTeamVersion } from './AgentDialogs'
+import { useAgentDetails } from '../../../hooks/useAgentDetails'
+import { AGENT_DETAILS_TEXT, AgentDetailsModal, agentDetailsShown } from '../AgentDetailsModal'
 
 /**
  * The ⋯ menu: everything a user does to an agent *occasionally*.
@@ -108,6 +111,9 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
   const renameBare = useRenameLocalAgent({ onSuccess: onRenamed })
   const renameKit = useRenameKitAgent({ onSuccess: onRenamed })
 
+  // The folder's own docs/AGENT_DETAILS file, when it has one (D6).
+  const details = agentDetailsShown(useAgentDetails({ kind: 'local', agentId: agent.id }).data)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const run = (fn: () => void): void => {
     onError(null)
     menu.setOpen(false)
@@ -144,6 +150,15 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
             style={menu.style}
             className={MENU_SURFACE}
           >
+            {details && (
+              <>
+                <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => run(() => setDetailsOpen(true))}>
+                  <BookOpenText size={12} />
+                  {AGENT_DETAILS_TEXT.button}
+                </button>
+                <div className="my-1 border-t border-[var(--color-border)]" />
+              </>
+            )}
             <button
               type="button"
               role="menuitem"
@@ -270,6 +285,9 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
           </div>,
           document.body
         )}
+      {detailsOpen && (
+        <AgentDetailsModal target={{ kind: 'local', agentId: agent.id }} agentName={agent.name} onClose={() => setDetailsOpen(false)} />
+      )}
       {confirming && (
         <DeleteAgentDialog
           agent={agent}

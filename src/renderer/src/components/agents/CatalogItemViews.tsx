@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import { ChevronLeft, Download, ExternalLink, FileText, Loader2, PackageX, RefreshCw, Users } from 'lucide-react'
+import { BookOpenText, ChevronLeft, Download, ExternalLink, FileText, Loader2, PackageX, RefreshCw, Users } from 'lucide-react'
 import type { CatalogItem } from '../../../../shared/catalogItems'
 import type { CatalogCredentialSpec } from '../../../../shared/catalog'
 import type { LibraryAgentDto } from '../../../../shared/agentSharing'
@@ -15,6 +15,9 @@ import { CATALOG_POPOVER_ATTR, CatalogSkillAddMenu, type CatalogSkillTarget } fr
 import { WhoCanUseSkillDialog } from './local/sharing/WhoCanUseSkillDialog'
 import { sizedButton, useCatalogSurface, useCatalogType } from './catalogSurface'
 import { CopyInstallLinkButton, useSkillInstallLink } from './CopyInstallLinkButton'
+import { AgentDetailsButton } from './AgentDetailsButton'
+import { AGENT_DETAILS_TEXT, AgentDetailsModal, agentDetailsShown } from './AgentDetailsModal'
+import { useAgentDetails } from '../../hooks/useAgentDetails'
 import {
   ManagedList,
   ManagedListDot,
@@ -392,6 +395,8 @@ export function CatalogItemDetailView({
   const installLink = useSkillInstallLink(view.kind === 'skill' ? item.id : null)
   const [copyError, setCopyError] = useState<string | null>(null)
   const shownError = error ?? copyError
+  // Agents of either kind have a Details page on core; skills never do.
+  const hasDetails = view.kind === 'cloud_agent' || view.kind === 'desktop_agent'
   return (
     <div
       className={
@@ -420,6 +425,17 @@ export function CatalogItemDetailView({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          {/* First in the row: appearing once main answers moves none of the others. */}
+          {hasDetails && (
+            <AgentDetailsButton
+              key={item.uuid}
+              target={{ kind: 'catalog', itemUuid: item.uuid }}
+              agentName={view.name}
+              className={sizedButton(SECONDARY, type)}
+              iconSize={11}
+              overlayAttrs={{ [CATALOG_POPOVER_ATTR]: '' }}
+            />
+          )}
           {action}
           {/* Keyed by the install: a confirm belongs to the install it was opened on. */}
           {installId && <CloudInstallControls key={installId} name={view.name} installId={installId} uninstall={uninstall} />}
@@ -471,7 +487,7 @@ export function CatalogItemDetailView({
           compact={surface === 'dialog'}
         />
       </div>
-      <CatalogVersions uuid={item.uuid} settled={settled} />
+      <CatalogVersions uuid={item.uuid} settled={settled} detailsName={hasDetails ? view.name : null} />
     </div>
   )
 }
@@ -657,8 +673,21 @@ const VERSIONS_SHOWN = 5
  * icon. Loading and a failure stay in this section, inside the list's
  * surface — the detail and the dialog stay open (ux_rules rule 6).
  */
-function CatalogVersions({ uuid, settled }: { uuid: string; settled: boolean }): React.JSX.Element {
+function CatalogVersions({
+  uuid,
+  settled,
+  detailsName
+}: {
+  uuid: string
+  settled: boolean
+  /** The agent's name when its versions have Details pages (agents, not skills); null hides the row icon. */
+  detailsName: string | null
+}): React.JSX.Element {
   const detail = useCatalogItemDetail(uuid)
+  // Whether the server serves Details for this item: the header button's own answer, shared.
+  const latestDetails = useAgentDetails(detailsName !== null ? { kind: 'catalog', itemUuid: uuid } : null)
+  const versionDetails = detailsName !== null && agentDetailsShown(latestDetails.data)
+  const [detailsFor, setDetailsFor] = useState<{ revision: number; label: string } | null>(null)
   const headingId = useId()
   const type = useCatalogType()
   const surface = useCatalogSurface()
@@ -730,6 +759,31 @@ function CatalogVersions({ uuid, settled }: { uuid: string; settled: boolean }):
           const notes = revision.release_notes?.trim()
           const open = !!notes && notesOpen.has(revision.revision_number)
           const newest = index === 0
+          const notesButton = notes ? (
+            <ManagedListIconButton
+              // The first version's notes can open under the pointer that clicked the tile.
+              onClick={(event) => {
+                if (!isUnsettledClick(settled, event)) toggleNotes(revision.revision_number)
+              }}
+              aria-expanded={open}
+              title={CATALOG_TEXT.releaseNotes}
+              aria-label={CATALOG_TEXT.releaseNotesFor(label)}
+            >
+              <FileText size={iconSize} aria-hidden="true" />
+            </ManagedListIconButton>
+          ) : null
+          const detailsButton = versionDetails ? (
+            <ManagedListIconButton
+              onClick={(event) => {
+                if (!isUnsettledClick(settled, event)) setDetailsFor({ revision: revision.revision_number, label })
+              }}
+              aria-haspopup="dialog"
+              title={AGENT_DETAILS_TEXT.title}
+              aria-label={AGENT_DETAILS_TEXT.versionButtonLabel(label)}
+            >
+              <BookOpenText size={iconSize} aria-hidden="true" />
+            </ManagedListIconButton>
+          ) : null
           return (
             <ManagedListRow
               key={revision.revision_number}
@@ -744,18 +798,11 @@ function CatalogVersions({ uuid, settled }: { uuid: string; settled: boolean }):
               titleClassName="font-semibold"
               sub={sub}
               trailing={
-                notes ? (
-                  <ManagedListIconButton
-                    // The first version's notes can open under the pointer that clicked the tile.
-                    onClick={(event) => {
-                      if (!isUnsettledClick(settled, event)) toggleNotes(revision.revision_number)
-                    }}
-                    aria-expanded={open}
-                    title={CATALOG_TEXT.releaseNotes}
-                    aria-label={CATALOG_TEXT.releaseNotesFor(label)}
-                  >
-                    <FileText size={iconSize} aria-hidden="true" />
-                  </ManagedListIconButton>
+                notesButton || detailsButton ? (
+                  <>
+                    {notesButton}
+                    {detailsButton}
+                  </>
                 ) : undefined
               }
             >
@@ -768,6 +815,16 @@ function CatalogVersions({ uuid, settled }: { uuid: string; settled: boolean }):
           )
         })}
       </ManagedList>
+      {detailsFor && detailsName !== null && (
+        <AgentDetailsModal
+          key={detailsFor.revision}
+          target={{ kind: 'catalog', itemUuid: uuid, revisionNumber: detailsFor.revision }}
+          agentName={detailsName}
+          versionLabel={detailsFor.label}
+          onClose={() => setDetailsFor(null)}
+          overlayAttrs={{ [CATALOG_POPOVER_ATTR]: '' }}
+        />
+      )}
     </section>
   )
 }

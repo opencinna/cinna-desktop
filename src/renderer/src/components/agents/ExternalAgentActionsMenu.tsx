@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, MoreHorizontal, Power, Trash2 } from 'lucide-react'
+import { BookOpenText, ExternalLink, MoreHorizontal, Power, Trash2 } from 'lucide-react'
 import { useDeleteAgent } from '../../hooks/useAgents'
 import { useAgentDesktopVisibility } from '../../hooks/useAgentDesktopVisibility'
 import { useOpenExternal } from '../../hooks/useSystem'
@@ -9,6 +9,8 @@ import { useUIStore } from '../../stores/ui.store'
 import { usePopover } from '../ui/usePopover'
 import { MENU_ITEM, MENU_SURFACE } from './local/OpenInMenu'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { useAgentDetails } from '../../hooks/useAgentDetails'
+import { AGENT_DETAILS_TEXT, AgentDetailsModal, agentDetailsShown } from './AgentDetailsModal'
 
 type Agent = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
@@ -38,6 +40,12 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
   const serverUrl = useAuthStore((s) => s.currentUser?.cinnaServerUrl)
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  // A Cinna agent's Details page on core: only a synced remote row names a target.
+  const detailsTarget = agent.remoteTargetType === 'agent' && agent.remoteTargetId
+    ? { kind: 'agent' as const, remoteAgentId: agent.remoteTargetId }
+    : null
+  const details = agentDetailsShown(useAgentDetails(detailsTarget).data)
   const remote = agent.source === 'remote'
   // Previously disabled direct connections remain recoverable, but cannot be disabled again.
   const showVisibility = remote || !agent.enabled
@@ -82,11 +90,15 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
             rather than a cloud, because the task menu's cloud navigates inside
             the app and this leaves it — the Catalog footer's button to this
             very URL draws the same arrow. */}
+        {/* Reading about the agent, then leaving for its page: the two items that look, before the ones that change. */}
+        {details && <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { menu.setOpen(false); setDetailsOpen(true) }}>
+          <BookOpenText size={12} />{AGENT_DETAILS_TEXT.button}
+        </button>}
         {serverHref && <button type="button" role="menuitem" className={MENU_ITEM} onClick={openOnServer}>
           <ExternalLink size={12} />Open on the server
         </button>}
         {showVisibility && <>
-          {serverHref && <div className="my-1 border-t border-[var(--color-border)]" />}
+          {(serverHref || details) && <div className="my-1 border-t border-[var(--color-border)]" />}
           <button type="button" role="menuitem" className={MENU_ITEM} disabled={enabled.isPending}
             onClick={() => {
               menu.setOpen(false)
@@ -97,13 +109,16 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
           </button>
         </>}
         {canRemove && <>
-          {showVisibility && <div className="my-1 border-t border-[var(--color-border)]" />}
+          {(showVisibility || details) && <div className="my-1 border-t border-[var(--color-border)]" />}
           <button type="button" role="menuitem" className={`${MENU_ITEM} text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10`}
             onClick={() => { menu.setOpen(false); setError(null); setConfirming(true) }}>
             <Trash2 size={12} />Delete agent…
           </button>
         </>}
       </div>, document.body
+    )}
+    {detailsOpen && detailsTarget && (
+      <AgentDetailsModal target={detailsTarget} agentName={agent.name} onClose={() => setDetailsOpen(false)} />
     )}
     {confirming && createPortal(
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25" onClick={() => { if (!remove.isPending) setConfirming(false) }}>

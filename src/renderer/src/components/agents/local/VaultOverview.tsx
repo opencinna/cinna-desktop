@@ -3,6 +3,7 @@ import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
 import { KIT_PROMPT_CARDS, PromptDocCard } from './PromptDocCard'
 import { StatusCard } from './ReadOnlyCards'
 import { VaultDetailsGate } from './security/VaultLockedCard'
+import { AgentDetailsButton } from '../AgentDetailsButton'
 
 /**
  * The Overview of an agent in a vault: the kit cards a folder agent's
@@ -20,7 +21,21 @@ export function VaultOverview({ agent }: { agent: LocalAgentDto }): React.JSX.El
           <>
             <p className="text-xs text-[var(--color-text-muted)]">Read-only while the agent is in a vault.</p>
             <StatusCard agent={view} readOnly />
-            <DescriptionCard agent={view} readOnly />
+            <DescriptionCard
+              agent={view}
+              readOnly
+              // A vault agent has no ⋯ menu: its Details page opens from the card that describes it,
+              // a text action in the header like Show all, so appearing moves nothing.
+              extraActions={
+                <AgentDetailsButton
+                  key={agent.id}
+                  target={{ kind: 'local', agentId: agent.id }}
+                  agentName={agent.name}
+                  iconSize={11}
+                  className="flex items-center gap-1 text-[10px] font-medium text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]"
+                />
+              }
+            />
             <ExamplePromptsCard agent={view} readOnly />
             {KIT_PROMPT_CARDS.map((card) => (
               <PromptDocCard key={`${agent.id}:${card.prompt}`} agentId={agent.id} {...card} readOnlyDoc={details.docs[card.prompt]} />
