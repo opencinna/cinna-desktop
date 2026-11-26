@@ -1792,7 +1792,7 @@ describe('Runs on against the file (stored choice)', () => {
   })
 })
 
-describe('the conflict line', () => {
+describe('the conflict block', () => {
   const CHOICE = {
     engine: 'claude', credentialId: null, source: 'choice', choice: { kind: 'default' },
     conflict: {
@@ -1812,11 +1812,20 @@ describe('the conflict line', () => {
   const conflictAgent = (resolved: typeof CHOICE | typeof UNRECORDED, file: Record<string, string>, effective: Record<string, string> | null = file) =>
     agent(file, { effective, resolved: resolved as unknown as LocalAgentResolvedRuntime })
 
+  const block = (): HTMLElement => {
+    const found = document.querySelector<HTMLElement>('[data-runtime-conflict]')
+    if (!found) throw new Error('no conflict block')
+    return found
+  }
+  /** The panel's reserved line: the first child after the grid with a fixed h-4. */
+  const reservedLine = (): HTMLElement => document.querySelector<HTMLElement>('section[aria-label="Runs with"] > div.mt-2.h-4')!
+
   it('says what the file asks for and what runs, naming the models, with Update file and Use OpenCode', () => {
     defaultRuntime = { engine: 'claude' }
     render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', model: 'claude-sonnet-4-5', complexity: 'complex' }, { complexity: 'complex' })} />)
-    // The short form on the line; the whole sentence, naming the file, as its title and description.
+    // The short form in the block; the whole sentence, naming the file, as its title and description.
     const line = screen.getByText('File asks for OpenCode (Claude Sonnet 4.5); runs on Claude Agent (opus).')
+    expect(block().contains(line)).toBe(true)
     expect(line.getAttribute('title')).toBe('cinna-agent.json asks for OpenCode (Claude Sonnet 4.5); this agent runs on Claude Agent (opus).')
     expect(line.getAttribute('aria-description')).toBe(line.getAttribute('title'))
     fireEvent.click(screen.getByRole('button', { name: 'Update file' }))
@@ -1838,19 +1847,41 @@ describe('the conflict line', () => {
     expect(resolveConflict.mock.calls[1][0]).toMatchObject({ action: 'use_file' })
   })
 
-  it('pins the actions to the line’s end, whatever the sentence or a refusal is long', () => {
+  it('draws its actions with the composer’s notice buttons, not the line’s', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
+    for (const name of ['Use Default', 'More ways to settle the runtime']) {
+      const classes = screen.getByRole('button', { name }).className.split(' ')
+      expect(classes).toEqual(expect.arrayContaining(['composer-notice-button', 'composer-notice-button-primary']))
+      expect(classes).not.toContain('h-4')
+    }
+  })
+
+  it('keeps the conflict off the reserved line', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', complexity: 'complex' }, { complexity: 'complex' })} />)
+    const line = reservedLine()
+    expect(line).toBeTruthy()
+    expect(line.textContent).not.toMatch(/File asks for/)
+    expect(line.contains(screen.getByRole('button', { name: 'Update file' }))).toBe(false)
+  })
+
+  it('pins the actions to the block’s end, and a refusal keeps them where they were', () => {
     defaultRuntime = { engine: 'claude' }
     resolveConflict.mockImplementation((_input: unknown, options: { onSuccess: (outcome: unknown) => void }) =>
       options.onSuccess({ ok: false, code: 'manifest_modified', name: 'KitError', message: 'changed' }))
     render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
     const primary = screen.getByRole('button', { name: 'Use Default' })
-    const group = primary.parentElement!
-    expect(group.hasAttribute('data-conflict-actions')).toBe(true)
+    const group = primary.closest<HTMLElement>('[data-conflict-actions]')!
     expect(group.className.split(' ')).toEqual(expect.arrayContaining(['ml-auto', 'shrink-0']))
     expect(group.contains(screen.getByRole('button', { name: 'More ways to settle the runtime' }))).toBe(true)
-    // A refusal stands in for the sentence; the group is the same element, still pinned.
+    // A refusal stands in for the sentence; the same buttons, in the same group, still pinned.
     fireEvent.click(primary)
-    expect(screen.getByRole('alert').nextElementSibling).toBe(group)
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toBe('cinna-agent.json just changed — check this again.')
+    expect(block().contains(alert)).toBe(true)
+    expect(alert.nextElementSibling).toBe(group)
+    expect(screen.getByRole('button', { name: 'Use Default' })).toBe(primary)
     expect(group.className.split(' ')).toContain('ml-auto')
   })
 
@@ -1861,26 +1892,48 @@ describe('the conflict line', () => {
     const button = screen.getByRole('button', { name: 'Use Default' })
     expect(button.getAttribute('aria-disabled')).toBe('true')
     expect(button.getAttribute('title')).toBe('Wait for this agent’s turn to finish.')
+    expect(screen.getByRole('button', { name: 'More ways to settle the runtime' }).getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(button)
     expect(resolveConflict).not.toHaveBeenCalled()
   })
 
-  it('words a refusal in place of the sentence, and a stale notice as a change to look at', () => {
-    defaultRuntime = { engine: 'claude' }
-    resolveConflict.mockImplementation((_input: unknown, options: { onSuccess: (outcome: unknown) => void }) =>
-      options.onSuccess({ ok: false, code: 'manifest_modified', name: 'KitError', message: 'changed' }))
-    render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Use Default' }))
-    expect(screen.getByRole('alert').textContent).toBe('cinna-agent.json just changed — check this again.')
-  })
-
-  it('shows what the file lost as the panel’s note once the answer lands', () => {
+  it('keeps its place as an inert note once the answer lands, until the next edit', () => {
     defaultRuntime = { engine: 'claude' }
     resolveConflict.mockImplementation((_input: unknown, options: { onSuccess: (outcome: unknown) => void }) =>
       options.onSuccess({ ok: true, note: 'Dropped “claude-sonnet-4-5”.' }))
-    render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', model: 'claude-sonnet-4-5' }, null)} />)
+    const file = { engine: 'opencode', complexity: 'complex' }
+    const view = render(<RuntimePanel agent={conflictAgent(CHOICE, file, { complexity: 'complex' })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Update file' }))
-    expect(screen.getByText('Dropped “claude-sonnet-4-5”.')).toBeTruthy()
+    // Main answered; the agent comes back with no conflict.
+    const settled = { ...CHOICE, conflict: null } as unknown as typeof CHOICE
+    view.rerender(<RuntimePanel agent={conflictAgent(settled, { complexity: 'complex' })} />)
+    expect(block().getAttribute('data-runtime-conflict')).toBe('settled')
+    expect(block().hasAttribute('inert')).toBe(true)
+    expect(block().textContent).toBe('\u00a0Dropped “claude-sonnet-4-5”.')
+    // Said once: not on the reserved line as well.
+    expect(reservedLine().textContent).not.toMatch(/Dropped/)
+    expect(screen.queryByRole('button', { name: 'Update file' })).toBeNull()
+    // The panel's next edit puts it away.
+    fireEvent.change(screen.getByLabelText('Work complexity'), { target: { value: 'simple' } })
+    expect(document.querySelector('[data-runtime-conflict]')).toBeNull()
+  })
+
+  it('says what changed when the answer dropped nothing', () => {
+    defaultRuntime = { engine: 'claude' }
+    resolveConflict.mockImplementation((_input: unknown, options: { onSuccess: (outcome: unknown) => void }) =>
+      options.onSuccess({ ok: true }))
+    const view = render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Use Default' }))
+    const settled = { ...UNRECORDED, source: 'choice', choice: { kind: 'default' }, conflict: null } as unknown as typeof UNRECORDED
+    view.rerender(<RuntimePanel agent={conflictAgent(settled, {})} />)
+    expect(block().textContent).toContain('Follows the Default runtime now.')
+  })
+
+  it('is absent with no conflict', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
+    expect(document.querySelector('[data-runtime-conflict]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'More ways to settle the runtime' })).toBeNull()
   })
 
   it('locks the model and effort while a stored choice disagrees, and leaves complexity editable', () => {
@@ -1898,11 +1951,13 @@ describe('the conflict line', () => {
     expect((screen.getByLabelText('Work complexity') as HTMLSelectElement).disabled).toBe(false)
   })
 
-  it('gives the line to an engine that cannot run, over the conflict', () => {
+  it('stands beside an engine that cannot run, which keeps the reserved line', () => {
     defaultRuntime = { engine: 'claude' }
     claudeBinary = { state: 'failed', error: 'Could not download Claude Code.' }
     render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode' }, null)} />)
-    expect(screen.queryByRole('button', { name: 'Update file' })).toBeNull()
+    expect(reservedLine().textContent).not.toMatch(/File asks for/)
+    expect(reservedLine().textContent).not.toBe('')
+    expect(block().contains(screen.getByRole('button', { name: 'Update file' }))).toBe(true)
   })
 })
 

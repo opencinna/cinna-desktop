@@ -63,7 +63,7 @@ import {
   opencodeVersionLabel
 } from '../../../../../shared/engine'
 import { FIELD, FIELD_IN_ROW, LABEL, LINE_BUTTON, SUMMARY_BADGE } from './fieldClasses'
-import { RuntimeConflictLine, useRuntimeConflict } from './runtimeConflict'
+import { RuntimeConflictBlock, useRuntimeConflict } from './runtimeConflict'
 import { useRuntimeModelCatalog, useRuntimeModelCatalogRefresh } from '../../../hooks/useRuntimeModelCatalog'
 import { useUIStore } from '../../../stores/ui.store'
 import {
@@ -215,7 +215,7 @@ export const MODEL_LOCKED_TITLE = `${MANIFEST_FILE} disagrees with Runs on — u
  * `account` is the unavailable account the AI credential comes from, whose
  * action (the composer's) follows the text.
  */
-type StatusLine = { text: string; tone: string; login?: EngineLoginId; title?: string; refresh?: true; account?: UnavailableCredentialAccount; conflict?: true }
+type StatusLine = { text: string; tone: string; login?: EngineLoginId; title?: string; refresh?: true; account?: UnavailableCredentialAccount }
 
 /** The panel's line button, as {@link UnavailableAccountButton} draws the account's action on the status line. */
 function AccountLineButton({ children, ...props }: AccountButtonProps): React.JSX.Element {
@@ -974,12 +974,20 @@ export function RuntimePanel({
   const { actions: accountActions, prompt: accountPrompt } = useUnavailableAccountActions()
   /**
    * The file and the app disagree about what this agent runs on (resolved in
-   * main). Told on the reserved line with its two answers; what the answer
-   * dropped from the file comes back as this panel's note.
+   * main). Told in its own block under the reserved line, with its two
+   * answers. What an answer did (`conflictSettled`) holds the block's place
+   * until the panel's next edit or another agent, so the button just clicked
+   * does not vanish from under the pointer (ux_rules rule 1).
    */
+  const [conflictSettled, setConflictSettled] = useState<{ agentId: string; text: string; gone: boolean } | null>(null)
   const conflict = useRuntimeConflict(bare ? null : agent, {
-    onNote: (text) => note(text, { model: null, complexity: declaredComplexity })
+    onResolved: (text) => setConflictSettled({ agentId: agent.id, text, gone: false })
   })
+  // Once the answered conflict has gone, a conflict that comes back (the file
+  // edited again) is a new one and takes the block back from the note.
+  if (conflictSettled && !conflictSettled.gone && conflict === null) setConflictSettled({ ...conflictSettled, gone: true })
+  else if (conflictSettled?.gone && conflict !== null) setConflictSettled(null)
+  const settledText = conflictSettled && conflictSettled.agentId === agent.id ? conflictSettled.text : null
 
   const modelChoices = useMemo(
     () => (models ?? []).filter((model) => model.providerId === effectiveProvider?.id),
@@ -1529,22 +1537,8 @@ export function RuntimePanel({
     if (modelChoices.length === 0) return toned(NO_CATALOGUE)
     return null
   })()
-  /**
-   * **A runtime conflict owns the line** over everything about which model or
-   * credential: those sentences describe the running side, while the pickers
-   * show the file's complexity and model, and the two disagree exactly when
-   * this is set. Not over what the user just did (a failed write, a note), and
-   * not over a line that blocks the agent or carries its own action (an
-   * engine that cannot run, a sign-in, an account) — those are the more urgent
-   * truth, and the conflict returns once they are settled.
-   */
-  const lineIsTransient = !!error || !!secrets || (!!dropped && dropped.agentId === agent.id && noteStillTrue(dropped))
-  // Not a model list that needs a refresh (`refresh`): that is about the picker the conflict has
-  // locked, and the conflict is what the user has to settle first.
-  const lineBlocks = !!baseStatus && (baseStatus.tone === DANGER || !!baseStatus.login || !!baseStatus.account)
-  const status: StatusLine | null = conflict && !lineIsTransient && !lineBlocks
-    ? { text: conflict.copy.text, tone: WARN, conflict: true }
-    : baseStatus
+  // A runtime conflict is not this line's: it has its own block below it (`RuntimeConflictBlock`).
+  const status: StatusLine | null = baseStatus
 
   /**
    * The Runs-on select's value.
@@ -1623,6 +1617,7 @@ export function RuntimePanel({
     } = {}
   ): void => {
     if (!bare && !stamp) return
+    setConflictSettled(null)
     setError(null)
     // A message about credentials/.env must not survive the next thing the user
     // does in the pickers above it.
@@ -1907,6 +1902,7 @@ export function RuntimePanel({
    */
   const toggleAdvanced = (next: boolean): void => {
     setDropped(null)
+    setConflictSettled(null)
     /**
      * The stored preference always equals the picker the user actually got.
      * Moving one without the other is how the checkbox, the visible control and
@@ -2560,9 +2556,7 @@ export function RuntimePanel({
         wrap into a second row and reintroduce the shift.
       */}
       <div className="mt-2 h-4">
-        {status?.conflict && conflict ? (
-          <RuntimeConflictLine state={conflict} tone={WARN} danger={DANGER} />
-        ) : status?.login ? (
+        {status?.login ? (
           <LoginLine text={status.text} tone={status.tone} engine={status.login} login={login} />
         ) : status?.account ? (
           /*
@@ -2604,6 +2598,11 @@ export function RuntimePanel({
       </div>
       {status?.login && shownLoginCommand && <LoginCommandRow key={shownLoginCommand} command={shownLoginCommand} />}
       {accountPrompt}
+      {/*
+        Below the controls and their line, never above them (rule 1): it comes
+        with the file or the choice changing, and moves only what is under it.
+      */}
+      <RuntimeConflictBlock state={conflict} settled={conflict ? null : settledText} />
 
       {(agent.credentials.length > 0 || !canEdit || bare) && (
         <div className="mt-2 space-y-1.5 border-t border-[var(--color-border)] pt-2.5">

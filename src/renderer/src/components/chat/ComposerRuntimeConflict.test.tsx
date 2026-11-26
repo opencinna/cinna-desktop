@@ -11,7 +11,7 @@ import type { LocalAgentDto, LocalAgentRuntimeConflict } from '../../../../share
  */
 
 const { runtimeConflictNotice, assembleNoticeRows, useRuntimeConflictRow } = await import('./ComposerReadiness')
-const { runtimeConflictCopy, useRuntimeConflict } = await import('../agents/local/runtimeConflict')
+const { runtimeConflictCopy, useRuntimeConflict, RuntimeConflictBlock } = await import('../agents/local/runtimeConflict')
 
 const CHOICE: LocalAgentRuntimeConflict = {
   kind: 'choice',
@@ -122,6 +122,21 @@ describe('the composer row', () => {
     expect(row.title).toBe('cinna-agent.json asks for OpenCode (GPT-5.5 Pro); this agent runs on Claude Agent (sonnet).')
     render(createElement('div', null, row.text), { wrapper: wrapper() })
     expect(screen.getByText('File asks for OpenCode (GPT-5.5 Pro); runs on Claude Agent (sonnet).')).toBeTruthy()
+  })
+
+  it('draws the same buttons as the Runs with panel’s block, from one component', async () => {
+    const { result } = renderHook(() => useRuntimeConflict(folder(CHOICE)), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current?.copy.text).toContain('(GPT-5.5 Pro)'))
+    const row = runtimeConflictNotice(result.current)!
+    const composer = render(createElement('div', null, row.action), { wrapper: wrapper() })
+    const composerClasses = [...composer.container.querySelectorAll('button')].map((button) => button.className)
+    composer.unmount()
+    const panel = render(createElement(RuntimeConflictBlock, { state: result.current, settled: null }), { wrapper: wrapper() })
+    const actions = panel.container.querySelector('[data-conflict-actions]')!
+    const panelClasses = [...actions.querySelectorAll('button')].map((button) => button.className)
+    expect(composerClasses).toHaveLength(2)
+    expect(panelClasses).toEqual(composerClasses)
+    expect(panelClasses.every((name) => name.split(' ').includes('composer-notice-button'))).toBe(true)
   })
 
   it('sits with the AI-credential row in the panel’s order', () => {
