@@ -159,6 +159,7 @@ import {
   type ShareWithTeamInput,
   type SharingOutcome
 } from '../shared/agentSharing'
+import { AGENT_DETAILS_ESCAPE_CHANNEL } from '../shared/agentDetails'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import {
@@ -2326,7 +2327,13 @@ const api = {
       ipcRenderer.invoke('agent-details:get', target),
     openFrame: (target: import('../shared/agentDetails').AgentDetailsTarget): Promise<import('../shared/agentDetails').AgentDetailsFrameResult> =>
       ipcRenderer.invoke('agent-details:open-frame', target),
-    releaseFrame: (token: string): Promise<{ success: true }> => ipcRenderer.invoke('agent-details:release-frame', token)
+    releaseFrame: (token: string): Promise<{ success: true }> => ipcRenderer.invoke('agent-details:release-frame', token),
+    /** Escape pressed inside a Details frame, whose keys the app's document never sees. */
+    onEscape: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on(AGENT_DETAILS_ESCAPE_CHANNEL, listener)
+      return () => ipcRenderer.off(AGENT_DETAILS_ESCAPE_CHANNEL, listener)
+    }
   },
 
   /**

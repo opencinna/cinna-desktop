@@ -88,3 +88,10 @@ export function agentDetailsTargetKey(target: AgentDetailsTarget): string {
       return `local:${target.agentId}`
   }
 }
+
+/**
+ * Main → renderer: Escape was pressed while focus was inside a Details frame.
+ * The frame is cross-origin and runs no script, so its keys never reach the
+ * app's document; main sees them first (`before-input-event`) and says so.
+ */
+export const AGENT_DETAILS_ESCAPE_CHANNEL = 'agent-details:escape'

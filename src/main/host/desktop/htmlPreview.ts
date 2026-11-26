@@ -20,12 +20,15 @@ import { agentFileService, openInBrowser } from './agentFiles'
 import {
   createExternalOpenGate,
   isAppPermissionRequester,
+  isDetailsFrameEscape,
   isPreviewDownloadUrl,
   mainFrameNavigation,
   previewFrameNavigation,
   safeHtmlFilename
 } from './htmlPreviewGuards'
 import { clearOpenInBrowserCopies, prepareOpenInBrowserDir } from './openInBrowserCopies'
+
+import { AGENT_DETAILS_ESCAPE_CHANNEL } from '../../../shared/agentDetails'
 
 const logger = createLogger('html-preview')
 
@@ -184,6 +187,16 @@ export function guardPreviewFrames(win: BrowserWindow, appUrl: string): void {
     } else {
       logger.info('blocked a frame navigation', { verdict })
     }
+  })
+  // Escape inside a Details frame never reaches the app's document: forwarded.
+  win.webContents.on('before-input-event', (_event, input) => {
+    let focusedUrl: string | undefined
+    try {
+      focusedUrl = win.webContents.focusedFrame?.url
+    } catch {
+      return
+    }
+    if (isDetailsFrameEscape(input, focusedUrl)) win.webContents.send(AGENT_DETAILS_ESCAPE_CHANNEL)
   })
   win.webContents.on('will-navigate', (event) => {
     const verdict = mainFrameNavigation({

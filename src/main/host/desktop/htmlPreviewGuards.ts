@@ -255,3 +255,12 @@ export function createExternalOpenGate(cooldownMs = ACTIVATION_WINDOW_MS, now: (
     }
   }
 }
+
+/**
+ * Whether a key press is Escape inside a Details frame — which the app's own
+ * document never hears (the frame is cross-origin, with no script to forward
+ * it) — so main tells the renderer to close the Details modal.
+ */
+export function isDetailsFrameEscape(input: { type: string; key: string }, focusedFrameUrl: string | undefined): boolean {
+  return input.type === 'keyDown' && input.key === 'Escape' && isAgentDetailsUrl(focusedFrameUrl)
+}

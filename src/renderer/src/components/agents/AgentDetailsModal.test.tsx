@@ -14,7 +14,12 @@ import type { AgentDetailsFrameResult, AgentDetailsResult, AgentDetailsTarget, A
 const get = vi.fn<(target: AgentDetailsTarget) => Promise<AgentDetailsResult>>()
 const openFrame = vi.fn<(target: AgentDetailsTarget) => Promise<AgentDetailsFrameResult>>()
 const releaseFrame = vi.fn<(token: string) => Promise<{ success: true }>>()
-window.api = { agentDetails: { get, openFrame, releaseFrame } } as never
+const frameEscape = new Set<() => void>()
+const onEscape = vi.fn((handler: () => void) => {
+  frameEscape.add(handler)
+  return () => frameEscape.delete(handler)
+})
+window.api = { agentDetails: { get, openFrame, releaseFrame, onEscape } } as never
 
 const { AgentDetailsButton } = await import('./AgentDetailsButton')
 const { AgentDetailsModal } = await import('./AgentDetailsModal')
@@ -164,5 +169,16 @@ describe('AgentDetailsModal', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(behind).not.toHaveBeenCalled()
     window.removeEventListener('keydown', behind)
+  })
+
+  it('closes on Escape pressed inside the frame, which main forwards, and stops listening once closed', async () => {
+    get.mockResolvedValue({ ok: true, details: view() })
+    const onClose = vi.fn()
+    const { unmount } = render(<AgentDetailsModal target={TARGET} agentName="Weather" onClose={onClose} />, { wrapper })
+    expect(frameEscape.size).toBe(1)
+    act(() => frameEscape.forEach((handler) => handler()))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    unmount()
+    expect(frameEscape.size).toBe(0)
   })
 })

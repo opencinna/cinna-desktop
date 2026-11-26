@@ -83,7 +83,10 @@ export function AgentDetailsModal({
       onCloseRef.current()
     }
     window.addEventListener('keydown', onKey, true)
+    // Escape pressed inside the HTML frame, which this document never hears: main forwards it.
+    const offFrameEscape = window.api.agentDetails.onEscape(() => onCloseRef.current())
     return () => {
+      offFrameEscape()
       window.removeEventListener('keydown', onKey, true)
       if (previous?.isConnected) previous.focus({ preventScroll: true })
     }

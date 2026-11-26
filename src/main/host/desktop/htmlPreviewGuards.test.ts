@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isDetailsFrameEscape,
   createExternalOpenGate,
   isAppPermissionRequester,
   isPreviewDownloadUrl,
@@ -268,6 +269,29 @@ describe('an agent Details frame never navigates itself', () => {
     expect(main('file:///etc/passwd', [DETAILS])).toBe('block')
     // Another preview keeps its http rule.
     expect(main('http://example.com/a', [PREVIEW])).toBe('open-external')
+  })
+
+  it('never navigates the app window to the app itself (the _top its https links carry)', () => {
+    // Dev server and packaged file:// app, the page it is on now and another page of it.
+    const dev = (url: string) => mainFrameNavigation({ url, appUrls: ['http://localhost:5173/', 'http://localhost:5173/#/chat'], initiatorUrls: [DETAILS] })
+    expect(dev('http://localhost:5173/')).toBe('block')
+    expect(dev('http://localhost:5173/#/chat')).toBe('block')
+    expect(dev('https://localhost:5173/')).toBe('open-external')
+    const packaged = (url: string) =>
+      mainFrameNavigation({ url, appUrls: ['file:///Applications/Cinna.app/out/renderer/index.html'], initiatorUrls: [DETAILS, 'cinna-preview://0123/'] })
+    expect(packaged('file:///Applications/Cinna.app/out/renderer/index.html')).toBe('block')
+    expect(packaged(DETAILS)).toBe('block')
+    expect(packaged('cinna-preview://det-ffff/')).toBe('block')
+  })
+
+  it('forwards Escape only from inside a Details frame', () => {
+    expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Escape' }, DETAILS)).toBe(true)
+    expect(isDetailsFrameEscape({ type: 'keyUp', key: 'Escape' }, DETAILS)).toBe(false)
+    expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Enter' }, DETAILS)).toBe(false)
+    // The app's own document hears its Escape itself; other previews are not this modal's.
+    expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Escape' }, 'http://localhost:5173/')).toBe(false)
+    expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Escape' }, PREVIEW)).toBe(false)
+    expect(isDetailsFrameEscape({ type: 'keyDown', key: 'Escape' }, undefined)).toBe(false)
   })
 
   it('carries a sandbox with no scripts, no same origin, no popups and no forms', async () => {
