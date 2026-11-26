@@ -242,20 +242,25 @@ export function ErrorLine({ error }: { error: string | null }): React.JSX.Elemen
  * offers both answers inline: Update file / Use <engine>, or Use Default
  * runtime / Keep <engine> for a pin the app never chose. Below the controls and
  * above the footer, so arriving with the agent's read moves nothing the user
- * is about to click (rule 1). Once answered, what the file lost ("Dropped …")
- * takes its place.
+ * is about to click (rule 1). Once answered, what the file lost ("Dropped …"),
+ * else what changed, takes its place at the warning's height, so the footer
+ * does not jump up under the pointer.
  */
 export function RuntimeConflictWarning({ agentId }: { agentId: string }): React.JSX.Element | null {
   const { data: agent } = useLocalAgent(agentId)
-  /** What an answer dropped from the file: said in the warning's place, for as long as the dialog is open. */
-  const [note, setNote] = useState<string | null>(null)
-  const state = useRuntimeConflict(agent, { onNote: setNote })
+  const warningRef = useRef<HTMLDivElement>(null)
+  /** What an answer did, said in the warning's place for as long as the dialog is open, at the height the warning had. */
+  const [settled, setSettled] = useState<{ text: string; height: number | null } | null>(null)
+  const state = useRuntimeConflict(agent, {
+    onResolved: (text) => setSettled({ text, height: warningRef.current?.offsetHeight || null })
+  })
   if (!state) {
-    if (note === null) return null
+    if (settled === null) return null
     return (
-      <div role="status" data-runtime-conflict-note className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
-        <Check size={14} className="mt-[3px] shrink-0 text-[var(--color-success)]" aria-hidden="true" />
-        <p className={`min-w-0 flex-1 ${DIALOG_TEXT}`}>{note}</p>
+      <div role="status" data-runtime-conflict-note style={settled.height ? { minHeight: settled.height } : undefined}
+        className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
+        <Check size={14} className="mt-[3px] shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
+        <p className={`min-w-0 flex-1 ${DIALOG_TEXT}`}>{settled.text}</p>
       </div>
     )
   }
@@ -271,7 +276,7 @@ export function RuntimeConflictWarning({ agentId }: { agentId: string }): React.
   ]
   const blocked = state.running || state.pending
   return (
-    <div role="note" data-runtime-conflict className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
+    <div ref={warningRef} role="note" data-runtime-conflict className="flex items-start gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
       <AlertTriangle size={14} className="mt-[3px] shrink-0 text-[var(--color-warning)]" aria-hidden="true" />
       <div className="min-w-0 flex-1 space-y-2">
         <p className={DIALOG_TEXT}>{copy.sentence} People who get it run what the file says.</p>

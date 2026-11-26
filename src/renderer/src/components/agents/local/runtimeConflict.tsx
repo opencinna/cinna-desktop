@@ -42,6 +42,8 @@ export interface RuntimeConflictCopy {
   /**
    * The one-line form, for the panel's notice block and the composer's row:
    * short enough that both sides survive at the 800px minimum (ux rule 7/12).
+   * Only the file's side names its model — that is the cost that hurt; the
+   * running side's model is on the badges and the full `sentence`.
    */
   text: string
   /**
@@ -60,15 +62,16 @@ export type ConflictModelName = (side: LocalAgentRuntimeSide) => string | null
  * The sentence and the two actions. Pure, so the wording is tested once.
  *
  * Each side names its engine and, when known, the model it would run — the
- * cost is what hurt in the report this exists for. When both sides are the
+ * cost is what hurt in the report this exists for. The one-line `text` keeps
+ * only the file's model, so the running side survives at 800px. When both sides are the
  * same engine (OpenCode) the difference is the credential, so each side names
  * its own, or says it has none: "OpenCode (GPT-5.5 Pro); runs on OpenCode"
  * would name no difference at all.
  */
 export function runtimeConflictCopy(conflict: LocalAgentRuntimeConflict, modelName: ConflictModelName): RuntimeConflictCopy {
   const credentialOnly = conflict.file.engine === conflict.app.engine
-  const side = (value: LocalAgentRuntimeSide): string => {
-    const model = modelName(value)
+  const side = (value: LocalAgentRuntimeSide, withModel = true): string => {
+    const model = withModel ? modelName(value) : null
     const on = !credentialOnly ? '' : value.credentialName ? ` on ${value.credentialName}` : ' with no AI credential'
     return `${RUNTIME_MODE_NAMES[value.engine]}${on}${model ? ` (${model})` : ''}`
   }
@@ -76,7 +79,7 @@ export function runtimeConflictCopy(conflict: LocalAgentRuntimeConflict, modelNa
   if (conflict.kind === 'choice') {
     return {
       kind: 'choice',
-      text: `File asks for ${side(conflict.file)}; runs on ${side(conflict.app)}.`,
+      text: `File asks for ${side(conflict.file)}; runs on ${side(conflict.app, false)}.`,
       sentence: `${MANIFEST_FILE} asks for ${side(conflict.file)}; this agent runs on ${side(conflict.app)}.`,
       primary: { action: 'update_file', label: 'Update file', title: `Rewrite ${MANIFEST_FILE} to say ${side(conflict.app)}` },
       alternative: { action: 'use_file', label: `Use ${fileName}`, title: `Run this agent on ${side(conflict.file)}, as ${MANIFEST_FILE} asks` }
@@ -84,7 +87,7 @@ export function runtimeConflictCopy(conflict: LocalAgentRuntimeConflict, modelNa
   }
   return {
     kind: 'unrecorded',
-    text: `File pins ${side(conflict.file)}; Default runtime is ${side(conflict.app)}.`,
+    text: `File pins ${side(conflict.file)}; Default is ${side(conflict.app, false)}.`,
     sentence: `${MANIFEST_FILE} pins ${side(conflict.file)}; your Default runtime is ${side(conflict.app)}.`,
     primary: { action: 'use_default', label: 'Use Default', title: `Use Default runtime — removes the pin from ${MANIFEST_FILE}` },
     alternative: { action: 'use_file', label: `Keep ${fileName}`, title: `Keep running this agent on ${side(conflict.file)}` }
@@ -114,14 +117,15 @@ export interface RuntimeConflictState {
  * none (and always for a vault agent or a bare one, which main never gives a
  * conflict).
  *
- * `onNote` hears what the file lost ("Dropped “gpt-5.5-pro”.") on success;
- * `onResolved` hears every success, worded ({@link runtimeConflictSettledText});
+ * `onResolved` hears every success, worded ({@link runtimeConflictSettledText}):
+ * what the file lost ("Dropped “gpt-5.5-pro”."), else what changed — every
+ * surface puts it in the conflict's place, so an answer never just vanishes;
  * `turnRunning` adds the caller's own knowledge of a running turn (the
  * composer's stream) to main's list of running sessions.
  */
 export function useRuntimeConflict(
   agent: LocalAgentDto | null | undefined,
-  options: { onNote?: (text: string) => void; onResolved?: (text: string) => void; turnRunning?: boolean } = {}
+  options: { onResolved?: (text: string) => void; turnRunning?: boolean } = {}
 ): RuntimeConflictState | null {
   const conflict = agent && !agent.vault ? (agent.resolvedRuntime?.conflict ?? null) : null
   const fileCli = conflict && isEngineLoginId(conflict.file.engine) ? conflict.file.engine : null
@@ -150,7 +154,6 @@ export function useRuntimeConflict(
     resolve.mutate({ agentId: agent.id, action, stamp }, {
       onSuccess: (outcome) => {
         if (outcome.ok) {
-          if (outcome.note) options.onNote?.(outcome.note)
           options.onResolved?.(runtimeConflictSettledText(action, conflict, outcome.note))
           return
         }
@@ -170,14 +173,16 @@ export function useRuntimeConflict(
 }
 
 /**
- * What an answer did, for the panel's block once it lands: main's note when
- * the file lost something ("Dropped “gpt-5.5-pro”."), else the change itself.
+ * What an answer did, for the place the conflict held once it lands: main's
+ * note when the file lost something ("Dropped “gpt-5.5-pro”."), else the change
+ * itself. Keeping a pin the app never chose changes nothing that runs.
  */
 export function runtimeConflictSettledText(action: RuntimeConflictAction, conflict: LocalAgentRuntimeConflict, note?: string): string {
   if (note) return note
   if (action === 'update_file') return `Updated ${MANIFEST_FILE}.`
   if (action === 'use_default') return 'Follows the Default runtime now.'
-  return `Runs on ${RUNTIME_MODE_NAMES[conflict.file.engine]} now.`
+  const engine = RUNTIME_MODE_NAMES[conflict.file.engine]
+  return conflict.kind === 'unrecorded' ? `Keeps running on ${engine}.` : `Runs on ${engine} now.`
 }
 
 /**

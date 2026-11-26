@@ -1824,7 +1824,7 @@ describe('the conflict block', () => {
     defaultRuntime = { engine: 'claude' }
     render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', model: 'claude-sonnet-4-5', complexity: 'complex' }, { complexity: 'complex' })} />)
     // The short form in the block; the whole sentence, naming the file, as its title and description.
-    const line = screen.getByText('File asks for OpenCode (Claude Sonnet 4.5); runs on Claude Agent (opus).')
+    const line = screen.getByText('File asks for OpenCode (Claude Sonnet 4.5); runs on Claude Agent.')
     expect(block().contains(line)).toBe(true)
     expect(line.getAttribute('title')).toBe('cinna-agent.json asks for OpenCode (Claude Sonnet 4.5); this agent runs on Claude Agent (opus).')
     expect(line.getAttribute('aria-description')).toBe(line.getAttribute('title'))
@@ -1838,7 +1838,7 @@ describe('the conflict block', () => {
   it('offers Use Default and Keep OpenCode for a pin the app never chose', () => {
     defaultRuntime = { engine: 'claude' }
     render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
-    expect(screen.getByText('File pins OpenCode; Default runtime is Claude Agent (opus).').getAttribute('title'))
+    expect(screen.getByText('File pins OpenCode; Default is Claude Agent.').getAttribute('title'))
       .toBe('cinna-agent.json pins OpenCode; your Default runtime is Claude Agent (opus).')
     fireEvent.click(screen.getByRole('button', { name: 'Use Default' }))
     expect(resolveConflict.mock.calls[0][0]).toMatchObject({ action: 'use_default' })
@@ -1949,6 +1949,50 @@ describe('the conflict block', () => {
     advanced = false
     render(<RuntimePanel agent={conflictAgent(CHOICE, { engine: 'opencode', complexity: 'simple' }, { complexity: 'simple' })} />)
     expect((screen.getByLabelText('Work complexity') as HTMLSelectElement).disabled).toBe(false)
+  })
+
+  it('describes the side that runs on the line and the badge, not the file’s model', () => {
+    // File: OpenCode on Anthropic with claude-sonnet-4-5, which Claude Code's
+    // list lacks. Stored: Claude Agent, which runs on its own default. Judging
+    // the file's model would say "Model no longer offered — choose another"
+    // and send the user to a Model select the conflict has locked.
+    defaultRuntime = { engine: 'claude' }
+    cliCatalogs = { ...cliCatalogs, claude: CLAUDE_CATALOG }
+    claudeAuth = { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: null, email: null }
+    const file = { engine: 'opencode', credential: 'Anthropic', model: 'claude-sonnet-4-5' }
+    const resolved = {
+      engine: 'claude', credentialId: null, source: 'choice', choice: { kind: 'engine', engine: 'claude' },
+      conflict: {
+        kind: 'choice',
+        file: { engine: 'opencode', credentialName: 'Anthropic', modelId: 'claude-sonnet-4-5' },
+        app: { engine: 'claude', credentialName: null, modelId: null }
+      }
+    } as unknown as LocalAgentResolvedRuntime
+    const conflicted = agent(file, { effective: { engine: 'claude' }, resolved })
+    render(<RuntimePanel agent={conflicted} />)
+    const line = reservedLine().textContent ?? ''
+    expect(line).toMatch(/^Claude Agent runs on your own Claude Code login, on /)
+    expect(line).not.toMatch(/claude-sonnet-4-5|Sonnet 4\.5/)
+    expect(screen.queryByText('Model no longer offered — choose another.')).toBeNull()
+    cleanup()
+    render(<RuntimePanel agent={conflicted} compact />)
+    expect(screen.queryByText('Model unavailable')).toBeNull()
+  })
+
+  it('does not bring an answered agent’s note back after another agent', () => {
+    defaultRuntime = { engine: 'claude' }
+    resolveConflict.mockImplementation((_input: unknown, options: { onSuccess: (outcome: unknown) => void }) =>
+      options.onSuccess({ ok: true }))
+    const settled = { ...UNRECORDED, source: 'choice', choice: { kind: 'default' }, conflict: null } as unknown as typeof UNRECORDED
+    const view = render(<RuntimePanel agent={conflictAgent(UNRECORDED, { engine: 'opencode' })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Use Default' }))
+    view.rerender(<RuntimePanel agent={conflictAgent(settled, {})} />)
+    expect(block().getAttribute('data-runtime-conflict')).toBe('settled')
+    // The page shows another agent in the same panel, then this one again.
+    view.rerender(<RuntimePanel agent={{ ...conflictAgent(settled, {}), id: 'folder:b' }} />)
+    expect(document.querySelector('[data-runtime-conflict]')).toBeNull()
+    view.rerender(<RuntimePanel agent={conflictAgent(settled, {})} />)
+    expect(document.querySelector('[data-runtime-conflict]')).toBeNull()
   })
 
   it('stands beside an engine that cannot run, which keeps the reserved line', () => {

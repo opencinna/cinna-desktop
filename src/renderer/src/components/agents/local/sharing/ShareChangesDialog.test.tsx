@@ -224,6 +224,29 @@ describe('the runtime-conflict warning in the share dialogs', () => {
     expect(screen.queryByRole('button', { name: 'Update file' })).toBeNull()
   })
 
+  it('says what changed in the warning’s place when the answer dropped nothing, with the panel’s check colour', async () => {
+    let kind: 'unrecorded' | null = 'unrecorded'
+    api('unrecorded')
+    const localAgents = (window as unknown as { api: { localAgents: Record<string, unknown> } }).api.localAgents
+    localAgents.get = async () => conflictAgent(kind)
+    resolveConflict.mockImplementation(async () => { kind = null; return { ok: true } })
+    // jsdom lays nothing out: the warning measures as the dialog would draw it.
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) { return this.hasAttribute('data-runtime-conflict') ? 96 : 0 })
+    try {
+      render(changes())
+      fireEvent.click(await screen.findByRole('button', { name: 'Keep OpenCode' }))
+      const note = await screen.findByRole('status')
+      expect(note.textContent).toBe('Keeps running on OpenCode.')
+      expect(note.querySelector('svg')?.getAttribute('class')).toContain('text-[var(--color-accent)]')
+      expect(document.querySelector('[data-runtime-conflict]')).toBeNull()
+      // At the warning's height, so the footer does not move up under the pointer.
+      expect(note.style.minHeight).toBe('96px')
+    } finally {
+      height.mockRestore()
+    }
+  })
+
   it('says nothing when the file and the app agree', async () => {
     api(null)
     render(changes())

@@ -367,7 +367,14 @@ export function NoticeSplitButton({ label, icon: Icon, title, pending = false, p
         style={{ borderLeftColor: 'color-mix(in srgb, white 35%, var(--color-accent))' }}
         aria-label={moreLabel} title={moreLabel} aria-haspopup="menu" aria-expanded={menu.open}
         aria-disabled={menuDisabled || undefined}
-        onClick={() => { if (!menuDisabled || menu.open) menu.setOpen(!menu.open) }}>
+        onClick={() => { if (!menuDisabled || menu.open) menu.setOpen(!menu.open) }}
+        // Opened by a click, the focus stays here, not in the menu: Escape has to close it from the chevron too.
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape' || !menu.open) return
+          e.preventDefault()
+          e.stopPropagation()
+          menu.setOpen(false)
+        }}>
         <ChevronDown size={12} aria-hidden="true" />
       </NoticeButton>
       {menu.open && menu.style && createPortal(

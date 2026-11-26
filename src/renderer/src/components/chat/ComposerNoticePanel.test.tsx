@@ -234,6 +234,26 @@ describe('NoticeSplitButton', () => {
     expect(document.activeElement).toBe(more)
   })
 
+  it('closes its menu on Escape from the chevron, where a mouse click leaves the focus', () => {
+    renderSplit()
+    const more = screen.getByRole('button', { name: 'More ways to add' })
+    more.focus()
+    fireEvent.click(more)
+    expect(screen.getByRole('menu')).toBeTruthy()
+    const outer = vi.fn()
+    document.addEventListener('keydown', outer)
+    try {
+      fireEvent.keyDown(more, { key: 'Escape' })
+    } finally {
+      document.removeEventListener('keydown', outer)
+    }
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(more.getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(more)
+    // Only the menu's Escape: a composer or dialog above does not hear it as its own.
+    expect(outer).not.toHaveBeenCalled()
+  })
+
   it('refuses while disabled, keeps its pending label at the same place, and holds a menu whose items are all held', () => {
     const { onClick } = renderSplit({ disabled: true, pending: true, pendingLabel: 'Adding…', items: [{ label: 'New agent with this skill', icon: UserPlus, onSelect: vi.fn(), disabled: true }] })
     const primary = screen.getByRole('button', { name: 'Add' })

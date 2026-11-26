@@ -751,16 +751,18 @@ export function runtimeConflictNotice(state: RuntimeConflictState | null, note: 
 
 /**
  * The composer's runtime-conflict row ({@link runtimeConflictNotice}) with the
- * note an answer returns. The note is held here, by the composer, because the
- * conflict itself is gone the moment the answer lands: it stays in the row's
- * place until the next send (`turnRunning`) or another agent.
+ * note an answer leaves — what the file lost, else what changed
+ * (`runtimeConflictSettledText`), so an answer never just removes the row from
+ * under the pointer (ux_rules rule 1). The note is held here, by the composer,
+ * because the conflict itself is gone the moment the answer lands: it stays in
+ * the row's place until the next send (`turnRunning`) or another agent.
  */
 export function useRuntimeConflictRow(folder: LocalAgentDto | null, turnRunning: boolean): ComposerNotice | null {
   const [conflictNote, setConflictNote] = useState<{ agentId: string; text: string } | null>(null)
   const folderId = folder?.id ?? null
   const state = useRuntimeConflict(folder, {
     turnRunning,
-    onNote: (text) => { if (folderId) setConflictNote({ agentId: folderId, text }) }
+    onResolved: (text) => { if (folderId) setConflictNote({ agentId: folderId, text }) }
   })
   useEffect(() => { if (turnRunning) setConflictNote(null) }, [turnRunning])
   useEffect(() => { setConflictNote((current) => (current && current.agentId !== folderId ? null : current)) }, [folderId])

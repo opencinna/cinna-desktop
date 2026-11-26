@@ -855,11 +855,13 @@ export function RuntimePanel({
     : onCodex && catalogDefaultModel(cliCatalog) ? cliNameOf(catalogDefaultModel(cliCatalog))
     : null
   /**
-   * The declared model, judged against that list with the driver's own matching
-   * (`isModelOffered`): `true` only once the list is known and lacks it. Never a
-   * warning on a guess — an unknown list says nothing.
+   * The model that runs (`runningModel`), judged against that list with the
+   * driver's own matching (`isModelOffered`): `true` only once the list is
+   * known and lacks it. Never a warning on a guess — an unknown list says
+   * nothing. Not the file's during a choice conflict: that model never runs
+   * here, and the Model select it would send the user to is locked.
    */
-  const staleModel = cliEngine !== null && declaredModel !== null && isModelOffered(cliCatalog, declaredModel) === false
+  const staleModel = cliEngine !== null && runningModel !== null && isModelOffered(cliCatalog, runningModel) === false
   /** What the CLI choice converts back to on the tier picker, when the panel can tell (`cliModelTier`). */
   const cliTier = cliEngine && declaredModel !== null ? cliModelTier(cliEngine, declaredModel, declaredEffort, cliCatalog) : undefined
   /**
@@ -985,9 +987,11 @@ export function RuntimePanel({
   })
   // Once the answered conflict has gone, a conflict that comes back (the file
   // edited again) is a new one and takes the block back from the note.
-  if (conflictSettled && !conflictSettled.gone && conflict === null) setConflictSettled({ ...conflictSettled, gone: true })
+  // Another agent in the same panel (it has no key on the agent page): the note was the last one's.
+  if (conflictSettled && conflictSettled.agentId !== agent.id) setConflictSettled(null)
+  else if (conflictSettled && !conflictSettled.gone && conflict === null) setConflictSettled({ ...conflictSettled, gone: true })
   else if (conflictSettled?.gone && conflict !== null) setConflictSettled(null)
-  const settledText = conflictSettled && conflictSettled.agentId === agent.id ? conflictSettled.text : null
+  const settledText = conflictSettled?.agentId === agent.id ? conflictSettled.text : null
 
   const modelChoices = useMemo(
     () => (models ?? []).filter((model) => model.providerId === effectiveProvider?.id),
@@ -1265,7 +1269,7 @@ export function RuntimePanel({
     if (staleModel) {
       return {
         text: 'Model no longer offered — choose another.',
-        title: `${cliName} no longer offers “${declaredModel}”, so its turns run on ${cliName}’s default until another model is chosen.`,
+        title: `${cliName} no longer offers “${runningModel}”, so its turns run on ${cliName}’s default until another model is chosen.`,
         tone: WARN,
         refresh: true
       }
@@ -1342,7 +1346,7 @@ export function RuntimePanel({
       const catalogLine = cliCatalogLine()
       if (catalogLine) return catalogLine
       {
-        const codexModel = cliNameOf(declaredModel) ?? cliDefaultName ?? 'its configured default model'
+        const codexModel = cliNameOf(runningModel) ?? cliDefaultName ?? 'its configured default model'
         const codexEffort = codexEffortForRuntime(agent.runtime)
         return {
           // Short: a long model id must not push the effort off the 800px line.
@@ -1361,7 +1365,7 @@ export function RuntimePanel({
       }
       const catalogLine = cliCatalogLine()
       if (catalogLine) return catalogLine
-      return { text: `Antigravity uses your Google login, on ${cliNameOf(declaredModel) ?? cliDefaultName}.`, tone: NOTE }
+      return { text: `Antigravity uses your Google login, on ${cliNameOf(runningModel) ?? cliDefaultName}.`, tone: NOTE }
     }
     if (onClaude) {
       // Silent until its own state query answers — not PATH detection, which
@@ -1411,7 +1415,7 @@ export function RuntimePanel({
       }
       const catalogLine = cliCatalogLine()
       if (catalogLine) return catalogLine
-      const claudeModel = cliNameOf(declaredModel) ?? cliDefaultName
+      const claudeModel = cliNameOf(runningModel) ?? cliDefaultName
       return {
         // **Both names, in one sentence, because both are on the screen.** The
         // select says "Claude Agent" and the column beside it says "Claude Code
@@ -1480,14 +1484,14 @@ export function RuntimePanel({
     // the same shared ladder, with model names rather than ids.
     const model = describeModel(facts, (id) => nameOf(id) ?? '')
     if (model) return toned(model)
-    if (modelBelongsElsewhere(declaredModel, effectiveProvider, models ?? [], providers)) {
-      const owner = (models ?? []).find((model) => model.id === declaredModel)
+    if (modelBelongsElsewhere(runningModel, effectiveProvider, models ?? [], providers)) {
+      const owner = (models ?? []).find((model) => model.id === runningModel)
       const ownerName =
         providers.find((provider) => provider.id === owner?.providerId)?.name ?? 'another credential'
       // Action first: at the 800px minimum window this line is truncated, and
       // the half that survives has to be the half the user can act on.
       return {
-        text: `Pick a model ${facts.credentialName} lists — “${declaredModel}” is ${ownerName}’s.`,
+        text: `Pick a model ${facts.credentialName} lists — “${runningModel}” is ${ownerName}’s.`,
         tone: WARN
       }
     }

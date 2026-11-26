@@ -11,7 +11,7 @@ import type { LocalAgentDto, LocalAgentRuntimeConflict } from '../../../../share
  */
 
 const { runtimeConflictNotice, assembleNoticeRows, useRuntimeConflictRow } = await import('./ComposerReadiness')
-const { runtimeConflictCopy, useRuntimeConflict, RuntimeConflictBlock } = await import('../agents/local/runtimeConflict')
+const { runtimeConflictCopy, runtimeConflictSettledText, useRuntimeConflict, RuntimeConflictBlock } = await import('../agents/local/runtimeConflict')
 
 const CHOICE: LocalAgentRuntimeConflict = {
   kind: 'choice',
@@ -50,14 +50,14 @@ function wrapper(): ({ children }: { children: ReactNode }) => React.JSX.Element
 }
 
 describe('runtimeConflictCopy', () => {
-  it('names both sides with their models, and the two answers for each kind', () => {
+  it('names both sides with their models in the sentence, and only the file’s model on the line', () => {
     const name = (side: { modelId: string | null }): string | null => (side.modelId === 'gpt-5.5-pro' ? 'GPT-5.5 Pro' : side.modelId)
     const choice = runtimeConflictCopy(CHOICE, name)
-    expect(choice.text).toBe('File asks for OpenCode (GPT-5.5 Pro); runs on Claude Agent (sonnet).')
+    expect(choice.text).toBe('File asks for OpenCode (GPT-5.5 Pro); runs on Claude Agent.')
     expect(choice.sentence).toBe('cinna-agent.json asks for OpenCode (GPT-5.5 Pro); this agent runs on Claude Agent (sonnet).')
     expect([choice.primary.label, choice.alternative.label]).toEqual(['Update file', 'Use OpenCode'])
     const unrecorded = runtimeConflictCopy(UNRECORDED, name)
-    expect(unrecorded.text).toBe('File pins OpenCode (GPT-5.5 Pro); Default runtime is Claude Agent (sonnet).')
+    expect(unrecorded.text).toBe('File pins OpenCode (GPT-5.5 Pro); Default is Claude Agent.')
     expect(unrecorded.sentence).toBe('cinna-agent.json pins OpenCode (GPT-5.5 Pro); your Default runtime is Claude Agent (sonnet).')
     expect([unrecorded.primary.action, unrecorded.alternative.action]).toEqual(['use_default', 'use_file'])
     expect([unrecorded.primary.label, unrecorded.alternative.label]).toEqual(['Use Default', 'Keep OpenCode'])
@@ -79,7 +79,7 @@ describe('runtimeConflictCopy', () => {
       file: { engine: 'opencode', credentialName: 'Work OpenAI', modelId: null },
       app: { engine: 'opencode', credentialName: null, modelId: null }
     }, () => null)
-    expect(copy.text).toBe('File pins OpenCode on Work OpenAI; Default runtime is OpenCode with no AI credential.')
+    expect(copy.text).toBe('File pins OpenCode on Work OpenAI; Default is OpenCode with no AI credential.')
     // Across engines a missing credential is not the difference, so it is not said.
     const across = runtimeConflictCopy({ ...CHOICE, file: { ...CHOICE.file, credentialName: null } }, () => null)
     expect(across.text).toBe('File asks for OpenCode; runs on Claude Agent.')
@@ -121,7 +121,7 @@ describe('the composer row', () => {
     expect(row.singleLine).toBe(true)
     expect(row.title).toBe('cinna-agent.json asks for OpenCode (GPT-5.5 Pro); this agent runs on Claude Agent (sonnet).')
     render(createElement('div', null, row.text), { wrapper: wrapper() })
-    expect(screen.getByText('File asks for OpenCode (GPT-5.5 Pro); runs on Claude Agent (sonnet).')).toBeTruthy()
+    expect(screen.getByText('File asks for OpenCode (GPT-5.5 Pro); runs on Claude Agent.')).toBeTruthy()
   })
 
   it('draws the same buttons as the Runs with panel’s block, from one component', async () => {
@@ -196,7 +196,7 @@ describe('the composer row once answered', () => {
     expect(hook.result.current).toBeNull()
   })
 
-  it('says nothing after an answer that dropped nothing', async () => {
+  it('says what changed after an answer that dropped nothing, rather than vanishing', async () => {
     resolve.mockResolvedValue({ ok: true })
     const hook = renderHook(({ agent }) => useRuntimeConflictRow(agent, false), { wrapper: wrapper(), initialProps: { agent: folder(CHOICE) } })
     await waitFor(() => expect(hook.result.current?.action).toBeTruthy())
@@ -204,7 +204,18 @@ describe('the composer row once answered', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Update file' }))
     await waitFor(() => expect(resolve).toHaveBeenCalled())
     hook.rerender({ agent: folder(null) })
-    await new Promise((done) => setTimeout(done, 20))
-    expect(hook.result.current).toBeNull()
+    await waitFor(() => expect(hook.result.current?.text).toBe('Updated cinna-agent.json.'))
+    expect(hook.result.current?.tone).toBe('accent')
+    expect(hook.result.current?.action).toBeUndefined()
+  })
+})
+
+describe('runtimeConflictSettledText', () => {
+  it('says what the file lost, else what changed — and that keeping an unchosen pin changes nothing', () => {
+    expect(runtimeConflictSettledText('update_file', CHOICE, 'Dropped “gpt-5.5-pro”.')).toBe('Dropped “gpt-5.5-pro”.')
+    expect(runtimeConflictSettledText('update_file', CHOICE)).toBe('Updated cinna-agent.json.')
+    expect(runtimeConflictSettledText('use_default', UNRECORDED)).toBe('Follows the Default runtime now.')
+    expect(runtimeConflictSettledText('use_file', CHOICE)).toBe('Runs on OpenCode now.')
+    expect(runtimeConflictSettledText('use_file', UNRECORDED)).toBe('Keeps running on OpenCode.')
   })
 })
