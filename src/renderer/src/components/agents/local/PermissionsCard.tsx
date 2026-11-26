@@ -19,9 +19,7 @@ import {
   type LocalAgentDto
 } from '../../../../../shared/localAgents'
 import {
-  DEFAULT_AGENT_ENGINE,
   DEFAULT_CLAUDE_APPROVAL,
-  effectiveEngine,
   isClaudeApproval,
   type ClaudeApproval
 } from '../../../../../shared/engine'
@@ -33,7 +31,6 @@ import {
 } from '../../../../../shared/handovers'
 import { handoverAutoOverriddenText, handoverIgnoreText } from '../../../utils/handoverText'
 import { LOCKED_VALUE } from './security/vaultText'
-import { useDefaultRuntime } from '../../../hooks/useEngine'
 import {
   SettingsButton,
   SettingsCard,
@@ -125,37 +122,16 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
    * engine on a machine whose Default Runtime is Claude Agent runs on Claude
    * Code, with the CLI's reviewer in front of every ask — and a card reading
    * only the manifest would describe the OpenCode profile and hide the
-   * Approvals control that is actually in force. `effectiveEngine` is the
-   * shared rule the launcher applies, so this card and the turn cannot
-   * disagree about whose permission system is running.
+   * Approvals control that is actually in force. The engine is the one main
+   * resolved for the launcher (`resolvedRuntime`: stored Runs-on choice, file,
+   * machine default), so this card and the turn cannot disagree about whose
+   * permission system is running — and it is known on arrival, with no
+   * "reading which runtime" pause.
    */
-  const { data: defaultRuntime } = useDefaultRuntime()
-  const engine = vault ? vault.engine : effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE)
+  const engine = vault ? vault.engine : agent.resolvedRuntime.engine
   const onCodex = engine === 'codex'
   const onAntigravity = engine === 'antigravity'
   const onClaude = engine === 'claude'
-  /**
-   * Nothing can answer "whose permission system" yet: the folder leaves the
-   * engine to this machine, and this machine has not said.
-   *
-   * The claim waits rather than being guessed. Guessing OpenCode renders a
-   * paragraph about a profile and then replaces it with a paragraph *and a
-   * select*, pushing the grants list down a tenth of a second after the tab
-   * opens (ux_rules rule 1) — and on a security surface the retracted sentence
-   * is the one that describes who approves a command.
-   *
-   * Only for an agent whose folder settles nothing: one that names an engine, a
-   * credential or a model is answered by `effectiveEngine` without the machine
-   * default, so it never waits.
-   */
-  const engineUnknown =
-    !vault &&
-    defaultRuntime === undefined &&
-    // Any named engine settles it: a known one as named, anything else on
-    // OpenCode (`effectiveEngine`), neither waiting on the machine default.
-    (typeof agent.runtime?.engine === 'string' ? agent.runtime.engine.trim() : '') === '' &&
-    (agent.runtime?.credential ?? '') === '' &&
-    (agent.runtime?.model ?? '') === ''
   // A vault agent's grants are in its vault (read only while it is open); any
   // other agent's in its state file.
   // Owned by the card rather than by a row: a row unmounts the moment the
@@ -207,16 +183,7 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
   return (
     <>
       <SettingsCard>
-        {engineUnknown ? (
-          /*
-            Neither claim, and no movement either: the two branches are different
-            heights anyway, so what is reserved here is the smaller of them — the
-            grants list below shifts once when the answer lands, which is a
-            different thing from a sentence being *retracted*. One line, so the
-            tab is never blank.
-          */
-          <div className={`min-h-[3lh] italic ${NOTE}`}>Reading which runtime this agent uses…</div>
-        ) : onCodex ? (
+        {onCodex ? (
           <CodexApprovals agent={agent} />
         ) : onAntigravity ? (
           <AntigravityApprovals agent={agent} />

@@ -68,6 +68,8 @@ import {
   externalFolderAgentId,
   folderAgentId,
   isFolderAgentId,
+  LOCAL_AGENT_CHANGED_CHANNEL,
+  type LocalAgentChangedPayload,
   LOCAL_AGENT_DOC_PATHS,
   LOCAL_AGENT_PROMPT_PATHS,
   type AddAgentFolderInput,
@@ -93,7 +95,7 @@ import {
   slugifyAgentName,
   type UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
-import { isClaudeApproval, type LocalAgentRuntimeInput } from '../../../shared/engine'
+import { coerceRunsOnChoice, isClaudeApproval, type LocalAgentRuntimeInput, type RunsOnChoice } from '../../../shared/engine'
 import { allowsAuto, type HandoverIgnoreCheck } from '../../../shared/handovers'
 import { handoverGit } from '../handoverGit'
 import { desktopStatePath, desktopStateService, emptyDesktopState } from './desktopStateService'
@@ -119,6 +121,8 @@ import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
 import { agentUploadsDir } from '../agentUploads'
 import { runtimeService } from './runtimeService'
+import { resolveVaultRunsOn } from './runsOn'
+import { publishEvent } from '../../host/events'
 import { permissionGrantService, type StoredPermissionGrant } from './permissionGrantService'
 
 const logger = createLogger('local-agents')
@@ -819,6 +823,22 @@ export const localAgentService = {
     return dto
   },
 
+  /**
+   * This machine's Default runtime (or its default AI credential) changed.
+   *
+   * Every agent's `resolvedRuntime` — and the `runtime` block of an agent
+   * whose stored choice is compared against its file — is resolved against
+   * that default when the folder is scanned, and the scan is cached. So every
+   * root is re-scanned (which also re-indexes the launcher each row caches)
+   * and every window is told, whichever window made the change: the renderer
+   * no longer works out an agent's engine for itself.
+   */
+  runtimeDefaultsChanged(userId: string): void {
+    for (const result of this.rescan(userId)) {
+      publishEvent(LOCAL_AGENT_CHANGED_CHANNEL, { rootId: result.rootId, agentId: null, reason: 'rescan' } satisfies LocalAgentChangedPayload, 'all')
+    }
+  },
+
   /** Scan one root, or every root when `rootId` is omitted. */
   rescan(userId: string, rootId?: string): RescanResult[] {
     const roots = rootId
@@ -866,6 +886,16 @@ export const localAgentService = {
       name,
       description
     })
+    // **An agent the app creates follows the Default runtime** — recorded
+    // before its first turn, so a building assistant that writes
+    // `runtime.engine` into the manifest cannot switch the engine its own
+    // next turn runs on. Imports, clones and catalog installs record nothing
+    // and follow their file. A failure costs only that protection.
+    try {
+      desktopStateService.patch(agentDir, 'kit', { runsOn: { kind: 'default' } })
+    } catch (err) {
+      logger.warn('could not record the new agent’s Runs-on choice', { slug, error: err instanceof Error ? err.message : String(err) })
+    }
 
     // A full root scan, not a single-folder reindex: the new row has to be
     // inserted, and `replaceFolderIndex` is the only path that inserts.
@@ -905,6 +935,8 @@ export const localAgentService = {
     const { root, agentDir } = this.locate(userId, input.agentId)
     // Set by `stamp_identity` to the row id the folder will have afterwards.
     let stampedId: string | null = null
+    // Set by a Runs-on pick: the choice recorded once the manifest write lands.
+    let runsOn: RunsOnChoice | null = null
     const handle = turnLock.acquire(input.agentId, 'editor')
     try {
       if (update.field === 'prompt') {
@@ -975,6 +1007,12 @@ export const localAgentService = {
             // The Runtime card is not a special case: it goes through the same
             // stamped write as every other manifest edit, under the same turn
             // lock. `runtimeService` owns the shape and the "never a key" check.
+            // A Runs-on pick also names the choice to record. Checked before
+            // anything is written, so a refused choice writes nothing at all.
+            if (update.value?.runsOn !== undefined) {
+              runsOn = coerceRunsOnChoice(update.value.runsOn)
+              if (runsOn === null) throw new LocalAgentError('invalid_input', 'That is not a runtime this app can run.')
+            }
             runtimeService.applyToManifest(manifest, update.value)
             break
           case 'status_refresh_command':
@@ -1019,6 +1057,11 @@ export const localAgentService = {
         // Throws `KitError('manifest_modified')` when the file no longer
         // matches the stamp the editor read.
         writeIfUnchanged(path, manifest, expected)
+        // **One operation, both writes, under the same lock.** The file first:
+        // a refused write (stale stamp, a turn running) records no choice, so
+        // the app can never claim a pick the file did not take. Then the
+        // choice, which from now on outranks what the file says.
+        if (runsOn !== null) desktopStateService.patch(agentDir, 'kit', { runsOn })
       }
     } finally {
       handle.release()
@@ -2472,6 +2515,7 @@ function vaultAgentDto(row: AgentRow, ref: { vaultId: string; engine: LocalAgent
     manifest: {},
     publications: [],
     runtime: null,
+    resolvedRuntime: resolveVaultRunsOn(ref.engine),
     credentials: [],
     commands: [],
     status: null,

@@ -960,6 +960,78 @@ describe('the launcher follows an engine chosen in the app', () => {
   })
 })
 
+describe('the stored Runs-on choice', () => {
+  const save = (value: Record<string, unknown>): ReturnType<typeof localAgentService.updateField> =>
+    localAgentService.updateField(USER, {
+      agentId,
+      update: { field: 'runtime', value: { engine: 'keep', credential: null, modelId: null, complexity: null, ...value } as never },
+      expectedStamp: currentAgent().stamps[MANIFEST]!
+    })
+
+  it('records the choice a Runs-on pick sends, with the manifest write, and nothing else touches it', () => {
+    const picked = save({ engine: 'claude', runsOn: { kind: 'engine', engine: 'claude' } })
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'engine', engine: 'claude' })
+    expect(readManifest(manifestPath(agentDir)).runtime).toEqual({ engine: 'claude' })
+    expect(picked.resolvedRuntime).toMatchObject({ engine: 'claude', source: 'choice', choice: { kind: 'engine', engine: 'claude' }, conflict: null })
+    // A complexity edit sends no choice and leaves the stored one alone.
+    save({ complexity: 'complex' })
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toEqual({ kind: 'engine', engine: 'claude' })
+    expect(readManifest(manifestPath(agentDir)).runtime).toEqual({ engine: 'claude', complexity: 'complex' })
+  })
+
+  it('records nothing — and writes nothing — for a choice it cannot read', () => {
+    const before = readFileSync(manifestPath(agentDir), 'utf8')
+    expect(() => save({ engine: 'claude', runsOn: { kind: 'engine', engine: 'gemini' } })).toThrow(/runtime this app can run/)
+    expect(readFileSync(manifestPath(agentDir), 'utf8')).toBe(before)
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toBeNull()
+  })
+
+  it('records nothing when the manifest write is refused', () => {
+    const stale = currentAgent().stamps[MANIFEST]!
+    writeFileSync(manifestPath(agentDir), readFileSync(manifestPath(agentDir), 'utf8').replace('\n}', ',\n  "x_note": "edited"\n}'))
+    expect(() =>
+      localAgentService.updateField(USER, {
+        agentId,
+        update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: null, runsOn: { kind: 'engine', engine: 'claude' } } },
+        expectedStamp: stale
+      })
+    ).toThrow()
+    expect(desktopStateService.read(agentDir, 'kit').runsOn).toBeNull()
+  })
+
+  it('launches on the stored choice when the file is rewritten under it, and says the two disagree', () => {
+    save({ engine: null, runsOn: { kind: 'default' } })
+    // An assistant pins Claude into the file behind the app's back (this test
+    // machine's Default runtime is OpenCode).
+    const manifest = readManifest(manifestPath(agentDir))
+    manifest.runtime = { engine: 'claude', complexity: 'simple' }
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(manifest, null, 2)}\n`)
+    localAgentService.reindexAgent(USER, agentRootRepo.getDefault(USER)!, agentDir)
+    const dto = localAgentService.get(USER, agentId)
+    expect(dto.manifest.runtime).toEqual({ engine: 'claude', complexity: 'simple' })
+    expect(dto.runtime).toEqual({ complexity: 'simple' })
+    expect(dto.resolvedRuntime).toMatchObject({ engine: 'opencode', source: 'choice', conflict: { kind: 'choice', file: { engine: 'claude' }, app: { engine: 'opencode' } } })
+    // The row's cached launcher follows what runs, not the file.
+    expect(agentRepo.getOwned(USER, agentId)?.driverConfig?.launcher).toBe('opencode')
+  })
+
+  it('follows the file with no choice, and flags a file engine that is not the default', () => {
+    const manifest = readManifest(manifestPath(agentDir))
+    manifest.runtime = { engine: 'claude' }
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(manifest, null, 2)}\n`)
+    localAgentService.reindexAgent(USER, agentRootRepo.getDefault(USER)!, agentDir)
+    const dto = localAgentService.get(USER, agentId)
+    expect(dto.runtime).toEqual({ engine: 'claude' })
+    expect(dto.resolvedRuntime).toMatchObject({ engine: 'claude', source: 'file', choice: null, conflict: { kind: 'unrecorded' } })
+  })
+
+  it('records the Default runtime for an agent the app creates, before its first turn', () => {
+    const created = localAgentService.create(USER, { name: 'Fresh One', description: 'New.' })
+    expect(desktopStateService.read(created.path, 'kit').runsOn).toEqual({ kind: 'default' })
+    expect(created.resolvedRuntime).toMatchObject({ source: 'choice', choice: { kind: 'default' } })
+  })
+})
+
 describe('openPath', () => {
   it('refuses a path that escapes the agent folder', () => {
     expect(() =>

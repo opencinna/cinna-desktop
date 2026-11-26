@@ -1,10 +1,9 @@
 import { useMemo } from 'react'
 import { findCredentialByReference } from '../../../shared/credentials'
-import { DEFAULT_AGENT_ENGINE, effectiveEngine } from '../../../shared/engine'
+import { isEngineLoginId } from '../../../shared/engine'
 import type { LocalAgentDto } from '../../../shared/localAgents'
 import { useAppSettings } from './useAppSettings'
 import { useDefaultChatMode } from './useChatModes'
-import { useDefaultRuntime } from './useEngine'
 import { useProviders } from './useProviders'
 
 type Provider = NonNullable<ReturnType<typeof useProviders>['data']>[number]
@@ -88,16 +87,17 @@ export function useAgentCredentialResolution(declaredCredential: string | null):
 /**
  * The AI credential problem of a folder agent that runs on OpenCode, or null —
  * for any other engine (they spend no credential of this app's), before the
- * provider list, settings, chat modes or this machine's default runtime have answered (so nothing
- * appears and then vanishes), and for no agent.
+ * provider list, settings or chat modes have answered (so nothing appears and then vanishes), and
+ * for no agent. The engine is the one main resolved (`LocalAgentDto.resolvedRuntime`).
  */
 export function useAgentAiCredentialIssue(agent: LocalAgentDto | null | undefined): AiCredentialIssue {
   const resolution = useAgentCredentialResolution(agent?.runtime?.credential ?? null)
-  const { data: defaultRuntime } = useDefaultRuntime()
   // Every input the fallback reads, not just the providers: before the chat
   // modes or settings answer, an agent with no credential of its own resolves
   // to nothing and would show the row for a moment (ux_rules rule 1).
-  if (!agent || !resolution.loaded || defaultRuntime === undefined) return null
-  if (effectiveEngine(agent.runtime, defaultRuntime.engine ?? DEFAULT_AGENT_ENGINE) !== 'opencode') return null
+  if (!agent || !resolution.loaded) return null
+  // The engine main resolved (stored choice, file, machine default): only
+  // OpenCode spends a credential of this app's.
+  if (isEngineLoginId(agent.resolvedRuntime.engine)) return null
   return resolution.issue
 }

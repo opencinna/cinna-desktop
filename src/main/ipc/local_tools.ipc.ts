@@ -77,7 +77,7 @@ export function registerLocalToolsHandlers(): void {
       // with. Locking the OpenCode runner changes nothing — it is what every
       // unanswered read already returned — so the common case costs no walk.
       if (locked === null || locked === DEFAULT_AGENT_ENGINE) return
-      localAgentService.rescan(getSettingsScopeUserId())
+      localAgentService.runtimeDefaultsChanged(getSettingsScopeUserId())
     })
     .catch((err: unknown) => {
       logger.warn('could not settle the default runtime at startup', {

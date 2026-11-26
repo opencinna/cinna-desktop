@@ -64,7 +64,7 @@ export function adoptDesktopEngine(engine: EngineLoginId): void {
   appSettingsService.set('localAgentsDefaultEngine', engine)
   const userId = getSettingsScopeUserId()
   try {
-    localAgentService.rescan(userId)
+    localAgentService.runtimeDefaultsChanged(userId)
   } catch (err) {
     // As `settings:set`: the setting is stored either way; the next rescan picks the rows up.
     logger.warn('could not re-index agents after adopting a desktop app', {

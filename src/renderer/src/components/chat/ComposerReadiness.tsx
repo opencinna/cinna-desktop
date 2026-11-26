@@ -28,9 +28,8 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { RUN_REFERENCE_PATTERN } from '../../../../shared/kit/manifest'
 import { readinessBlocksTurn } from '../../../../shared/agentDrivers'
 import type { AgentReadiness, AgentReadinessState } from '../../../../shared/agentDrivers'
-import { DEFAULT_AGENT_ENGINE, effectiveEngine, ENGINE_LOGIN_NAMES, isEngineLoginId, loginFailureLead, loginPendingText, type EngineLoginId } from '../../../../shared/engine'
+import { ENGINE_LOGIN_NAMES, isEngineLoginId, loginFailureLead, loginPendingText, type EngineLoginId } from '../../../../shared/engine'
 import { isModelOffered, type RuntimeModelCatalog } from '../../../../shared/runtimeModelCatalog'
-import { useDefaultRuntime } from '../../hooks/useEngine'
 import { useRuntimeModelCatalog, useRuntimeModelCatalogRefresh } from '../../hooks/useRuntimeModelCatalog'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
@@ -704,8 +703,8 @@ export function staleModelNotice(
  * and none is known — the same request the Runs with panel makes, shared.
  */
 export function useStaleModelNotice(folder: LocalAgentDto | null): ComposerNotice | null {
-  const { data: defaultRuntime } = useDefaultRuntime()
-  const engine = folder && defaultRuntime ? effectiveEngine(folder.runtime, defaultRuntime.engine ?? DEFAULT_AGENT_ENGINE) : null
+  // Resolved in main — stored Runs-on choice, file, machine default.
+  const engine = folder ? folder.resolvedRuntime.engine : null
   const declaresModel = typeof folder?.runtime?.model === 'string' && folder.runtime.model.trim() !== ''
   const cli = engine && isEngineLoginId(engine) && declaresModel ? engine : null
   const { data: catalog } = useRuntimeModelCatalog(cli)

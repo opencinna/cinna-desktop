@@ -53,6 +53,7 @@ import { EngineLogin } from './acp/engineLogin'
 import { installClaudeAuthFollowWith } from './acp/claudeAuthFollow'
 import { pendingRequests } from './pendingRequests'
 import { runtimeService } from '../../services/localAgents/runtimeService'
+import { runsOnSourceLabel } from '../../services/localAgents/runsOn'
 import { defaultEngineService } from '../../services/localAgents/defaultEngineService'
 import { providerService } from '../../services/providerService'
 import {
@@ -1154,6 +1155,15 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
       readinessReason: dto.readinessReason,
       blocksTurn: folderReadinessBlocksTurn(dto),
       runtime: dto.runtime,
+      describeRuntime: () => {
+        let model: string | null = null
+        try {
+          model = runtimeService.resolve(dto.runtime, providerService.listMerged()).modelId
+        } catch {
+          model = null
+        }
+        return { model, source: runsOnSourceLabel(dto.resolvedRuntime) }
+      },
       coordinatorHandback: dto.kind === 'kit' && Array.isArray(dto.manifest.handovers) && dto.manifest.handovers.some(isCoordinatorHandover)
     }
   } catch (err) {

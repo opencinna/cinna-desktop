@@ -638,6 +638,22 @@ describe('a turn', () => {
     ])
   })
 
+  it('logs one line per turn naming the engine, the model and what chose them', async () => {
+    // `drafts/runtime_engine_conflict` §4.9: the first question of a "why is
+    // this agent on that engine" report. Mutation: drop the line.
+    const { setLogSink } = await import('../../../logger/logger')
+    const lines: string[] = []
+    setLogSink((entry) => { if (entry.message.startsWith('[runtime] turn')) lines.push(entry.message) })
+    try {
+      const w = world({ script: SAYS_HELLO, folder: { ...FOLDER, describeRuntime: () => ({ model: 'sonnet', source: 'choice(default)' }) } })
+      expect((await w.run()).error).toBeUndefined()
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toMatch(/^\[runtime\] turn agent=\S+ engine=\S+ model=sonnet source=choice\(default\)$/)
+    } finally {
+      setLogSink(null)
+    }
+  })
+
   it('leaves a subagent’s words out of the turn’s text when the agent said nothing itself', async () => {
     // Mutation: fall back to every part's text → the child's report is the turn's preview.
     const lane = { claudeCode: { parentToolUseId: 'call_agent' } }

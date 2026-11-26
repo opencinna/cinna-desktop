@@ -40,7 +40,8 @@ vi.mock('../../db/appSettings', () => ({
   appSettingsRepo: { get: (key: string) => (key === 'prioritizeAccountDefaults' ? state.prioritize : undefined) }
 }))
 vi.mock('../../auth/scope', () => ({ getSettingsScopeUserId: () => 'u1' }))
-vi.mock('./localAgentService', () => ({ localAgentService: { rescan: () => { state.rescans++ } } }))
+// `runtimeDefaultsChanged` is the rescan plus a push to every window: what a default change owes.
+vi.mock('./localAgentService', () => ({ localAgentService: { runtimeDefaultsChanged: () => { state.rescans++ } } }))
 vi.mock('../chatModeService', () => ({
   chatModeService: {
     resolveEffectiveDefault: () => state.effective,

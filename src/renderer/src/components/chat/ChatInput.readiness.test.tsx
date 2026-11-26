@@ -613,6 +613,7 @@ describe('an old chat of an agent that has since moved into its vault', () => {
       validation: { errors: [], warnings: [], infos: [] },
       credentials: [],
       runtime: { engine: 'claude' },
+      resolvedRuntime: { engine: 'claude', credentialId: null, source: 'choice', choice: null, conflict: null },
       vault: { vaultId: 'v1', state: 'unlocked', engine: 'claude' }
     }]
     chatDetail.current = {
@@ -718,7 +719,9 @@ describe('composer notice rows from the folder agent itself', () => {
       validation: { errors: [], warnings: [], infos: [] },
       credentials: [],
       runtime: { engine: 'claude' },
-      ...over
+      ...over,
+      // As main resolves it with no stored choice (this file's machine default is OpenCode).
+      resolvedRuntime: { engine: (over.runtime as { engine?: string } | undefined)?.engine ?? 'claude', credentialId: null, source: 'file', choice: null, conflict: null }
     }
   }
   const slot = (name: string, satisfied: boolean): Record<string, unknown> => ({

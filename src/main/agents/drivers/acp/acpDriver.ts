@@ -795,6 +795,17 @@ export function createAcpDriver(deps: AcpDriverDeps): AcpDriver {
         })
         return fail('This agent runs on an engine this version of Cinna does not support.')
       }
+      // **One line per turn naming what it runs on and why** — the first
+      // question of every "why is this agent on that engine" report.
+      if (folder) {
+        let described: { model: string | null; source: string } | null = null
+        try {
+          described = folder.describeRuntime?.() ?? null
+        } catch {
+          described = null
+        }
+        logger.info(`[runtime] turn agent=${agent.id} engine=${vault ? vault.engine : launcherId} model=${described?.model ?? 'default'} source=${vault ? 'vault' : (described?.source ?? 'unknown')}`)
+      }
       // A prompt this engine must never be sent (Antigravity's `/logout`
       // signs out every home on the computer): refused in words, unsent —
       // asked of what the user typed, before a plugin command is expanded,

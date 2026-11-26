@@ -23,7 +23,7 @@ import type {
 } from './kit/manifest'
 import { MANIFEST_FILE, SLUG_PATTERN } from './kit/manifest'
 import type { ContractCompatibilityStatus } from './kit/contractVersion'
-import type { ClaudeApproval, LocalAgentRuntimeInput } from './engine'
+import type { AgentEngine, ClaudeApproval, LocalAgentRuntimeInput, RunsOnChoice } from './engine'
 import type { HandoverSetting } from './handovers'
 
 /** Id prefix of a folder agent's `agents` row: `folder:<manifest id>`. */
@@ -626,7 +626,20 @@ export interface LocalAgentDto {
   contractStatus: ContractCompatibilityStatus
   manifest: CinnaAgentManifest
   publications: AgentPublication[]
+  /**
+   * The runtime block a turn launches with. For a kit agent this is the
+   * **effective** block main resolved from the file and the stored Runs-on
+   * choice ({@link LocalAgentResolvedRuntime}): the file verbatim unless a
+   * stored choice changes the outcome, and then the choice's form. The file
+   * itself stays on `manifest.runtime`. A bare agent's comes from its desktop
+   * state.
+   */
   runtime: AgentRuntimeRef | null
+  /**
+   * What this agent runs on, resolved **in main** — the renderer never derives
+   * the engine itself (`effectiveEngine` is forbidden under `src/renderer`).
+   */
+  resolvedRuntime: LocalAgentResolvedRuntime
   credentials: LocalAgentCredentialState[]
   /** `docs/CLI_COMMANDS.yaml`, parsed — what the Commands card renders. */
   commands: LocalAgentCommand[]
@@ -663,6 +676,51 @@ export interface LocalAgentDto {
    * (commands, credentials, skills, validation) is empty too.
    */
   vault?: LocalAgentVaultInfo
+}
+
+/**
+ * One side of a {@link LocalAgentRuntimeConflict}: what that side would run,
+ * by engine, credential name (OpenCode only) and the model it would resolve.
+ */
+export interface LocalAgentRuntimeSide {
+  engine: AgentEngine
+  credentialName: string | null
+  modelId: string | null
+}
+
+/**
+ * The file and the app disagree about what this agent runs on — compared by
+ * **outcome** (engine, and on OpenCode the credential), never by keys.
+ *
+ * - `choice` — a Runs-on choice is stored and the file, read alone, would run
+ *   something else. Launch follows the choice.
+ * - `unrecorded` — no choice is stored and the file resolves to an engine other
+ *   than this machine's Default runtime. Launch still follows the file.
+ *
+ * `app` is what the app would run: the stored choice, or for `unrecorded` the
+ * Default runtime.
+ */
+export interface LocalAgentRuntimeConflict {
+  kind: 'choice' | 'unrecorded'
+  file: LocalAgentRuntimeSide
+  app: LocalAgentRuntimeSide
+}
+
+/** {@link LocalAgentDto.resolvedRuntime}. */
+export interface LocalAgentResolvedRuntime {
+  /** The engine a turn starts on. A vault agent's is its vault engine. */
+  engine: AgentEngine
+  /** The AI credential an OpenCode turn spends; null on every other engine. */
+  credentialId: string | null
+  /**
+   * What decided the engine: a stored choice (`choice`, whenever one is
+   * stored), the file naming an engine, credential or model (`file`), or this
+   * machine's Default runtime (`default`).
+   */
+  source: 'choice' | 'file' | 'default'
+  /** The stored Runs-on choice; null when none is recorded (and always for bare and vault agents). */
+  choice: RunsOnChoice | null
+  conflict: LocalAgentRuntimeConflict | null
 }
 
 /**

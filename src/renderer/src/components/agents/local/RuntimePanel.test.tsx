@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import type { LocalAgentDto, LocalAgentResolvedRuntime } from '../../../../../shared/localAgents'
+import { effectiveEngine, type AgentEngine, type RunsOnChoice } from '../../../../../shared/engine'
 import type { WorkComplexity } from '../../../../../shared/modelFamilies'
 
 /**
@@ -269,14 +270,46 @@ const AGY_CATALOG = {
 const { RuntimePanel } = await import('./RuntimePanel')
 const { useUIStore } = await import('../../../stores/ui.store')
 
-function agent(runtime: Record<string, string> | null): LocalAgentDto {
+/**
+ * `resolvedRuntime` as main would answer it for a fixture with **no stored
+ * choice** — the file decides, against this test's machine default. Main's own
+ * resolver (`runsOn.ts`) is unit-tested beside it; a test here that needs a
+ * stored choice or a conflict passes `resolved` itself.
+ */
+function resolvedFor(runtime: Record<string, string> | null, bare = false): LocalAgentResolvedRuntime {
+  const machine = (defaultRuntime?.engine ?? 'opencode') as AgentEngine
+  const engine = effectiveEngine(runtime, machine)
+  const side = { engine, credentialName: null, modelId: null }
+  return {
+    engine,
+    credentialId: null,
+    source: runtime && (runtime.engine || runtime.credential || runtime.model) ? (bare ? 'choice' : 'file') : 'default',
+    choice: null,
+    conflict: !bare && engine !== machine ? { kind: 'unrecorded', file: side, app: { ...side, engine: machine } } : null
+  }
+}
+
+/**
+ * A kit agent. `runtime` is the file's block and, with no stored choice, also
+ * the effective one; `options.effective` / `options.resolved` stand in for
+ * what main resolves when a choice is stored. The getter reads the machine
+ * default at render time, after the test has set it.
+ */
+function agent(
+  runtime: Record<string, string> | null,
+  options: { effective?: Record<string, string> | null; resolved?: LocalAgentResolvedRuntime; runsOn?: RunsOnChoice } = {}
+): LocalAgentDto {
   return {
     id: 'folder:a',
     kind: 'kit',
     readiness: 'ok',
     credentials: [],
     stamps: { 'cinna-agent.json': { size: 1, mtimeMs: 1 } },
-    runtime
+    manifest: { runtime },
+    runtime: options.effective !== undefined ? options.effective : runtime,
+    get resolvedRuntime(): LocalAgentResolvedRuntime {
+      return options.resolved ?? resolvedFor(options.effective !== undefined ? options.effective : runtime)
+    }
   } as unknown as LocalAgentDto
 }
 
@@ -291,7 +324,10 @@ function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
     readiness: 'ok',
     credentials: [],
     stamps: {},
-    runtime
+    runtime,
+    get resolvedRuntime(): LocalAgentResolvedRuntime {
+      return resolvedFor(runtime, true)
+    }
   } as unknown as LocalAgentDto
 }
 
@@ -355,11 +391,15 @@ function saved(): {
         credential: string | null
         modelId: string | null
         complexity: WorkComplexity | null
+        runsOn?: unknown
       }
     }
   ]
-  const { engine: _engine, ...rest } = vars.runtime
+  // `runsOn` too: a Runs-on pick records its choice with every save, and the
+  // tests below that are about it read `save.mock.calls` directly.
+  const { engine: _engine, runsOn: _runsOn, ...rest } = vars.runtime
   void _engine
+  void _runsOn
   return rest
 }
 
@@ -1650,6 +1690,98 @@ describe('a manifest engine this build cannot run', () => {
   })
 })
 
+
+/**
+ * The file and the app (`drafts/runtime_engine_conflict`). The v0.12 report: a
+ * file pinning `engine: "opencode"` on a Claude-default machine showed
+ * "Default runtime (Claude Agent)" while every turn ran on OpenCode, and
+ * picking Default kept the engine, so nothing in the panel could get out.
+ */
+describe('Runs on against the file (stored choice)', () => {
+  type Sent = { runtime: Record<string, unknown> }
+  const sent = (index = 0): Record<string, unknown> => (save.mock.calls[index] as [Sent])[0].runtime
+
+  it('shows an OpenCode pin with no credential as OpenCode, not as the Default runtime', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ engine: 'opencode', complexity: 'complex' })} />)
+    const runsOn = screen.getByLabelText('Runs on') as HTMLSelectElement
+    expect(runsOn.value).not.toBe('')
+    expect(runsOn.selectedOptions[0]?.textContent).toBe('OpenCode (Anthropic)')
+    expect(screen.getByRole('option', { name: 'Default runtime (Claude Agent)' })).toBeTruthy()
+  })
+
+  it('removes the engine and records the Default choice when Default runtime is picked', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ engine: 'opencode', complexity: 'complex' })} />)
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: '' } })
+    expect(sent()).toMatchObject({ engine: null, credential: null, complexity: 'complex', runsOn: { kind: 'default' } })
+  })
+
+  it('drops a bare model, with a note, when Default runtime is not OpenCode', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ model: 'gpt-5' })} />)
+    const runsOn = screen.getByLabelText('Runs on') as HTMLSelectElement
+    expect(runsOn.selectedOptions[0]?.textContent).toBe('OpenCode (Anthropic)')
+    fireEvent.change(runsOn, { target: { value: '' } })
+    expect(sent()).toMatchObject({ engine: null, credential: null, modelId: null, runsOn: { kind: 'default' } })
+    expect(screen.getByText(/^Dropped “.+” — Claude Agent runs on /)).toBeTruthy()
+  })
+
+  it('keeps a bare model when Default runtime is OpenCode', () => {
+    // A model no registry lists is hand-written, so the credential change keeps it too.
+    render(<RuntimePanel agent={agent({ credential: 'OpenAI', model: 'my-own-model' })} />)
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: '' } })
+    expect(sent()).toMatchObject({ engine: null, credential: null, modelId: 'my-own-model', runsOn: { kind: 'default' } })
+  })
+
+  it('records the pick on every Runs-on choice', () => {
+    render(<RuntimePanel agent={agent({ complexity: 'simple' })} />)
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'engine:claude' } })
+    expect(sent(0).runsOn).toEqual({ kind: 'engine', engine: 'claude' })
+    cleanup()
+    save.mockClear()
+    render(<RuntimePanel agent={agent({ complexity: 'simple' })} />)
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
+    expect(sent(0).runsOn).toEqual({ kind: 'credential', name: 'OpenAI' })
+  })
+
+  it('records no choice for a complexity change', () => {
+    render(<RuntimePanel agent={agent({ complexity: 'simple' })} />)
+    fireEvent.change(screen.getByLabelText('Work complexity'), { target: { value: 'complex' } })
+    expect(sent()).not.toHaveProperty('runsOn')
+  })
+
+  it('selects the stored choice over the file, and edits complexity against the file', () => {
+    // File: OpenCode on OpenAI. Stored: Default runtime (Claude Agent). Launch
+    // follows the choice; a tier change must still write the file's own
+    // credential back, not the choice's absence of one.
+    defaultRuntime = { engine: 'claude' }
+    const file = { credential: 'OpenAI', complexity: 'simple' }
+    render(<RuntimePanel agent={agent(file, {
+      effective: { complexity: 'simple' },
+      resolved: {
+        engine: 'claude', credentialId: null, source: 'choice', choice: { kind: 'default' },
+        conflict: {
+          kind: 'choice',
+          file: { engine: 'opencode', credentialName: 'OpenAI', modelId: 'gpt-5' },
+          app: { engine: 'claude', credentialName: null, modelId: 'sonnet' }
+        }
+      }
+    })} />)
+    expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('')
+    fireEvent.change(screen.getByLabelText('Work complexity'), { target: { value: 'complex' } })
+    expect(sent()).toMatchObject({ engine: 'keep', credential: 'OpenAI', complexity: 'complex' })
+    expect(sent()).not.toHaveProperty('runsOn')
+  })
+
+  it('selects a stored OpenCode engine choice as OpenCode', () => {
+    defaultRuntime = { engine: 'claude' }
+    render(<RuntimePanel agent={agent({ engine: 'opencode' }, {
+      resolved: { engine: 'opencode', credentialId: null, source: 'choice', choice: { kind: 'engine', engine: 'opencode' }, conflict: null }
+    })} />)
+    expect((screen.getByLabelText('Runs on') as HTMLSelectElement).selectedOptions[0]?.textContent).toBe('OpenCode (Anthropic)')
+  })
+})
 
 describe('runtime badges on the agent chat page', () => {
   it('names a verified Claude subscription and the selected model without editing controls', () => {

@@ -579,6 +579,51 @@ export interface ResolvedRuntime {
 export const KEEP_ENGINE = 'keep' as const
 
 /**
+ * The Runs-on choice the app records for a kit agent, beside its other
+ * per-machine state in `app-data/desktop.json` (`runsOn`).
+ *
+ * **The app decides what a session starts on, not the file.** A stored choice
+ * outranks the manifest's `runtime` block for the engine and the credential;
+ * complexity and model stay the file's. No choice recorded (null, or no key at
+ * all) means "follow the file", which is what every agent did before this.
+ *
+ * - `default` — this machine's Default runtime, whatever it is now: changing
+ *   the default moves the agent.
+ * - `engine` — that engine. `opencode` is OpenCode on its fallback credential.
+ * - `credential` — OpenCode on the credential of that **name** (what the file
+ *   would carry; the key never leaves main).
+ */
+export type RunsOnChoice =
+  | { kind: 'default' }
+  | { kind: 'engine'; engine: AgentEngine }
+  | { kind: 'credential'; name: string }
+
+/** Longest credential name a stored choice may carry; the manifest's own ceiling. */
+const MAX_RUNS_ON_CREDENTIAL = 200
+
+/**
+ * Whatever is on disk (or arrived over IPC), as a {@link RunsOnChoice}, or null.
+ *
+ * Total, like every desktop-state read: a value another build wrote, a hand
+ * edit or an engine this build does not know reads as **no choice** — follow
+ * the file — never as some other choice by accident.
+ */
+export function coerceRunsOnChoice(raw: unknown): RunsOnChoice | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const value = raw as Record<string, unknown>
+  if (value.kind === 'default') return { kind: 'default' }
+  if (value.kind === 'engine') {
+    const engine = typeof value.engine === 'string' ? value.engine.trim() : ''
+    return isAgentEngine(engine) ? { kind: 'engine', engine } : null
+  }
+  if (value.kind === 'credential') {
+    const name = typeof value.name === 'string' ? value.name.trim() : ''
+    return name !== '' && name.length <= MAX_RUNS_ON_CREDENTIAL ? { kind: 'credential', name } : null
+  }
+  return null
+}
+
+/**
  * What the user picked in the Runtime card, on its way to the manifest.
  *
  * Both nullable: clearing them removes the `runtime` block and the agent falls
@@ -624,4 +669,12 @@ export interface LocalAgentRuntimeInput {
    * the runtime's default. Ignored by Antigravity and OpenCode.
    */
   effort?: string | null
+  /**
+   * Set by a **Runs-on pick** only (kit agents): the choice main records in the
+   * agent's desktop state in the same call, after the manifest write lands.
+   * Complexity, model and effort edits leave it out and so never touch the
+   * stored choice. Ignored for a bare agent, whose runtime already lives in
+   * its desktop state.
+   */
+  runsOn?: RunsOnChoice
 }

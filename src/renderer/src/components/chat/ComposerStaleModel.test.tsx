@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react'
+import { effectiveEngine, type AgentEngine } from '../../../../shared/engine'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../shared/localAgents'
 
@@ -27,8 +28,12 @@ const CLAUDE = {
   engine: 'claude', source: 'session', updatedAt: 1,
   models: [{ id: 'opus', name: 'Opus 5.5' }, { id: 'haiku', name: 'Haiku 4.5' }]
 } as never
+/** `resolvedRuntime` as main answers it with no stored choice: the file decides, on this test's default. */
 const folder = (runtime: Record<string, string> | null): LocalAgentDto =>
-  ({ id: 'folder:a', name: 'Agent', runtime } as unknown as LocalAgentDto)
+  ({
+    id: 'folder:a', name: 'Agent', runtime,
+    resolvedRuntime: { engine: effectiveEngine(runtime, (defaultRuntime?.engine ?? 'opencode') as AgentEngine), credentialId: null, source: 'file', choice: null, conflict: null }
+  } as unknown as LocalAgentDto)
 
 beforeEach(() => {
   catalog = undefined

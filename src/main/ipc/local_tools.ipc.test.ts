@@ -116,7 +116,7 @@ vi.mock('../services/localAgents/defaultEngineService', () => ({
   defaultEngineService: { lockIfUnset: async () => null }
 }))
 vi.mock('../services/localAgents/localAgentService', () => ({
-  localAgentService: { rescan: () => [] }
+  localAgentService: { rescan: () => [], runtimeDefaultsChanged: () => undefined }
 }))
 vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__' }))
 vi.mock('electron', () => ({ app: { on: () => undefined }, shell: {} }))

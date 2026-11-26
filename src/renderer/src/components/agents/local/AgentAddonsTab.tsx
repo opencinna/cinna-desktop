@@ -34,8 +34,6 @@ import { AddonPicker } from './AddonPicker'
 import { SkillRow, needsAttention, type CatalogRowActions, type CatalogVerb, type SkillSyncActions } from './SkillRow'
 import { PluginRow, pluginHasProblem, pluginNeedsAttention, type PluginRowActions } from './PluginRow'
 import type { PluginPinStatus } from '../../../../../shared/addons/plugins'
-import { DEFAULT_AGENT_ENGINE, effectiveEngine } from '../../../../../shared/engine'
-import { useDefaultRuntime } from '../../../hooks/useEngine'
 import {
   useAddonMcpRequirements,
   useAddonPluginStatus,
@@ -198,8 +196,7 @@ export function AgentAddonsTab({
   // Open, and at which entry: a manifest connector's Set up opens it straight at that entry's detail.
   const [picking, setPicking] = useState<false | { initial?: { ref: AddonRef | null; query: string } }>(false)
   // The engine the agent runs on, as the launcher decides it: a plugin's "Works with" lists it first.
-  const { data: defaultRuntime } = useDefaultRuntime()
-  const engine = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE)
+  const engine = agent.resolvedRuntime.engine
   const [kindFilter, setKindFilter] = useState<AddonKind | 'all'>('all')
   // A failed Detach is shown in that connector's card (rule 6).
   const [detachError, setDetachError] = useState<{ id: string; message: string } | null>(null)

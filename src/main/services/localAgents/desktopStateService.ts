@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { DESKTOP_STATE_FILE } from '../../../shared/kit/manifest'
 import type { AgentRuntimeRef } from '../../../shared/kit/manifest'
-import { isClaudeApproval, type ClaudeApproval } from '../../../shared/engine'
+import { coerceRunsOnChoice, isClaudeApproval, type ClaudeApproval, type RunsOnChoice } from '../../../shared/engine'
 import type { HandoverSetting } from '../../../shared/handovers'
 import type { LocalAgentDesktopSummary, LocalAgentKind } from '../../../shared/localAgents'
 import type { LocalPermissionGrant } from '../../../shared/localAgentRequests'
@@ -160,6 +160,17 @@ export interface DesktopState {
    * every agent that never chose.
    */
   claudeApproval: ClaudeApproval | null
+  /**
+   * Kit agents only: the Runs-on choice the user made in this app
+   * (`RunsOnChoice` in `shared/engine.ts`). It outranks the manifest's
+   * `runtime` block for the engine and credential — the app decides what a
+   * session starts on — and lives here rather than in the file because the
+   * file travels and an assistant edits it. Null (or absent) is no choice
+   * recorded: the agent follows its file, as every agent did before this.
+   * Set by every Runs-on pick (`localAgentService.updateField`) and to
+   * `default` when the app scaffolds the agent.
+   */
+  runsOn?: RunsOnChoice | null
   codexApproval?: ClaudeApproval | null
   /** The same choice for the Antigravity engine; null reads as `ask`. */
   antigravityApproval?: ClaudeApproval | null
@@ -211,6 +222,7 @@ const EMPTY_STATE: DesktopState = {
   hidden: false,
   runtime: null,
   claudeApproval: null,
+  runsOn: null,
   codexApproval: null,
   antigravityApproval: null,
   handovers: null
@@ -299,6 +311,7 @@ function coerce(raw: unknown): DesktopState {
     // Anything but the two known values reads as no choice — the default —
     // never as the more permissive of the two by accident.
     claudeApproval: isClaudeApproval(raw.claudeApproval) ? raw.claudeApproval : null,
+    runsOn: coerceRunsOnChoice(raw.runsOn),
     codexApproval: isClaudeApproval(raw.codexApproval) ? raw.codexApproval : null,
     antigravityApproval: isClaudeApproval(raw.antigravityApproval) ? raw.antigravityApproval : null,
     // The same reading, and here it matters most: anything but the literal

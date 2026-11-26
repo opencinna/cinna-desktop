@@ -45,6 +45,7 @@ function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
     manifest: {},
     publications: [],
     runtime: null,
+    resolvedRuntime: { engine: 'opencode', credentialId: null, source: 'default', choice: null, conflict: null },
     credentials: [],
     commands: [],
     status: null,

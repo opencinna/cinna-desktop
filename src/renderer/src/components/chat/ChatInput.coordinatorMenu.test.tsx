@@ -86,7 +86,8 @@ const FOLDER_2 = 'folder:coder'
 const REMOTE = 'remote-1'
 const RUNTIME = 'runtime-1'
 /** The folder scan: what makes a chip's agent one with a folder to open. */
-const FOLDERS = { roots: [], agents: [{ id: FOLDER, credentials: [] }, { id: FOLDER_2, credentials: [] }], homeAccess: null }
+const RESOLVED = { engine: 'opencode', credentialId: null, source: 'default', choice: null, conflict: null }
+const FOLDERS = { roots: [], agents: [{ id: FOLDER, credentials: [], resolvedRuntime: RESOLVED }, { id: FOLDER_2, credentials: [], resolvedRuntime: RESOLVED }], homeAccess: null }
 
 function agent(id: string, name: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {

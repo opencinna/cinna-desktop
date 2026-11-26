@@ -48,16 +48,16 @@ import {
   codexEffortForComplexity,
   codexEffortForRuntime,
   declaredEffort as declaredEffortOf,
-  DEFAULT_AGENT_ENGINE,
   ENGINE_LOGIN_NAMES,
-  effectiveEngine,
   isAgentEngine,
+  isEngineLoginId,
   KEEP_ENGINE,
   PINNED_ANTIGRAVITY_VERSION,
   PINNED_CLAUDE_VERSION,
   PINNED_CODEX_VERSION,
   type AgentEngine,
   type EngineLoginId,
+  type RunsOnChoice,
   loginFailureLead,
   loginPendingText,
   opencodeVersionLabel
@@ -185,6 +185,21 @@ const ANTIGRAVITY_OPTION = 'engine:antigravity'
  * picking Default fired no change, so the unrecognised engine could not be dropped.
  */
 const UNSUPPORTED_OPTION = 'engine:unsupported'
+/**
+ * Selected, never pickable: the agent runs on OpenCode with no credential of
+ * its own — a file pinning `engine: "opencode"` or naming a bare model on a
+ * machine whose Default runtime is something else, or a stored OpenCode
+ * choice. It used to fall through to `''`, the Default option, which named the
+ * *machine* default (Claude Agent) over an agent spending the managed OpenAI key.
+ */
+const OPENCODE_OPTION = 'engine:opencode'
+/** A stored engine choice, as the Runs-on option that shows it. */
+const RUNS_ON_ENGINE_OPTION: Record<AgentEngine, string> = {
+  claude: CLAUDE_OPTION,
+  codex: CODEX_OPTION,
+  antigravity: ANTIGRAVITY_OPTION,
+  opencode: OPENCODE_OPTION
+}
 
 const NOTE = 'text-[10px] text-[var(--color-text-muted)]'
 const WARN = 'text-[10px] text-[var(--color-warning)]'
@@ -614,15 +629,32 @@ export function RuntimePanel({
   const { data: codexBinary } = useCodexBinary()
   const { data: claudeBinary } = useClaudeBinary()
   const { data: antigravityBinary } = useAntigravityBinary()
+  /**
+   * **Two runtime blocks, and which one each read takes is the point.**
+   *
+   * `agent.runtime` is what a turn launches with: main resolved it from the
+   * file and the stored Runs-on choice, and it differs from the file only when
+   * the two disagree (a conflict). The Runs-on axis — which credential is
+   * named, and so which catalogue the pickers resolve against — reads it.
+   *
+   * `fileRuntime` is what `cinna-agent.json` says. Complexity, model and effort
+   * are the file's, and every commit that is not a Runs-on pick sends the
+   * file's own values back (`KEEP_ENGINE`, the file's credential), so a tier
+   * change during a conflict cannot write the choice's fields into the file or
+   * strip the file's. A bare agent has one block, its desktop state.
+   */
+  const fileRuntime = bare ? agent.runtime : (agent.manifest?.runtime ?? null)
   const declaredCredential = agent.runtime?.credential ?? null
-  const declaredModel = agent.runtime?.model ?? null
+  /** The file's own credential: what a commit that is not a Runs-on pick keeps. */
+  const fileCredential = fileRuntime?.credential ?? null
+  const declaredModel = fileRuntime?.model ?? null
   /**
    * The engine the manifest names, if it is one this build knows. Read through
    * `isAgentEngine`, so a value a newer tool wrote reads as none here — and is
    * never written back by this panel: saves that are not an engine pick send
    * `KEEP_ENGINE`, and main leaves the file's value as it is.
    */
-  const declaredEngine = isAgentEngine(agent.runtime?.engine) ? agent.runtime.engine : null
+  const declaredEngine = isAgentEngine(fileRuntime?.engine) ? fileRuntime.engine : null
   /**
    * This agent runs on the user's own Claude Code install rather than on a
    * credential this app holds.
@@ -637,60 +669,31 @@ export function RuntimePanel({
    * treats it as an OpenCode agent everywhere: Runs on selects what actually
    * runs, and the preference is told behind the (?) beside its label.
    */
-  const declaredEngineRaw = typeof agent.runtime?.engine === 'string' ? agent.runtime.engine.trim() : ''
+  const declaredEngineRaw = typeof fileRuntime?.engine === 'string' ? fileRuntime.engine.trim() : ''
   const unsupportedEngine = declaredEngineRaw !== '' && !isAgentEngine(declaredEngineRaw) ? declaredEngineRaw : null
   /**
    * **This machine's Default Runtime**, resolved by main and read here as one
-   * value.
-   *
-   * Not assembled from the setting and the detected tools, which this component
-   * also has: that sum is `resolveDefaultEngine`, the launcher runs it, and a
-   * second copy here is the arrangement that has twice let this panel name a
-   * runtime the engine did not build. `undefined` is *not answered yet*, which
-   * is a third state the panel needs — see `engineUnknown`.
+   * value. Only the Default option's label reads it now: which engine *this
+   * agent* runs on is `agent.resolvedRuntime`, below.
    */
   const { data: defaultRuntime } = useDefaultRuntime()
   /**
-   * The engine the **folder itself** settles, or null when it leaves it to this
-   * machine.
-   *
-   * The same two rungs `effectiveEngine` applies before the default: a declared
-   * engine, then a declared credential or model — either of which is an
-   * OpenCode-shaped answer, because the Claude path spends no credential and
-   * knows no catalogue id. Written out rather than taken from the helper
-   * because the panel needs the *intermediate* answer: whether the file decided,
-   * which is what tells it whether it may claim anything before the machine
-   * default arrives.
+   * What this agent actually runs on — **resolved in main**, stored Runs-on
+   * choice first, then the file, then this machine's Default runtime — the same
+   * resolution the launcher starts the turn from. The panel never re-derives
+   * it (the renderer has no `effectiveEngine`), so it cannot name a runtime the
+   * engine did not build, and it is known on arrival: no "loading" state while
+   * the machine default is asked for.
    */
-  const engineFromFile: AgentEngine | null =
-    declaredEngine ??
-    (unsupportedEngine !== null || (agent.runtime?.credential ?? '') !== '' || (agent.runtime?.model ?? '') !== ''
-      ? 'opencode'
-      : null)
+  const runsOn = agent.resolvedRuntime
+  const runsOnIs = (engine: AgentEngine): boolean => runsOn.engine === engine
+  const onClaude = runsOnIs('claude')
   /**
-   * Nothing can answer "which engine" yet: the folder leaves it to the machine
-   * and the machine has not said.
-   *
-   * The panel withholds its claim rather than guessing, for the reason
-   * `pickerUnknown` exists one screen down — guessing `opencode` renders the
-   * tier-or-model pickers and the OpenCode engine column, and the query then
-   * replaces both a moment later, swapping controls out from under the pointer
-   * (ux_rules rule 1).
+   * The engine the **file** resolves to on its own: the conflict's file side
+   * when there is one, otherwise the same engine that runs. What a commit's
+   * credential rule is judged against, because a commit writes the file.
    */
-  const engineUnknown = engineFromFile === null && defaultRuntime === undefined
-  /**
-   * What this agent actually runs on — the file first, this machine second.
-   *
-   * Through the **shared** helper, which `runtimeService.resolve` and the ACP
-   * driver's dispatch also call, so the panel and the launcher cannot disagree
-   * about an agent that names no engine. Everything below branches on this
-   * rather than on the declared value: an agent that declares nothing on a
-   * machine defaulting to Claude Agent *is* a Claude agent, and a panel that
-   * read only the file would explain it with a credential ladder about a key it
-   * will never spend.
-   */
-  const onClaude =
-    effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'claude'
+  const fileOnCli = isEngineLoginId(runsOn.conflict?.file.engine ?? runsOn.engine)
   /**
    * The Claude Code this agent would run on, or undefined — **the pinned CLI's
    * state, not PATH detection**, on exactly `codexTool`'s terms below: Cinna
@@ -708,9 +711,8 @@ export function RuntimePanel({
         }
   /** Why Claude Code is not here, in every surface's words — see {@link cliFailureCopy}. */
   const claudeFailure = claudeTool ? null : cliFailureCopy('Claude Code', 'Claude', claudePathSet)
-  const onCodex = effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'codex'
-  const onAntigravity =
-    effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'antigravity'
+  const onCodex = runsOnIs('codex')
+  const onAntigravity = runsOnIs('antigravity')
   const onCli = onClaude || onCodex || onAntigravity
   /** The in-app login for this agent's CLI engine; asks main nothing on OpenCode. */
   const loginEngine: EngineLoginId | null = onCodex
@@ -798,11 +800,11 @@ export function RuntimePanel({
   const antigravityFailure = antigravityTool
     ? null
     : cliFailureCopy('Antigravity', 'Antigravity', antigravityPathSet)
-  const declaredComplexity = isWorkComplexity(agent.runtime?.complexity)
-    ? agent.runtime.complexity
+  const declaredComplexity = isWorkComplexity(fileRuntime?.complexity)
+    ? fileRuntime.complexity
     : null
   /** `runtime.effort`, read only beside a declared model, as the launchers read it. */
-  const declaredEffort = declaredEffortOf(agent.runtime)
+  const declaredEffort = declaredEffortOf(fileRuntime)
 
   /**
    * **The CLI runtime's own model list**, for the Advanced picker on Claude,
@@ -1011,7 +1013,6 @@ export function RuntimePanel({
    * happening (rule 1). So neither picker is claimed until one is known.
    */
   const pickerUnknown =
-    engineUnknown ||
     (declaredView === null && view?.agentId !== agent.id && !settingsLoaded)
 
   /**
@@ -1498,6 +1499,36 @@ export function RuntimePanel({
   })()
 
   /**
+   * The Runs-on select's value.
+   *
+   * **A stored choice is what it shows** — that is what the turn starts on,
+   * whatever the file says (a difference is the conflict, told elsewhere).
+   * With none, the file's own resolution: what the file declares, not what the
+   * machine default makes of it — an agent that names nothing on a
+   * Claude-default machine is on *Default*, and that is the option that must be
+   * selected, or clearing a pin it does not hold would be impossible. A file
+   * that runs on OpenCode with no credential of its own while the machine
+   * default is something else (`runsOn.conflict`, resolved in main) gets its
+   * own honest option rather than falling through to Default.
+   */
+  const storedChoice = runsOn.choice
+  const runsOnValue: string = storedChoice
+    ? storedChoice.kind === 'default'
+      ? ''
+      : storedChoice.kind === 'engine'
+        ? RUNS_ON_ENGINE_OPTION[storedChoice.engine]
+        : (selected?.name ?? '')
+    : declaredEngine === 'codex' ? CODEX_OPTION : declaredEngine === 'antigravity'
+      ? ANTIGRAVITY_OPTION
+      : declaredEngine === 'claude'
+        ? CLAUDE_OPTION
+        : unsupportedEngine && !selected
+          ? UNSUPPORTED_OPTION
+          : !onCli && !selected && runsOn.conflict !== null
+            ? OPENCODE_OPTION
+            : (selected?.name ?? '')
+
+  /**
    * The credential a commit should carry, given which engine is showing.
    *
    * **Null on the Claude path, always.** A manifest may legally carry both an
@@ -1510,7 +1541,7 @@ export function RuntimePanel({
    * could not see (ux_rules rule 6). Dropping it is what switching *to* this
    * engine already does.
    */
-  const commitCredential = (value: string | null): string | null => (onCli ? null : value)
+  const commitCredential = (value: string | null): string | null => (fileOnCli ? null : value)
 
   const commit = (
     credential: string | null,
@@ -1535,6 +1566,12 @@ export function RuntimePanel({
        * the effort *of* a model, and main never writes one without a model.
        */
       effort?: string | null
+      /**
+       * A Runs-on pick: the choice main records in the agent's desktop state
+       * with the manifest write, in one call. Kit agents only; every other
+       * commit leaves the stored choice alone by not sending one.
+       */
+      runsOn?: RunsOnChoice
     } = {}
   ): void => {
     if (!bare && !stamp) return
@@ -1568,7 +1605,8 @@ export function RuntimePanel({
       modelId,
       complexity,
       // Absent is "none" to main, so the key travels only when there is one.
-      ...(effort ? { effort } : {})
+      ...(effort ? { effort } : {}),
+      ...(options.runsOn && !bare ? { runsOn: options.runsOn } : {})
     }
     const handlers = {
       /**
@@ -1656,19 +1694,22 @@ export function RuntimePanel({
     const droppedEngine = unsupportedEngine ? `Dropped engine “${unsupportedEngine}”.` : undefined
     const withDropped = (text: string | undefined): string | undefined =>
       droppedEngine && text ? `${droppedEngine} ${text}` : (droppedEngine ?? text)
+    // Selected-only options: there is nothing to pick.
+    if (value === OPENCODE_OPTION || value === UNSUPPORTED_OPTION) return
     if (value === CODEX_OPTION) {
-      commit(null, null, declaredComplexity, { engine: 'codex', note: withDropped(declaredModel ? 'Codex will use its configured default model.' : undefined) })
+      commit(null, null, declaredComplexity, { engine: 'codex', runsOn: { kind: 'engine', engine: 'codex' }, note: withDropped(declaredModel ? 'Codex will use its configured default model.' : undefined) })
       runtimeSetup.setup('codex', { install: false })
       return
     }
     if (value === ANTIGRAVITY_OPTION) {
-      commit(null, null, declaredComplexity, { engine: 'antigravity', note: withDropped(declaredModel ? `Antigravity will use ${antigravityRunModelLabel(null, declaredComplexity)}.` : undefined) })
+      commit(null, null, declaredComplexity, { engine: 'antigravity', runsOn: { kind: 'engine', engine: 'antigravity' }, note: withDropped(declaredModel ? `Antigravity will use ${antigravityRunModelLabel(null, declaredComplexity)}.` : undefined) })
       runtimeSetup.setup('antigravity', { install: false })
       return
     }
     if (value === CLAUDE_OPTION) {
       commit(null, null, declaredComplexity, {
         engine: 'claude',
+        runsOn: { kind: 'engine', engine: 'claude' },
         note: withDropped(declaredModel
           ? `Dropped “${nameOf(declaredModel)}” — Claude Agent runs on ${claudeModelForComplexity(declaredComplexity)}.`
           : undefined)
@@ -1676,13 +1717,42 @@ export function RuntimePanel({
       runtimeSetup.setup('claude', { install: false })
       return
     }
-    if (onCli) {
+    /** What a pick of `value` records as this agent's Runs-on choice. */
+    const runsOnPick: RunsOnChoice = value === '' ? { kind: 'default' } : { kind: 'credential', name: value }
+    if (fileOnCli) {
       // Leaving the Claude engine for a credential. The model is already null
       // on that path, so there is nothing to drop.
-      commit(value || null, null, declaredComplexity, { engine: null })
+      commit(value || null, null, declaredComplexity, { engine: null, runsOn: runsOnPick })
       return
     }
-    changeCredential(value, unsupportedEngine ? { engine: null, droppedEngine } : undefined)
+    /**
+     * **Default runtime means "no engine of its own"**, so the pick removes a
+     * declared one (`engine: null`) rather than keeping it — kept, a file
+     * saying `engine: "opencode"` stayed on OpenCode however often Default was
+     * picked. A bare `model` goes too when the Default runtime is not OpenCode:
+     * a model alone pulls the agent onto OpenCode, which is not following the
+     * default. Said on the line, as every dropped value is.
+     */
+    if (value === '' && !bare) {
+      const defaultIsCli = defaultRuntime === undefined || isEngineLoginId(defaultRuntime.engine)
+      if (defaultIsCli && declaredModel !== null) {
+        const tail = defaultRuntime === undefined ? 'the Default runtime picks its own model.' : {
+          claude: `Claude Agent runs on ${claudeModelForComplexity(declaredComplexity)}.`,
+          codex: 'Codex will use its configured default model.',
+          antigravity: `Antigravity will use ${antigravityRunModelLabel(null, declaredComplexity)}.`,
+          opencode: ''
+        }[defaultRuntime.engine]
+        commit(null, null, declaredComplexity, {
+          engine: null,
+          runsOn: runsOnPick,
+          note: withDropped(`Dropped “${nameOf(declaredModel)}” — ${tail}`)
+        })
+        return
+      }
+      changeCredential('', { engine: null, droppedEngine }, runsOnPick)
+      return
+    }
+    changeCredential(value, unsupportedEngine ? { engine: null, droppedEngine } : undefined, bare ? undefined : runsOnPick)
   }
 
   /**
@@ -1707,7 +1777,9 @@ export function RuntimePanel({
      * the pick replaces it, so the write removes the engine and the status line
      * says so. Every other credential change keeps the file's engine.
      */
-    replace?: { engine: null; droppedEngine: string | undefined }
+    replace?: { engine: null; droppedEngine: string | undefined },
+    /** The Runs-on choice to record with it — set only by a Runs-on pick. */
+    runsOnPick?: RunsOnChoice
   ): void => {
     const next = value ? (usable.find((provider) => provider.name === value) ?? null) : fallbackProvider
     const stale = modelBelongsElsewhere(declaredModel, next, models ?? [], providers ?? [])
@@ -1744,7 +1816,8 @@ export function RuntimePanel({
       bothSet && advanced ? null : declaredComplexity,
       {
         ...(noteText ? { note: noteText } : {}),
-        ...(replace ? { engine: replace.engine } : {})
+        ...(replace ? { engine: replace.engine } : {}),
+        ...(runsOnPick ? { runsOn: runsOnPick } : {})
       }
     )
   }
@@ -1921,7 +1994,7 @@ export function RuntimePanel({
         )
         return
       }
-      commit(commitCredential(declaredCredential), model, null, {
+      commit(commitCredential(fileCredential), model, null, {
         view: next,
         persist: true,
         keep: null,
@@ -1933,7 +2006,7 @@ export function RuntimePanel({
     if (!next && declaredModel !== null) {
       const tier = classifyModel(declaredModel, providerType)?.tier ?? null
       if (!tier) {
-        commit(commitCredential(declaredCredential), null, null, {
+        commit(commitCredential(fileCredential), null, null, {
           view: next,
           persist: true,
           keep: null,
@@ -1941,7 +2014,7 @@ export function RuntimePanel({
         })
         return
       }
-      commit(commitCredential(declaredCredential), null, tier, {
+      commit(commitCredential(fileCredential), null, tier, {
         view: next,
         persist: true,
         keep: declaredModel,
@@ -1979,18 +2052,15 @@ export function RuntimePanel({
     // Use the same resolved engine, credential and model as the settings controls.
     const subscription = claudeAuth?.state === 'logged_in' &&
       (claudeAuth.authMethod === 'claude.ai' || !!claudeAuth.subscriptionType)
-    const label = engineUnknown ? 'Loading runtime…'
-      : onCodex ? 'Codex'
+    const label = onCodex ? 'Codex'
       : onAntigravity ? 'Antigravity'
       : onClaude ? `Claude Agent${subscription ? ' with subscription' : ''}`
       : effectiveProvider && !credentialMissing ? `OpenCode with ${effectiveProvider.name}` : 'OpenCode'
-    const model = engineUnknown ? null
-      : onCodex ? `${cliNameOf(declaredModel) ?? cliDefaultName ?? 'CLI default'} · ${codexEffortForRuntime(agent.runtime)} effort`
+    const model = onCodex ? `${cliNameOf(declaredModel) ?? cliDefaultName ?? 'CLI default'} · ${codexEffortForRuntime(agent.runtime)} effort`
       : onAntigravity ? (cliNameOf(declaredModel) ?? cliDefaultName)
       : onClaude ? `${cliNameOf(declaredModel) ?? cliDefaultName}${declaredEffort ? ` · ${declaredEffort} effort` : ''}`
       : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
-    const issue = engineUnknown ? null
-      : onCodex ? (codexFailure ? codexFailure.badge : codexAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
+    const issue = onCodex ? (codexFailure ? codexFailure.badge : codexAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
       : onAntigravity
         ? (antigravityFailure ? antigravityFailure.badge : antigravityAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
       : onClaude ? (claudeFailure ? claudeFailure.badge : claudeAuth?.state === 'logged_out' ? 'Sign-in required' : staleModel ? 'Model unavailable' : null)
@@ -2068,24 +2138,8 @@ export function RuntimePanel({
                     : undefined
             }
             disabled={disabled}
-            /*
-              **What the file declares, not what it runs on.** `onClaude` is now
-              true for an agent that declares nothing on a machine whose Default
-              Runtime is Claude Agent — and that agent is on the *Default*, which
-              is the option that has to be selected. Reading the effective engine
-              here showed `Claude Agent` over a manifest that names no engine, so
-              the control claimed a pin the file does not hold and clearing it
-              was impossible.
-            */
-            value={
-              declaredEngine === 'codex' ? CODEX_OPTION : declaredEngine === 'antigravity'
-                ? ANTIGRAVITY_OPTION
-                : declaredEngine === 'claude'
-                ? CLAUDE_OPTION
-                : unsupportedEngine && !selected
-                  ? UNSUPPORTED_OPTION
-                  : (selected?.name ?? '')
-            }
+            /* The stored choice, else what the file declares — see `runsOnValue`. */
+            value={runsOnValue}
             onChange={(event) => changeRuntimeTarget(event.target.value)}
           >
             {/*
@@ -2108,8 +2162,8 @@ export function RuntimePanel({
                 opencode: fallbackProvider ? `Default runtime (${fallbackProvider.name})` : 'Default runtime (none set)'
               }[defaultRuntime.engine] : 'Default runtime'}
             </option>
-            {unsupportedEngine && !selected && (
-              <option value={UNSUPPORTED_OPTION} disabled>
+            {(runsOnValue === UNSUPPORTED_OPTION || runsOnValue === OPENCODE_OPTION) && (
+              <option value={runsOnValue} disabled>
                 {fallbackProvider ? `OpenCode (${fallbackProvider.name})` : 'OpenCode (none set)'}
               </option>
             )}
@@ -2317,7 +2371,7 @@ export function RuntimePanel({
               disabled={disabled}
               value={declaredModel ?? ''}
               onChange={(event) =>
-                commit(commitCredential(declaredCredential), event.target.value || null, null)
+                commit(commitCredential(fileCredential), event.target.value || null, null)
               }
             >
               <option value="">
@@ -2352,7 +2406,7 @@ export function RuntimePanel({
               value={declaredComplexity ?? ''}
               onChange={(event) =>
                 commit(
-                  commitCredential(declaredCredential),
+                  commitCredential(fileCredential),
                   null,
                   isWorkComplexity(event.target.value) ? event.target.value : null
                 )

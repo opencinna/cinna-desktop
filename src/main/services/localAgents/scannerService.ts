@@ -71,6 +71,7 @@ import {
   type LocalAgentValidation
 } from '../../../shared/localAgents'
 import { desktopStatePath, desktopStateService } from './desktopStateService'
+import { runtimeService } from './runtimeService'
 import {
   discoverBareAgents,
   readBareAgentName,
@@ -314,6 +315,9 @@ function unreadableAgent(
     manifest: {},
     publications: [],
     runtime: null,
+    // Nothing could be read; the machine default is what a turn would take,
+    // and an unreadable folder is held back from turns anyway.
+    resolvedRuntime: { engine: defaultEngineService.current(), credentialId: null, source: 'default', choice: null, conflict: null },
     credentials: [],
     commands: [],
     skills: [],
@@ -532,6 +536,9 @@ export const scannerService = {
       catalog.unreadable
     )
     const desktop = desktopStateService.read(agentDir, 'kit')
+    // The stored Runs-on choice against the file: `runtime` below is what a
+    // turn launches with, `manifest.runtime` stays the file verbatim.
+    const runsOn = runtimeService.resolveRunsOn(manifest.runtime ?? null, desktop.runsOn ?? null)
 
     // A manifest with no `id` is legacy (contract 1.0.0 "Breaking"): the
     // contract tolerates it deliberately, so the folder is a *supported* agent
@@ -568,7 +575,8 @@ export const scannerService = {
       contractStatus: compatibility.status,
       manifest,
       publications: (() => { const { value } = readPublications(agentDir, manifest); return Array.isArray(value) ? value : [] })(),
-      runtime: manifest.runtime ?? null,
+      runtime: runsOn.effective,
+      resolvedRuntime: runsOn.resolved,
       credentials,
       commands: catalog.commands,
       // Listed whatever the readiness: a broken skill is a row with its issue,
@@ -669,6 +677,7 @@ export const scannerService = {
       // Runs-with panel all read one field and none of them needs to know which
       // kind of agent it belongs to. See `desktopStateService.runtime`.
       runtime: desktop.runtime,
+      resolvedRuntime: runtimeService.resolveBareRunsOn(desktop.runtime).resolved,
       credentials: [],
       commands: [],
       // No `skills`: a bare folder made no promise about a `skills/` folder,

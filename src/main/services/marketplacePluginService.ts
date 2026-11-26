@@ -638,16 +638,28 @@ async function readyToPin(userId: string, target: MarketplacePluginRef): Promise
   return { ok: true }
 }
 
-/** The engine the agent runs on: its manifest's, else this machine's Default Runtime (loaded on use). */
-async function agentEngine(manifest: CinnaAgentManifest): Promise<AgentEngine> {
-  let fallback: AgentEngine = 'opencode'
+/**
+ * The engine the agent runs on, as a turn would start it: the stored Runs-on
+ * choice, else its manifest's, else this machine's Default Runtime — the one
+ * resolver (`runtimeService.resolveRunsOn`), loaded on use.
+ */
+async function agentEngine(dir: string, manifest: CinnaAgentManifest): Promise<AgentEngine> {
   try {
-    const { defaultEngineService } = await import('./localAgents/defaultEngineService')
-    fallback = defaultEngineService.current()
+    const [{ runtimeService }, { desktopStateService }] = await Promise.all([
+      import('./localAgents/runtimeService'),
+      import('./localAgents/desktopStateService')
+    ])
+    return runtimeService.resolveRunsOn(manifest.runtime ?? null, desktopStateService.read(dir, 'kit').runsOn ?? null).resolved.engine
   } catch {
-    /* the historical default */
+    let fallback: AgentEngine = 'opencode'
+    try {
+      const { defaultEngineService } = await import('./localAgents/defaultEngineService')
+      fallback = defaultEngineService.current()
+    } catch {
+      /* the historical default */
+    }
+    return effectiveEngine(manifest.runtime ?? null, fallback)
   }
-  return effectiveEngine(manifest.runtime ?? null, fallback)
 }
 
 /** {@link marketplacePluginService.ensurePinned}'s work, inside the agent's chain. */
@@ -973,7 +985,7 @@ export const marketplacePluginService = {
           logger.info('plugin status: the marketplaces could not be asked', { error: err instanceof Error ? err.message : String(err) })
         }
       }
-      const engine = await agentEngine(manifest)
+      const engine = await agentEngine(kit.dir, manifest)
       const policy = addonPolicies.get(userId)
       const own = agentSkillRows(kit.dir, manifest, catalogSkillCache.resolve, marketplaceSkillCache.resolve)
       const { rows, skipped } = pluginSkillRows(plugins, new Set(own.map((row) => row.name)))

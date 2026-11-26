@@ -85,10 +85,14 @@ export function registerSettingsHandlers(): void {
        * folders. It is a user action taken rarely, and a failure must not fail
        * the save the user actually asked for — the setting is stored either
        * way, and the next rescan picks the rows up.
+       *
+       * The default AI credential too: every agent's `resolvedRuntime` (its
+       * engine, its credential, and whether its file disagrees with the app)
+       * is resolved in main against both, and every window is told.
        */
-      if (key === 'localAgentsDefaultEngine') {
+      if (key === 'localAgentsDefaultEngine' || key === 'localAgentsDefaultCredentialId') {
         try {
-          localAgentService.rescan(getSettingsScopeUserId())
+          localAgentService.runtimeDefaultsChanged(getSettingsScopeUserId())
         } catch (err) {
           logger.warn('could not re-index agents after the default runtime changed', {
             error: err instanceof Error ? err.message : String(err)

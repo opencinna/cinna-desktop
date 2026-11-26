@@ -90,7 +90,7 @@ function skill(over: Partial<LocalAgentSkill> = {}): LocalAgentSkill {
 
 function renderTab(skills: LocalAgentSkill[]) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const agent = { id: 'folder:a', kind: 'kit', skills } as unknown as LocalAgentDto
+  const agent = { id: 'folder:a', kind: 'kit', skills, resolvedRuntime: { engine: 'opencode', credentialId: null, source: 'default', choice: null, conflict: null } } as unknown as LocalAgentDto
   return render(createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent })))
 }
 

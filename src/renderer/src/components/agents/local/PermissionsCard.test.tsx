@@ -53,6 +53,7 @@ const handoversCheck = vi.fn<(agentId: string) => Promise<unknown>>()
 const agent = {
   id: 'folder:alpha',
   name: 'Alpha',
+  resolvedRuntime: { engine: 'opencode', credentialId: null, source: 'default', choice: null, conflict: null },
   desktop: { localApiBaseUrl: null, hasAgentToken: false, sessionCount: 0, lastStatusAt: null }
 } as LocalAgentDto
 
@@ -66,6 +67,7 @@ const BARE = {
   name: 'Alpha',
   kind: 'bare',
   instructionsFile: 'CLAUDE.md',
+  resolvedRuntime: { engine: 'opencode', credentialId: null, source: 'default', choice: null, conflict: null },
   desktop: { localApiBaseUrl: null, hasAgentToken: false, sessionCount: 0, lastStatusAt: null }
 } as LocalAgentDto
 
@@ -73,6 +75,7 @@ const BARE = {
 const claudeAgent = {
   ...agent,
   runtime: { engine: 'claude' },
+  resolvedRuntime: { engine: 'claude', credentialId: null, source: 'default', choice: null, conflict: null },
   desktop: { localApiBaseUrl: null, hasAgentToken: false, sessionCount: 0, lastStatusAt: null, claudeApproval: null }
 } as LocalAgentDto
 
@@ -288,16 +291,14 @@ describe('PermissionsCard — a bare agent', () => {
     expect(screen.getByText(/moving or renaming it starts a new agent/i)).toBeTruthy()
   })
 
-  it('claims no permission system until it knows which runtime the agent runs on', async () => {
+  it('answers from the engine main resolved, without waiting for the machine default', () => {
     /**
-     * The window this exists for: an agent whose folder names nothing, on a
-     * machine whose Default runtime has not been read yet. Whether the CLI's own
-     * reviewer or the OpenCode profile governs this agent is the card's whole
-     * subject, and a first paint that answers it and is corrected a moment later
-     * is worse than one that waits — this is a security surface, and the
-     * retraction is of the sentence saying who approves a command.
-     *
-     * Mutation: defaulting the unread answer to OpenCode fails this.
+     * The card used to hold a "Reading which runtime…" line while this
+     * machine's Default runtime was asked for, because it worked the engine out
+     * itself. Main resolves it now (`resolvedRuntime`: stored choice, file,
+     * machine default), so the DTO already says whose permission system is in
+     * force and the first paint is the answer. Mutation: read the engine back
+     * from the default-runtime query and this renders the OpenCode profile.
      */
     grantsList.mockResolvedValue([])
     const api = (window as unknown as { api: { engine: { defaultRuntime: () => Promise<unknown> } } })
@@ -305,12 +306,9 @@ describe('PermissionsCard — a bare agent', () => {
     const answered = api.engine.defaultRuntime
     api.engine.defaultRuntime = () => new Promise(() => {})
     try {
-      renderCard()
-      expect(screen.getByText(/Reading which runtime this agent uses/)).toBeTruthy()
-      expect(screen.queryByText(/runs commands inside its own folder without asking/)).toBeNull()
-      // And no Approvals control either: the other branch is just as much a
-      // claim about what is in force.
-      expect(screen.queryByLabelText('Approvals')).toBeNull()
+      renderCard({ ...claudeAgent, runtime: null } as LocalAgentDto)
+      expect(screen.queryByText(/Reading which runtime this agent uses/)).toBeNull()
+      expect(screen.getByLabelText('Approvals')).toBeTruthy()
     } finally {
       api.engine.defaultRuntime = answered
     }
@@ -404,6 +402,7 @@ describe('PermissionsCard — an agent on Antigravity', () => {
   const antigravityAgent = {
     ...agent,
     runtime: { engine: 'antigravity' },
+    resolvedRuntime: { engine: 'antigravity', credentialId: null, source: 'default', choice: null, conflict: null },
     desktop: { localApiBaseUrl: null, hasAgentToken: false, sessionCount: 0, lastStatusAt: null, antigravityApproval: null }
   } as LocalAgentDto
 

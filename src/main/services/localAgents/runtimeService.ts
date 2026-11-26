@@ -69,6 +69,8 @@ import {
 } from '../../../shared/runtimeDefaults'
 import { isWorkComplexity, type CatalogueModel, type WorkComplexity } from '../../../shared/modelFamilies'
 import { describeRuntime, type RuntimeFacts } from '../../../shared/runtimeMessages'
+import { resolveBareRunsOn, resolveRunsOn, type RunsOnDeps, type RunsOnResult } from './runsOn'
+import type { RunsOnChoice } from '../../../shared/engine'
 
 /** The engines that run on their own vendor login, as the credential refusal names them. */
 const OWN_LOGIN_ENGINE_NAMES = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' } as const
@@ -482,6 +484,43 @@ export const runtimeService = {
         source === 'default' && !chosen && fallback.reason
           ? fallback.reason
           : (describeRuntime(facts())?.text ?? null)
+    }
+  },
+
+  /**
+   * The effective runtime block and the resolved runtime of one folder agent —
+   * the stored Runs-on choice against the file (`runsOn.ts`), with this
+   * machine's real inputs: the Default runtime and the credential ladder of
+   * {@link resolve} itself, so what the DTO says and what a turn builds come
+   * from one resolution.
+   *
+   * Never throws: the scanner calls it for every agent on every pass. A
+   * credential list that cannot be read resolves no credential on either side,
+   * which compares as equal rather than inventing a conflict.
+   */
+  resolveRunsOn(file: AgentRuntimeRef | null | undefined, choice: RunsOnChoice | null): RunsOnResult {
+    return resolveRunsOn(file, choice, this.runsOnDeps())
+  },
+
+  /** {@link resolveRunsOn} for a bare agent, whose runtime is already the app's own. */
+  resolveBareRunsOn(runtime: AgentRuntimeRef | null | undefined): RunsOnResult {
+    return resolveBareRunsOn(runtime, this.runsOnDeps())
+  },
+
+  /** The real inputs of `runsOn.ts`: one credential list per call, read on first need. */
+  runsOnDeps(): RunsOnDeps {
+    let providers: ProviderDto[] | null = null
+    return {
+      defaultEngine: defaultEngineService.current(),
+      resolve: (runtime) => {
+        try {
+          providers ??= providerService.listMerged()
+          const resolved = this.resolve(runtime, providers)
+          return { credentialId: resolved.credentialId, credentialName: resolved.credentialName, modelId: resolved.modelId }
+        } catch {
+          return { credentialId: null, credentialName: null, modelId: null }
+        }
+      }
     }
   },
 

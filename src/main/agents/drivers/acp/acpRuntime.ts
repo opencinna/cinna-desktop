@@ -21,6 +21,12 @@ export interface AcpFolderView {
   blocksTurn?: boolean
   runtime: { engine?: unknown } | null
   /**
+   * For the one main-log line per turn: the model this turn resolves to and
+   * what decided its engine (`runsOnSourceLabel`). A function, so readiness
+   * reads of the view never pay for a credential lookup. Absent in tests.
+   */
+  describeRuntime?: () => { model: string | null; source: string }
+  /**
    * Set for an agent in an Agent Vault: `path` is the guest's agent folder,
    * nothing of it is on this computer, and the driver takes the vault branch
    * (`AcpDriverDeps.vault`) for the launcher, readiness and the turn's hold.

@@ -289,6 +289,44 @@ describe('who answers a Claude agent’s permission asks', () => {
 })
 
 
+describe('the stored Runs-on choice (`runsOn`)', () => {
+  it('round-trips every kind, beside the rest of the kit folder’s state', () => {
+    for (const runsOn of [
+      { kind: 'default' },
+      { kind: 'engine', engine: 'codex' },
+      { kind: 'engine', engine: 'opencode' },
+      { kind: 'credential', name: 'Team OpenAI' }
+    ] as const) {
+      desktopStateService.patch(dir, 'kit', { runsOn })
+      expect(desktopStateService.read(dir, 'kit').runsOn).toEqual(runsOn)
+    }
+    // A later patch of something else keeps it.
+    desktopStateService.patch(dir, 'kit', { claudeApproval: 'ask' })
+    expect(desktopStateService.read(dir, 'kit').runsOn).toEqual({ kind: 'credential', name: 'Team OpenAI' })
+    expect(JSON.parse(readFileSync(join(dir, 'app-data', 'desktop.json'), 'utf8')).runsOn).toEqual({ kind: 'credential', name: 'Team OpenAI' })
+  })
+
+  it('reads absent, malformed and unknown values as no choice — follow the file', () => {
+    expect(desktopStateService.read(dir, 'kit').runsOn).toBeNull()
+    mkdirSync(join(dir, 'app-data'), { recursive: true })
+    for (const raw of [
+      'default',
+      { kind: 'engine', engine: 'gemini' },
+      { kind: 'engine' },
+      { kind: 'credential', name: '   ' },
+      { kind: 'credential', name: 'x'.repeat(201) },
+      { kind: 'something-new' },
+      ['default']
+    ]) {
+      writeFileSync(join(dir, 'app-data', 'desktop.json'), JSON.stringify({ runsOn: raw }))
+      expect(desktopStateService.read(dir, 'kit').runsOn).toBeNull()
+    }
+    // Trimmed, like the manifest's own references.
+    writeFileSync(join(dir, 'app-data', 'desktop.json'), JSON.stringify({ runsOn: { kind: 'engine', engine: ' claude ' } }))
+    expect(desktopStateService.read(dir, 'kit').runsOn).toEqual({ kind: 'engine', engine: 'claude' })
+  })
+})
+
 describe('Codex approval state', () => {
   it('keeps Codex and Claude decisions independent in both storage locations', () => {
     for (const kind of ['kit', 'bare'] as const) {

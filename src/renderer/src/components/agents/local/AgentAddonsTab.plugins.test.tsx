@@ -70,7 +70,7 @@ const { useAuthStore } = await import('../../../stores/auth.store')
 
 function renderTab() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const agent = { id: 'folder:a', name: 'Alpha', kind: 'kit', skills: [], runtime: null } as unknown as LocalAgentDto
+  const agent = { id: 'folder:a', name: 'Alpha', kind: 'kit', skills: [], runtime: null, resolvedRuntime: { engine: 'claude', credentialId: null, source: 'default', choice: null, conflict: null } } as unknown as LocalAgentDto
   return render(createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent })))
 }
 

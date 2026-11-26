@@ -76,7 +76,7 @@ const { useAuthStore } = await import('../../../stores/auth.store')
 
 function renderTab(extra: Partial<LocalAgentDto> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const agent = { id: 'folder:a', name: 'Alpha', kind: 'kit', skills: [], ...extra } as unknown as LocalAgentDto
+  const agent = { id: 'folder:a', name: 'Alpha', kind: 'kit', skills: [], resolvedRuntime: { engine: 'opencode', credentialId: null, source: 'default', choice: null, conflict: null }, ...extra } as unknown as LocalAgentDto
   return { ...render(createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent }))), client }
 }
 
@@ -423,7 +423,7 @@ describe('the Skills section', () => {
     const onFinishSetup = vi.fn()
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const agent = {
-      id: 'folder:a', kind: 'kit',
+      id: 'folder:a', kind: 'kit', resolvedRuntime: { engine: 'opencode', credentialId: null, source: 'default', choice: null, conflict: null },
       skills: [
         skill('docs', {
           credentials: [
@@ -883,7 +883,7 @@ describe('the Skills section — a marketplace skill', () => {
   it('reads where the pins stand again each time the tab mounts, and when the window regains focus', async () => {
     status('current')
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    const agent = { id: 'folder:a', kind: 'kit', skills: [mpin('pdf-report')] } as unknown as LocalAgentDto
+    const agent = { id: 'folder:a', kind: 'kit', skills: [mpin('pdf-report')], resolvedRuntime: { engine: 'opencode', credentialId: null, source: 'default', choice: null, conflict: null } } as unknown as LocalAgentDto
     const tree = createElement(QueryClientProvider, { client }, createElement(AgentAddonsTab, { agent }))
     const first = render(tree)
     await waitFor(() => expect(marketplaceStatus).toHaveBeenCalledTimes(1))
