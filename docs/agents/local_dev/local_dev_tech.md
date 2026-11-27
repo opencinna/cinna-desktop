@@ -73,11 +73,8 @@ Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `mana
 
 ### Remote-to-local Development
 
-- `src/main/localdev/developAgentService.ts` — `developAgent`, `syncedAgentPath` and profile/agent single-flight preparation.
-- `src/shared/agentDevelopment.ts` — `canDevelopAgent`, shared between renderer presentation and service validation.
-- `src/renderer/src/components/agents/ExternalAgentPage.tsx` — Develop action, inline errors, query invalidation and guarded destination navigation.
-- `src/main/services/customAgentService.ts` — tests/saves the resulting stdio ACP connection using an ordinary exact-configuration receipt.
-- `src/main/localdev/developAgentService.test.ts` — mocked CLI/path/service coverage of reuse, sync, refusal, profile changes and concurrent calls.
+- `src/shared/agentDevelopment.ts` — `canDevelopAgent`, the eligibility test the menu item and the Dashboards tab share.
+- `src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx` — the **Develop** item and `developDraft`, which builds the prefilled message. No main-process code is involved.
 
 ## Database Schema
 
@@ -93,7 +90,6 @@ The activated `localdev:session-context` and `localdev:prepare-session` commands
 
 | Channel | Signature | Notes |
 |---|---|---|
-| `localdev:develop-agent` | `(agentId: string) → { agentId: string }` | Activated profile, nonempty ID; returns the prepared default-scope ACP connection ID or rejects with an actionable error |
 | `localdev:get-state` | `() → LocalDevState` | Ungated read; activation resets state to `idle` before any profile reload await |
 | `localdev:get-managed-cli` | `() → ManagedLocalDevCli \| null` | Ungated, read-only executable inspection; no pins, setup or account readiness required |
 | `localdev:check-cli-update` | `() → CinnaCliUpdate` | Activated session; reads managed executable and fresh connected-server target; no installation |
@@ -110,17 +106,13 @@ The activated `localdev:session-context` and `localdev:prepare-session` commands
 Two rules hold across all of them:
 
 - **Account actions resolve the active profile in main** (`getProfileScopeUserId()`), and no caller can select a different execution account. Build preparation accepts an expected `profileId` only to compare with that active account. All requests except `get-state` and `get-managed-cli` require activation; managed CLI inspection exposes only an executable path and nullable version. The reconciler mints setup tokens with that profile's OAuth bearer and writes into that profile's agents home, so a renderer-supplied id would be a confused deputy — the same rule `authService.reauthCinna` follows
-- **Reconcile/state verbs do not throw for an ordinary failure.** A refused install, a rejected token and a missing role all come back as `LocalDevState`, because a thrown `DomainError`'s code does not survive the IPC boundary and those states are something the UI renders rather than catches. `localdev:develop-agent`, `localdev:session-context`, `localdev:prepare-session`, `localdev:check-cli-update` and `localdev:update-cli` are separate commands: failures reject, and their entry pages unwrap them beside the relevant action/input
+- **Reconcile/state verbs do not throw for an ordinary failure.** A refused install, a rejected token and a missing role all come back as `LocalDevState`, because a thrown `DomainError`'s code does not survive the IPC boundary and those states are something the UI renders rather than catches. `localdev:session-context`, `localdev:prepare-session`, `localdev:check-cli-update` and `localdev:update-cli` are separate commands: failures reject, and their entry pages unwrap them beside the relevant action/input
 
-### Develop Preparation Contract
+### Develop Contract
 
-- Preload exposes `window.api.localDev.developAgent(agentId)`. No profile, path, executable or server URL comes from this caller. `developAgent` resolves profile scope and joins the in-flight promise keyed by profile plus agent ID; `finally` removes it so a later action can recheck real state.
-- `localDevService.executionContext(userId)` requires the current state to be `ready`, protocol `json`, a server URL and the exact expected account workspace for that profile/server. It rediscovers required CLI/Mutagen versions, builds `toolchainEnv`, and refuses a state object changed during the await.
-- `syncedAgentPath` requires exit code zero, final JSON `result=ok`, and an `agents` array. It selects the entry whose `agent_id` matches the cached target and returns a string path; unsupported output gets an update-tooling error. The service executes `account status --json` in the account workspace, with `CINNA_NO_INPUT=1`. Only a missing reported path invokes `agent sync <targetId>`, then status again.
-- `realpath` resolves the account and returned folder concurrently. Equality or failure of `isWithin(root, folder)` rejects before creating a connection. This prevents an outside or symlink-escaped CLI path from becoming a coding assistant working directory.
-- Profile, eligibility and unchanged target ID are checked after context creation, each CLI operation, path resolution, binary resolution and connection Test. Engine resolution uses the existing configured-path/login-shell/pinned fallback.
-- The saved configuration is a custom stdio launcher with `/usr/bin/env`, explicit toolchain PATH, resolved engine binary and `acp`; both `cwd` and `localCwd` are the canonical agent folder. Reuse searches default/settings scope for ACP + custom launcher + exact cwd + generated `Develop <name>` (capped at 200 characters). It does not compare the entire command or retest an existing match. Otherwise `customAgentService.test` supplies the receipt consumed by `save`. No new database mapping or migration is added.
-- Renderer success invalidates the agents query and opens the returned external agent in chat mode only if profile and source-agent selection still match. Preparation is not a chat send. These tests mock CLI/server behavior; they do not establish a live account deletion/development round trip.
+There is no IPC channel, preload method or main-process service for Develop. The **Develop** item in `ExternalAgentActionsMenu` is shown only while `LocalDevState.phase === 'ready'` and `canDevelopAgent(agent)`; choosing it writes `I have an agent <name> (id: <remoteTargetId>), I would like to ` into the Agents Development composer draft for the active profile (`localDev.store` `setDraft`), sets the page mode to `chat` and switches `activeView` to `local-development`. The composer puts the cursor at the end, so the user finishes the sentence. Nothing is sent and nothing is prepared: Agents Development's assistant already works on every agent of the account, so a per-agent connection, workspace path check or `agent sync` would only duplicate what a build session does. The id in the message is the core agent id, which is what the assistant's tools take.
+
+An earlier design prepared a per-agent `Develop <name>` ACP connection (`localdev:develop-agent`, `developAgentService`); it was removed because it was a second way into the same assistant, with its own stale working directory after a reconnect.
 
 ## Services & Key Methods
 

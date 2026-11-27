@@ -8,11 +8,11 @@ Prepare a signed-in Cinna account for local agent development, then offer a one-
 
 ## Scope and non-goals
 
-Setup prepares the machine; an explicit build prompt or Develop action performs later agent work. The following guarantees concern setup orchestration, not the commands an assistant may subsequently run:
+Setup prepares the machine; an explicit build prompt performs later agent work. The following guarantees concern setup orchestration, not the commands an assistant may subsequently run:
 
 - **No agent is cloned.** Setup prepares the machine; fetching an agent is a later, explicit action.
 - **No Mutagen session is started.** Mutagen is installed and put on the spawn `PATH` so cinna-cli finds *this app's* copy rather than prompting to `brew install` one. Nothing syncs.
-- **Setup never runs `cinna dev`.** The reconciler drives `cinna account setup`, `cinna account set-token`, `cinna account status` and `cinna account refresh-context` for workspace setup and maintenance. Build-session tools and the separate Develop action have their own command flows.
+- **Setup never runs `cinna dev`.** The reconciler drives `cinna account setup`, `cinna account set-token`, `cinna account status` and `cinna account refresh-context` for workspace setup and maintenance. Build-session tools have their own command flows.
 - **Nothing is reimplemented that cinna-cli owns.** The desktop is *installer and orchestrator*: it puts the right binaries somewhere it controls, mints a token, spawns cinna-cli in the right directory, and reads the exit code. Workspace layout, the token exchange, the context package and sync are cinna-cli's, and the desktop reads only the defined CLI result contracts and a fixed set of public guide documents for the build briefing.
 - **The opencode engine is pre-fetched, not owned.** It is not part of the cinna-cli toolchain and this feature does not install it: it asks the engine's own resolver to make sure a usable binary exists. What is decided here is *when*, not *how* or *where*.
 - **The managed setup toolchain and workspace stay in two places.** `<userData>/localdev` for the toolchain, `<AgentsHome>/Cloud/<host>/` for the workspace (the engine's own binary directory is the engine's, and unchanged by this). Not Homebrew, not the system Python, not `~/.local/bin` — with one exception the user has to press a button for (see *Your terminal*).
@@ -121,14 +121,10 @@ The build page's own **Set up local development** button opens the same modal in
 
 ### Develop a Remote Agent
 
-1. Open a Cinna-synced agent from the Agents sidebar. When Local Development is ready and the agent passes development eligibility, its header offers **Develop**.
-2. Desktop asks the managed CLI for the account status and reuses the agent workspace reported there. Only a missing workspace triggers `agent sync`; Desktop then asks for status again. Existing local work is not force-resynced each time.
-3. Desktop resolves both paths to real paths and requires the reported agent directory to be strictly inside the account workspace. The account root itself and paths escaping through symlinks are refused.
-4. Desktop creates or reuses a **Develop <agent name>** command-line ACP connection running OpenCode inside that directory, with managed Cinna/Mutagen tools on its PATH. Preparation opens that connection's chat landing page without sending a prompt.
+1. Open a Cinna-synced agent from the Agents sidebar. When Local Development is ready and the agent passes development eligibility, its **⋯** menu offers **Develop**.
+2. Choosing it opens Agents Development in chat mode with the composer filled with `I have an agent <name> (id: <core agent id>), I would like to ` and the cursor at the end. Nothing is sent; the user finishes the sentence.
 
-Eligibility requires a remote `agent` target and target ID, excludes explicit `can_build: false` and foreign installs, and excludes consumer bundles while allowing publisher working copies. These metadata checks are not independent proof of developer-role entitlement; CLI/server access controls remain authoritative. Main rechecks profile, cached target identity and eligibility after asynchronous preparation stages. Concurrent calls for the same profile/agent share one preparation; failures remain on the source page.
-
-The header visibility check accepts any `ready` phase, but preparation additionally requires the CLI's **JSON workspace protocol**. A legacy-ready installation can show Develop and then receive an update/setup error; the service cannot safely infer paths from a CLI that does not report them. Reusing a connection is based on its generated name and exact canonical workspace directory, not a persisted remote-to-local mapping.
+Eligibility requires a remote `agent` target and target ID, excludes explicit `can_build: false` and foreign installs, and excludes consumer bundles while allowing publisher working copies. These metadata checks are not independent proof of developer-role entitlement; CLI/server access controls remain authoritative. Desktop prepares no per-agent connection, workspace or sync for this: the Agents Development assistant already works on every agent of the account, which is why Develop is only a start of a message there.
 
 ### Inspecting shared desktop tools
 
@@ -293,7 +289,7 @@ Two successfully probed surfaces result, and `ready` says which one it settled o
 | Account token state | read from `cinna account status` | not visible; the desktop learns only that cinna-cli could read the workspace |
 | An expired token | refreshed in place with a fresh mint | needs **Repair**, which sets the workspace up again |
 
-A `legacy` install really does create a workspace; both account build sessions and the explicit Develop action additionally require JSON workspace reporting. This is reported rather than hidden: Profile → Local Development shows what the older cinna-cli cannot do beside workspace readiness; Default → Local Development shows the actual managed executable version. A working badge that quietly could not refresh a token would be the worse failure.
+A `legacy` install really does create a workspace; account build sessions additionally require JSON workspace reporting. This is reported rather than hidden: Profile → Local Development shows what the older cinna-cli cannot do beside workspace readiness; Default → Local Development shows the actual managed executable version. A working badge that quietly could not refresh a token would be the worse failure.
 
 ### Progress is measured, not implied
 
@@ -367,8 +363,6 @@ The one failure Repair provably cannot clear, and therefore the one verb beside 
 - **It re-reads the state after that wait.** The queue ahead of it can be a whole toolchain install, and the run that just drained may have reached `ready`; archiving a workspace that now works would throw away exactly what the user was trying to get back. If the state is no longer `attention/account_mismatch` it falls through to a plain forced reconcile
 - **A rename the filesystem refused comes back as a state, not a throw** — `attention/account_mismatch` again, with the refusal in its `detail`. The reason stays what it was on purpose: it is still true, and it is what keeps Reconnect on screen to press again once the folder is free. Every other verb on this service answers with a state, and the surfaces that call it have no catch
 
-**What it does not fix:** a **Develop <agent name>** connection stores an absolute working directory under the old workspace, so after a reconnect it points into the archived copy until the user runs Develop again. The page says so in the same breath as the offer, because it is the one consequence a user would otherwise meet as a surprise.
-
 ## Architecture Overview
 
 ```
@@ -428,5 +422,4 @@ Carried honestly rather than implied as passing. Build-session validation and li
 - **The context-package refresh is fire-and-forget.** A repeated failure is logged and never surfaced anywhere the user can see
 - **The OS `open-url` hook and the packaged scheme registration are untested.** Playwright cannot raise a Launch Services event, so the E2E specs enter the funnel through the test-only argv flag and everything below the hook is real — but that a *packaged* build actually claims `cinna://` has only been asserted by the `protocols:` block in `electron-builder.yml`, never by installing a DMG and clicking a link
 - **Two profiles on the same host share a workspace location and consent.** A workspace belonging to another account is still refused by CLI identity checks; Reconnect resolves that refusal by archiving one account's workspace and setting the other up in its place, which is a way out rather than coexistence. Separating per-account workspace folders remains outside this change, so switching back and forth between two accounts on one host archives a workspace each time.
-- **A Develop connection does not follow a reconnect.** Its saved working directory is absolute and under the old workspace, so it keeps pointing into the archived copy until the user runs Develop again. The page's copy says so; nothing rewrites the saved path.
 - **Archived workspaces are never reaped.** `<host>.old-<stamp>` folders accumulate in `Cloud/` until the user deletes them, and nothing in the app lists or counts them.
