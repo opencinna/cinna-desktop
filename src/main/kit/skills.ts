@@ -87,7 +87,7 @@ export const MAX_SKILL_CREDENTIALS = 20
 export const SKILL_CREDENTIAL_TYPES: ReadonlySet<string> = new Set([
   'email_imap', 'email_smtp', 'odoo', 'gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth',
   'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'gmeet_oauth',
-  'gmeet_oauth_readonly', 'google_service_account', 'api_token', 'ssh_key', 'agent_api'
+  'gmeet_oauth_readonly', 'gtasks_oauth', 'google_service_account', 'api_token', 'ssh_key', 'agent_api'
 ])
 
 /* -------------------------------------------------------- issue vocabulary */

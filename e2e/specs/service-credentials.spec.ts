@@ -230,7 +230,7 @@ interface FakeGoogle {
   grantedUserEmail: string | null; accessToken: string
 }
 const GOOGLE_NAMES: Record<string, string> = { gmail_oauth: 'Gmail', gmail_oauth_readonly: 'Gmail (read-only)', gdrive_oauth: 'Google Drive', gdrive_oauth_readonly: 'Google Drive (read-only)',
-  gcalendar_oauth: 'Google Calendar', gcalendar_oauth_readonly: 'Google Calendar (read-only)', gmeet_oauth: 'Google Meet', gmeet_oauth_readonly: 'Google Meet (read-only)' }
+  gcalendar_oauth: 'Google Calendar', gcalendar_oauth_readonly: 'Google Calendar (read-only)', gmeet_oauth: 'Google Meet', gmeet_oauth_readonly: 'Google Meet (read-only)', gtasks_oauth: 'Google Tasks' }
 
 /**
  * A fake Core on node:http that lists and materializes issued Agent API keys and serves the producer's /ping.
@@ -501,7 +501,7 @@ async function openGoogleChooser(cinna: CinnaApp, core: { url: string }, agentNa
   await cinna.page.getByRole('button', { name: 'Attach', exact: true }).click()
   const picker = cinna.page.getByRole('dialog', { name: 'Attach credential' })
   await picker.getByRole('button', { name: /^New Google credential/ }).click()
-  await expect(picker.getByRole('radiogroup', { name: 'Google service' }).getByRole('radio')).toHaveCount(4)
+  await expect(picker.getByRole('radiogroup', { name: 'Google service' }).getByRole('radio')).toHaveCount(5)
   return { agent, picker, opened }
 }
 

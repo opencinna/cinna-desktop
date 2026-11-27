@@ -253,6 +253,17 @@ describe('validateAgentFolder — manifest errors', () => {
     expect(codes(report.warnings)).toContain('manifest.credentials.type_unknown')
   })
 
+  it('knows every credential type the shipped schema lists, Google Meet and Google Tasks included', () => {
+    const schema = JSON.parse(readFileSync(join(contractDir, 'schema/cinna-agent.schema.json'), 'utf8'))
+    const types: string[] = schema.properties.credentials.items.properties.type.examples
+    expect(types).toEqual(expect.arrayContaining(['gmeet_oauth', 'gmeet_oauth_readonly', 'gtasks_oauth']))
+    patchManifest(agentDir, (m) => {
+      m.credentials = types.map((type, i) => ({ name: `Slot ${i}`, type, env_prefix: `SLOT_${i}_` }))
+    })
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.warnings.filter((f) => f.code === 'manifest.credentials.type_unknown')).toEqual([])
+  })
+
   it('warns, as kit.py does, about an api_token template declared without a type', () => {
     const warned = (fields: string[]): boolean => {
       patchManifest(agentDir, (m) => {

@@ -123,6 +123,9 @@ const KNOWN_CREDENTIAL_TYPES = new Set([
   'gdrive_oauth_readonly',
   'gcalendar_oauth',
   'gcalendar_oauth_readonly',
+  'gmeet_oauth',
+  'gmeet_oauth_readonly',
+  'gtasks_oauth',
   'google_service_account',
   'api_token',
   'ssh_key'

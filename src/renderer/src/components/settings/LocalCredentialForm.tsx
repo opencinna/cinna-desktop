@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { ArrowLeft, CalendarDays, Database, FileKey, HardDrive, KeyRound, Mail, PlugZap, Search, Send, Video, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Database, FileKey, HardDrive, KeyRound, ListTodo, Mail, PlugZap, Search, Send, Video, type LucideIcon } from 'lucide-react'
 import type { LocalCredentialType, ServiceCredentialDto } from '../../../../shared/serviceCredentials'
 import { credentialResult } from '../../hooks/useServiceCredentials'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -23,7 +23,8 @@ const cloudCredentialTypes: { type: string; name: string; icon: LucideIcon }[] =
   { type: 'gcalendar_oauth', name: 'Google Calendar', icon: CalendarDays },
   { type: 'gcalendar_oauth_readonly', name: 'Google Calendar (read-only)', icon: CalendarDays },
   { type: 'gmeet_oauth', name: 'Google Meet', icon: Video },
-  { type: 'gmeet_oauth_readonly', name: 'Google Meet (read-only)', icon: Video }
+  { type: 'gmeet_oauth_readonly', name: 'Google Meet (read-only)', icon: Video },
+  { type: 'gtasks_oauth', name: 'Google Tasks', icon: ListTodo }
 ]
 const typeEntry = (type: string) => credentialTypes.find(c => c.type === type) ?? cloudCredentialTypes.find(c => c.type === type)
 export const credentialTypeName = (type: string) => typeEntry(type)?.name ?? type.replaceAll('_', ' ')

@@ -3,10 +3,10 @@ export const SERVICE_CREDENTIALS_CHANGED = 'service-credentials:changed'
 export const LOCAL_CREDENTIAL_TYPES = ['api_token', 'email_imap', 'email_smtp', 'odoo', 'google_service_account'] as const
 export type LocalCredentialType = typeof LOCAL_CREDENTIAL_TYPES[number]
 /**
- * Core's eight Google OAuth types. Core holds the refresh token; Desktop only ever sees a short-lived
+ * Core's nine Google OAuth types (Google Tasks has no `_readonly` variant). Core holds the refresh token; Desktop only ever sees a short-lived
  * access token (in `credential_data.access_token` / `expires_at`) and gets a new one from Core.
  */
-export const GOOGLE_OAUTH_TYPES = ['gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'gmeet_oauth', 'gmeet_oauth_readonly'] as const
+export const GOOGLE_OAUTH_TYPES = ['gmail_oauth', 'gmail_oauth_readonly', 'gdrive_oauth', 'gdrive_oauth_readonly', 'gcalendar_oauth', 'gcalendar_oauth_readonly', 'gmeet_oauth', 'gmeet_oauth_readonly', 'gtasks_oauth'] as const
 export type GoogleOAuthType = typeof GOOGLE_OAUTH_TYPES[number]
 export const isGoogleOAuthType = (type: string): type is GoogleOAuthType => (GOOGLE_OAUTH_TYPES as readonly string[]).includes(type)
 /** Core's `oauth_status` for a Google OAuth record; null for every other type. */

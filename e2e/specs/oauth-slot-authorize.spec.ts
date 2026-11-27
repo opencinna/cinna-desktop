@@ -33,7 +33,7 @@ import { fakeSkill, sha256, skillArchive, skillItem, type FakeSkill } from '../f
 
 const GOOGLE_NAMES: Record<string, string> = {
   gmail_oauth: 'Gmail', gmail_oauth_readonly: 'Gmail (read-only)', gdrive_oauth: 'Google Drive', gdrive_oauth_readonly: 'Google Drive (read-only)',
-  gcalendar_oauth: 'Google Calendar', gcalendar_oauth_readonly: 'Google Calendar (read-only)', gmeet_oauth: 'Google Meet', gmeet_oauth_readonly: 'Google Meet (read-only)'
+  gcalendar_oauth: 'Google Calendar', gcalendar_oauth_readonly: 'Google Calendar (read-only)', gmeet_oauth: 'Google Meet', gmeet_oauth_readonly: 'Google Meet (read-only)', gtasks_oauth: 'Google Tasks'
 }
 
 /** A Google OAuth record on the fake Core: `pending_authorization` until the test plays the consent. */

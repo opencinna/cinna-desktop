@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Check, ExternalLink, Loader2, Plus, Search, X } from 'lucide-react'
@@ -19,10 +19,12 @@ function matches(item: Item, query: string): boolean {
   return [item.name, credentialTypeName(item.type), item.serviceUri, item.ownerEmail, item.grantedUserEmail].some(v => !!v && v.toLowerCase().includes(q))
 }
 
-/** The four Google services New offers; each comes as a full and a read-only type. */
-const googleServices = ['gmail', 'gdrive', 'gcalendar', 'gmeet'] as const
+/** The Google services New offers; each comes as a full and a read-only type, except those in `noReadOnly`. */
+const googleServices = ['gmail', 'gdrive', 'gcalendar', 'gmeet', 'gtasks'] as const
 type GoogleService = typeof googleServices[number]
-const googleType = (service: GoogleService, readOnly: boolean): GoogleOAuthType => `${service}_oauth${readOnly ? '_readonly' : ''}` as GoogleOAuthType
+/** Core has no read-only Google Tasks type: the switch is disabled for it, and the choice kept for the next service. */
+const noReadOnly: ReadonlySet<GoogleService> = new Set(['gtasks'])
+const googleType = (service: GoogleService, readOnly: boolean): GoogleOAuthType => `${service}_oauth${readOnly && !noReadOnly.has(service) ? '_readonly' : ''}` as GoogleOAuthType
 function splitGoogleType(type: GoogleOAuthType): { service: GoogleService; readOnly: boolean } {
   return { service: type.slice(0, type.indexOf('_')) as GoogleService, readOnly: type.endsWith('_readonly') }
 }
@@ -74,6 +76,9 @@ export function CredentialAttachModal({ open, agentId, onClose, onAttach }: {
   const [attached, setAttached] = useState<Set<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [choosing, setChoosing] = useState<{ group: string; service: GoogleService; readOnly: boolean } | null>(null)
+  /** The Read-only switch as last set, for Back from a flow whose type cannot say it (Google Tasks has no read-only type). */
+  const readOnlyChoice = useRef(false)
+  const readOnlyHintId = useId()
   // One busy flag and one error line for whichever New view is showing: only one is ever on screen.
   const [busy, setBusy] = useState(false), [flowError, setFlowError] = useState('')
   const cardRef = useRef<HTMLDivElement>(null)
@@ -225,7 +230,7 @@ export function CredentialAttachModal({ open, agentId, onClose, onAttach }: {
                 <span className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center bg-[var(--color-bg)] text-[var(--color-accent)]"><Plus size={14} aria-hidden /></span>
                 <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-accent)]">New Google credential</span>
               </span>
-              <span className="mt-1.5 text-[10px] truncate text-[var(--color-text-muted)]">Gmail, Drive, Calendar or Meet</span>
+              <span className="mt-1.5 text-[10px] truncate text-[var(--color-text-muted)]">Gmail, Drive, Calendar, Meet or Tasks</span>
               {/* The Attach button's line, unseen, so this card is as tall as a credential card. */}
               <span aria-hidden className="invisible mt-2 px-2 py-1 text-[11px] font-medium">Attach</span>
             </button>}
@@ -236,6 +241,7 @@ export function CredentialAttachModal({ open, agentId, onClose, onAttach }: {
   let body: React.ReactNode
   if (view === 'choose' && choosing) {
     const type = googleType(choosing.service, choosing.readOnly)
+    const readOnlyOffered = !noReadOnly.has(choosing.service), readOnly = readOnlyOffered && choosing.readOnly
     body = <div className="flex flex-col">
       <div className="text-xs font-medium text-[var(--color-text)]">New Google credential</div>
       <AccountLine group={groupOf(choosing.group)} />
@@ -251,19 +257,19 @@ export function CredentialAttachModal({ open, agentId, onClose, onAttach }: {
         })}
       </div>
       <div className="mt-3 flex items-center gap-2">
-        <button type="button" role="switch" aria-checked={choosing.readOnly} aria-label="Read-only" disabled={busy} onClick={() => setChoosing({ ...choosing, readOnly: !choosing.readOnly })}
-          className={`${switchTrackClass(choosing.readOnly, 'sm')} disabled:opacity-50`}>
-          <span className={switchThumbClass(choosing.readOnly, 'sm')} />
+        <button type="button" role="switch" aria-checked={readOnly} aria-label="Read-only" aria-describedby={readOnlyHintId} disabled={busy || !readOnlyOffered} onClick={() => setChoosing({ ...choosing, readOnly: !choosing.readOnly })}
+          className={`${switchTrackClass(readOnly, 'sm')} disabled:opacity-50`}>
+          <span className={switchThumbClass(readOnly, 'sm')} />
         </button>
-        <span aria-hidden className="text-xs text-[var(--color-text)]">Read-only</span>
-        <span className="text-[11px] text-[var(--color-text-muted)]">The agent can read but not change anything</span>
+        <span aria-hidden className={`text-xs ${readOnlyOffered ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}>Read-only</span>
+        <span id={readOnlyHintId} className="text-[11px] text-[var(--color-text-muted)]">{readOnlyOffered ? 'The agent can read but not change anything' : `${credentialTypeName(type)} has no read-only access`}</span>
       </div>
       <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">Will be named “{credentialTypeName(type)}”</p>
       {/* In flow, not pinned to the bottom: a refusal then lands below the buttons and moves nothing (rule 1). */}
       <div className="pt-4">
         <div className="flex justify-end gap-2">
           <button type="button" disabled={busy} onClick={() => { setChoosing(null); setFlowError('') }} className={secondaryButton}>Back</button>
-          <button type="button" aria-label="Connect" aria-busy={busy} disabled={busy} onClick={() => void connect(choosing.group, type)} className={primaryButton}><BusyLabel busy={busy}>Connect</BusyLabel></button>
+          <button type="button" aria-label="Connect" aria-busy={busy} disabled={busy} onClick={() => { readOnlyChoice.current = choosing.readOnly; void connect(choosing.group, type) }} className={primaryButton}><BusyLabel busy={busy}>Connect</BusyLabel></button>
         </div>
         {flowError && <p role="alert" className="mt-2 text-right text-[11px] text-[var(--color-danger)]">{flowError}</p>}
       </div>
@@ -279,7 +285,7 @@ export function CredentialAttachModal({ open, agentId, onClose, onAttach }: {
         <AccountLine group={groupOf(flow.group)} center />
         <p role="alert" className="mt-1 max-w-sm text-[11px] text-[var(--color-text-secondary)]">{oauthFlowErrorText(flow.error)}</p>
         <div className="mt-4 flex gap-2">
-          <button type="button" disabled={busy} onClick={() => void cancel(flow, flow.reconnect ? undefined : () => { const { service, readOnly } = splitGoogleType(flow.type); setChoosing({ group: flow.group, service, readOnly }) })} className={secondaryButton}>Back</button>
+          <button type="button" disabled={busy} onClick={() => void cancel(flow, flow.reconnect ? undefined : () => { const { service, readOnly } = splitGoogleType(flow.type); setChoosing({ group: flow.group, service, readOnly: noReadOnly.has(service) ? readOnlyChoice.current : readOnly }) })} className={secondaryButton}>Back</button>
           <button ref={retryRef} type="button" aria-label="Retry" aria-busy={busy} disabled={busy} onClick={() => void retry(flow)} className={primaryButton}><BusyLabel busy={busy}>Retry</BusyLabel></button>
         </div>
       </> : <>

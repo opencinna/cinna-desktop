@@ -43,7 +43,7 @@ API = "/api/v1"
 PREFIX = "oauth-slot-e2e-"
 GOOGLE_TYPES = {
     "gmail_oauth", "gmail_oauth_readonly", "gdrive_oauth", "gdrive_oauth_readonly",
-    "gcalendar_oauth", "gcalendar_oauth_readonly", "gmeet_oauth", "gmeet_oauth_readonly",
+    "gcalendar_oauth", "gcalendar_oauth_readonly", "gmeet_oauth", "gmeet_oauth_readonly", "gtasks_oauth",
 }
 
 

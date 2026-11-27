@@ -160,6 +160,14 @@ describe('credential declarations', () => {
     expect(parseCredentialDeclarations(raw as never)).toEqual({ credentials: [], problem })
   })
 
+  it('accepts gtasks_oauth, which has no read-only variant', () => {
+    expect(parseCredentialDeclarations([{ slot: 'tasks', type: 'gtasks_oauth' }])).toEqual({
+      credentials: [{ slot: 'tasks', type: 'gtasks_oauth', description: null }],
+      problem: null
+    })
+    expect(parseCredentialDeclarations([{ slot: 'tasks', type: 'gtasks_oauth_readonly' }]).problem).toBe("the slot 'tasks' has an unknown type 'gtasks_oauth_readonly'")
+  })
+
   it('caps the number of slots', () => {
     const many = Array.from({ length: 21 }, (_, i) => ({ slot: `s${i}`, type: 'api_token' }))
     expect(parseCredentialDeclarations(many).problem).toBe('it declares more than 20 credentials')

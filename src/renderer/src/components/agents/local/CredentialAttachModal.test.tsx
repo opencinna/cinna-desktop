@@ -170,6 +170,34 @@ describe('CredentialAttachModal', () => {
       await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reopen browser' })))
     })
 
+    it('offers Google Tasks with the read-only switch disabled, and keeps the read-only choice for the other services', async () => {
+      createOAuth.mockResolvedValue(ok(flow({ type: 'gtasks_oauth', state: 'failed', error: { code: 'timeout', message: 'Timed out' } })))
+      renderModal(vi.fn())
+      await screen.findByRole('region', { name: 'Work' })
+      fireEvent.click(newIn('Work')!)
+      const readOnly = () => screen.getByRole('switch', { name: 'Read-only' }) as HTMLButtonElement
+      fireEvent.click(readOnly())
+      expect(screen.getByText('Will be named “Gmail (read-only)”')).toBeTruthy()
+      fireEvent.click(screen.getByRole('radio', { name: 'Google Tasks' }))
+      expect(readOnly().disabled).toBe(true)
+      expect(readOnly().getAttribute('aria-checked')).toBe('false')
+      expect(screen.getByText('Google Tasks has no read-only access')).toBeTruthy()
+      expect(screen.getByText('Will be named “Google Tasks”')).toBeTruthy()
+      fireEvent.click(screen.getByRole('radio', { name: 'Google Calendar' }))
+      expect(readOnly().disabled).toBe(false)
+      expect(screen.getByText('Will be named “Google Calendar (read-only)”')).toBeTruthy()
+      fireEvent.click(screen.getByRole('radio', { name: 'Google Tasks' }))
+      expect(readOnly().getAttribute('aria-describedby')).toBe(screen.getByText('Google Tasks has no read-only access').id)
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      expect(createOAuth).toHaveBeenCalledWith('folder:a', 'acct-work', 'gtasks_oauth')
+      expect(await screen.findByText('Could not connect Google Tasks')).toBeTruthy()
+      // Back from the failed Tasks flow still remembers Read-only for the next service.
+      fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+      expect((await screen.findByRole('radio', { name: 'Google Tasks' }) as HTMLInputElement).checked).toBe(true)
+      fireEvent.click(screen.getByRole('radio', { name: 'Gmail' }))
+      expect(readOnly().getAttribute('aria-checked')).toBe('true')
+    })
+
     it('keeps a refused Connect inline in the chooser, busy while it runs and usable again after', async () => {
       let answer!: (value: unknown) => void
       createOAuth.mockReturnValue(new Promise(resolve => { answer = resolve }))
