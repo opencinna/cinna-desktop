@@ -174,7 +174,7 @@ test('an Antigravity folder agent shows its runtime, Flash tiers and an in-place
   const agent = await createFolderAgent(cinna, root, 'Gemini Runner', 'Gemini Runner')
   const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
     agentId: input.agentId,
-    update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: null, complexity: 'medium' } },
+    update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: null, complexity: 'medium', runsOn: { kind: 'engine', engine: 'antigravity' } } },
     expectedStamp: input.stamp
   }), { agentId: agent.id, stamp: agent.stamps[MANIFEST_FILE]! })
   expect(saved.ok).toBe(true)
@@ -266,7 +266,7 @@ test.describe('signed in, on Ask for approval', () => {
     const agent = await createFolderAgent(cinna, root, 'Gemini Policy', 'Gemini Policy')
     const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
       agentId: input.agentId,
-      update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: null, complexity: 'medium' } },
+      update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: null, complexity: 'medium', runsOn: { kind: 'engine', engine: 'antigravity' } } },
       expectedStamp: input.stamp
     }), { agentId: agent.id, stamp: agent.stamps[MANIFEST_FILE]! })
     expect(saved.ok).toBe(true)
@@ -315,7 +315,7 @@ test.describe('signed in, on Ask for approval', () => {
     const agent = await createFolderAgent(cinna, root, 'Gemini Silent', 'Gemini Silent')
     const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
       agentId: input.agentId,
-      update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: null, complexity: 'medium' } },
+      update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: null, complexity: 'medium', runsOn: { kind: 'engine', engine: 'antigravity' } } },
       expectedStamp: input.stamp
     }), { agentId: agent.id, stamp: agent.stamps[MANIFEST_FILE]! })
     expect(saved.ok).toBe(true)
