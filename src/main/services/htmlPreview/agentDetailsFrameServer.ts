@@ -90,6 +90,36 @@ export function retargetWebLinks(html: string): string {
   })
 }
 
+/** C4's viewport tag, word for word. */
+export const AGENT_DETAILS_VIEWPORT_META = '<meta name="viewport" content="width=device-width, initial-scale=1">'
+
+function isViewportMeta(tag: string): boolean {
+  const attributes = tag.replace(/^<meta/i, '').replace(/>$/, '')
+  for (const match of attributes.matchAll(ATTRIBUTE)) {
+    if (match[1].toLowerCase() !== 'name') continue
+    return decodeAttribute(match[2] ?? match[3] ?? match[4] ?? '').trim().toLowerCase() === 'viewport'
+  }
+  return false
+}
+
+/**
+ * C4's viewport rule for a page core never normalised (a folder agent's own
+ * file): the tag goes in as the first child of `<head>` — a `<head>` is made
+ * after `<html …>`, else after a leading doctype, else at the start — and only
+ * when the page has no viewport tag. Nothing else changes.
+ */
+export function ensureViewportMeta(html: string): string {
+  for (const tag of html.match(META_TAG) ?? []) if (isViewportMeta(tag)) return html
+  const head = /<head(?=[\s/>])[^>]*>/i.exec(html)
+  if (head) return html.slice(0, head.index + head[0].length) + AGENT_DETAILS_VIEWPORT_META + html.slice(head.index + head[0].length)
+  const insert = `<head>${AGENT_DETAILS_VIEWPORT_META}</head>`
+  const root = /<html(?=[\s/>])[^>]*>/i.exec(html)
+  if (root) return html.slice(0, root.index + root[0].length) + insert + html.slice(root.index + root[0].length)
+  const prolog = /^(?:\ufeff)?\s*(?:<!doctype[^>]*>)?/i.exec(html)
+  const at = prolog ? prolog[0].length : 0
+  return html.slice(0, at) + insert + html.slice(at)
+}
+
 /**
  * An agent's Details page in the app: `cinna-preview://det-<token>/` serves one
  * HTML document main already holds (core's answer or a folder agent's file),
@@ -111,9 +141,11 @@ export function createAgentDetailsFrameServer(deps: AgentDetailsFrameServerDeps)
     },
 
     /** A token for one document, served to `userId` (the active profile when omitted). */
-    register(html: string, userId: string = deps.currentUserId()): { token: string; url: string } {
+    /** `addViewport`: a folder agent's own file, which core's C4 normalisation never saw. */
+    register(html: string, userId: string = deps.currentUserId(), options: { addViewport?: boolean } = {}): { token: string; url: string } {
       const token = newToken()
-      entries.set(token, { html: Buffer.from(retargetWebLinks(stripMetaRefresh(html)), 'utf8'), userId })
+      const page = retargetWebLinks(stripMetaRefresh(html))
+      entries.set(token, { html: Buffer.from(options.addViewport ? ensureViewportMeta(page) : page, 'utf8'), userId })
       while (entries.size > maxTokens) {
         const oldest = entries.keys().next().value
         if (oldest === undefined) break

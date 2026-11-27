@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { createAgentDetailsFrameServer, retargetWebLinks, stripMetaRefresh } from './agentDetailsFrameServer'
+import { AGENT_DETAILS_VIEWPORT_META as VIEWPORT, createAgentDetailsFrameServer, ensureViewportMeta, retargetWebLinks, stripMetaRefresh } from './agentDetailsFrameServer'
 import { AGENT_DETAILS_CSP } from '../../../shared/agentDetails'
 
 /** The det- handler: one document per token, nothing else, under the C4 policy. */
@@ -143,5 +143,41 @@ describe('retargetWebLinks', () => {
     const { url } = server.register('<a href="https://x.test">x</a>', 'u1')
     const answer = await server.handle({ url, method: 'GET' })
     expect(await answer.text()).toBe('<a href="https://x.test" target="_top">x</a>')
+  })
+})
+
+describe('ensureViewportMeta (a folder agent’s own page)', () => {
+  it('puts the C4 viewport tag first in <head>, changing nothing else', () => {
+    expect(ensureViewportMeta('<!DOCTYPE html><html lang="en"><head><title>T</title></head><body>x</body></html>')).toBe(
+      `<!DOCTYPE html><html lang="en"><head>${VIEWPORT}<title>T</title></head><body>x</body></html>`
+    )
+  })
+
+  it('makes a <head> when there is none', () => {
+    expect(ensureViewportMeta('<html><body>x</body></html>')).toBe(`<html><head>${VIEWPORT}</head><body>x</body></html>`)
+    expect(ensureViewportMeta('<!doctype html><p>x</p>')).toBe(`<!doctype html><head>${VIEWPORT}</head><p>x</p>`)
+    expect(ensureViewportMeta('<p>x</p>')).toBe(`<head>${VIEWPORT}</head><p>x</p>`)
+  })
+
+  it('leaves a page that has its own viewport tag alone, any case or quoting', () => {
+    for (const html of [
+      '<head><meta name="viewport" content="width=500"></head>',
+      "<head><META CONTENT='width=device-width' NAME=Viewport></head>"
+    ]) {
+      expect(ensureViewportMeta(html)).toBe(html)
+    }
+  })
+
+  it('does not take <header> for <head>', () => {
+    expect(ensureViewportMeta('<html><header>h</header></html>')).toBe(`<html><head>${VIEWPORT}</head><header>h</header></html>`)
+  })
+
+  it('is applied only when the frame is told the page is a folder agent’s', async () => {
+    const server = createAgentDetailsFrameServer({ currentUserId: () => 'u1' })
+    const page = '<html><head><title>T</title></head></html>'
+    const local = server.register(page, 'u1', { addViewport: true })
+    const core = server.register(page, 'u1')
+    expect(await (await server.handle({ url: local.url, method: 'GET' })).text()).toBe(`<html><head>${VIEWPORT}<title>T</title></head></html>`)
+    expect(await (await server.handle({ url: core.url, method: 'GET' })).text()).toBe(page)
   })
 })

@@ -24,7 +24,9 @@ export function registerAgentDetailsHandlers(): void {
     const profileUserId = getProfileScopeUserId()
     const html = await agentDetailsService.htmlFor(target, profileUserId)
     if (!html.ok) return html
-    const { token, url } = agentDetailsFrameServer.register(html.html, profileUserId)
+    // A folder agent's own page never went through core's C4 rewrite: it gets the viewport tag here.
+    const local = !!target && typeof target === 'object' && (target as { kind?: unknown }).kind === 'local'
+    const { token, url } = agentDetailsFrameServer.register(html.html, profileUserId, { addViewport: local })
     return { ok: true, token, url }
   })
 
