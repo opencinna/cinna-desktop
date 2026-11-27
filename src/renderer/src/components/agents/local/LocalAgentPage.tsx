@@ -466,19 +466,22 @@ export function LocalAgentPage(): React.JSX.Element {
         {/* Its engine, in the same slot: the vault's own engines, each set up on first choice. */}
         {mode === 'settings' && inVault && <VaultEnginePanel agent={agent} />}
 
-        <div hidden={mode === 'settings'} className={mode === 'settings' ? undefined : 'flex flex-1 flex-col'}>
+        {/*
+          Keyed once by agent, never its children: two siblings sharing a key
+          leak a stale copy on every agent switch.
+        */}
+        <div key={agent.id} hidden={mode === 'settings'} className={mode === 'settings' ? undefined : 'flex flex-1 flex-col'}>
           {/*
             Decided from the list the sidebar already holds, so the banner is
-            there at first paint or not at all; keyed by agent so the decision
-            is taken once per agent opened, never re-evaluated upward.
+            there at first paint or not at all; remounted with the wrapper per
+            agent, so the decision is taken once per agent opened.
           */}
           <BringTogetherBanner
-            key={agent.id}
             agentId={agent.id}
             initialOffered={listedShare?.state === 'diverged' && !listedShare.teamChangesDeclined}
             actions={shareActions}
           />
-          <ChatWorkspace key={agent.id} agentId={agent.id} embedded />
+          <ChatWorkspace agentId={agent.id} embedded />
         </div>
         {mode === 'settings' && <>
         <nav

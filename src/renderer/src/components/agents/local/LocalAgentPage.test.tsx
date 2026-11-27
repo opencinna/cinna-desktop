@@ -109,7 +109,11 @@ vi.mock('./sharing/SharingTab', () => ({
     return createElement('div', { 'data-marker': 'sharing-tab' }, 'sharing-tab')
   }
 }))
-vi.mock('./sharing/BringTogetherBanner', () => ({ BringTogetherBanner: marker('bring-together-banner') }))
+// Rendered only when offered, as the real banner returns null otherwise.
+vi.mock('./sharing/BringTogetherBanner', () => ({
+  BringTogetherBanner: ({ initialOffered }: { initialOffered: boolean }) =>
+    initialOffered ? createElement('div', { 'data-marker': 'bring-together-banner' }, 'bring-together-banner') : null
+}))
 /** What the page handed the share actions: its refusal route. */
 let shareOptions: { onError: (message: string | null) => void } | null = null
 vi.mock('./sharing/useShareActions', () => ({
@@ -283,6 +287,23 @@ describe('LocalAgentPage — chat and settings modes', () => {
     expect(setActiveView).not.toHaveBeenCalled()
     expect(setPendingAgentId).not.toHaveBeenCalled()
     expect(setSidebarTab).not.toHaveBeenCalled()
+  })
+})
+
+describe('LocalAgentPage — switching agents', () => {
+  it('keeps one Bring together banner and one composer while the sidebar switches agents', () => {
+    pageMode = 'chat'
+    listedShare = { state: 'diverged', teamChangesDeclined: false }
+    const page = (): ReturnType<typeof createElement> =>
+      createElement(QueryClientProvider, { client: new QueryClient() }, createElement(LocalAgentPage))
+    const { rerender } = renderPage()
+    for (const id of ['beta', 'gamma', 'alpha', 'beta']) {
+      AGENT = agent({ id: `folder:${id}`, name: id })
+      rerender(page())
+      expect(screen.getAllByText('bring-together-banner')).toHaveLength(1)
+      expect(screen.getAllByRole('textbox')).toHaveLength(1)
+      expect(screen.getByRole('textbox', { name: `Chat with folder:${id}` })).toBeTruthy()
+    }
   })
 })
 
