@@ -27,7 +27,7 @@ import { useIsFetching } from '@tanstack/react-query'
  */
 export type StartupSplashPhase = 'wait' | 'hold' | 'reveal' | 'done'
 
-export const MIN_HOLD_MS = 300
+export const MIN_HOLD_MS = 150
 export const MAX_HOLD_MS = 1500
 /** How long nothing must stay loading: a query that starts when another
  * settles subscribes a render later, and must not be missed in between. */
