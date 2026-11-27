@@ -106,7 +106,7 @@ The build page's own **Set up local development** button opens the same modal in
 ### Reconnecting a workspace that belongs to another account
 
 1. The user signs in as a different Cinna account on a machine whose `<AgentsHome>/Cloud/<host>/` was set up by the previous one. cinna-cli refuses the setup token with exit `11`, and the reconcile lands on `attention/account_mismatch`
-2. The build page shows cinna-cli's own detail, which typically ends by telling the user to run `cinna account setup` in a new directory (the desktop's fallback sentence, used when cinna-cli sent no detail, only names the cause). Under it are three sentences that close the loops that advice leaves open: no terminal is needed, **Retry setup cannot fix this one** because it asks the server for the same account again, and agents opened with Develop keep pointing at the old folder until they are Developed again
+2. The build page shows cinna-cli's own detail, which typically ends by telling the user to run `cinna account setup` in a new directory (the desktop's fallback sentence, used when cinna-cli sent no detail, only names the cause). Under it are two sentences that close the loops that advice leaves open: no terminal is needed, **Retry setup cannot fix this one** because it asks the server for the same account again
 3. **Reconnect workspace** carries the accent, because it is the only action that ends this state. **Re-authenticate** sits beside it for the user who meant to be signed in as the other account, and **Retry setup** stays last — still the escape hatch if the reason was misread
 4. Reconnect renames `<host>/` to `<host>.old-<UTC stamp>` beside it and reconciles with `force`, so setup runs from scratch into a fresh `<host>/`. The old folder is never deleted
 5. Settings → Profile → Local Development shows the same pair for this reason: Reconnect is the primary button and Repair is demoted beside it rather than removed
@@ -123,6 +123,7 @@ The build page's own **Set up local development** button opens the same modal in
 
 1. Open a Cinna-synced agent from the Agents sidebar. When Local Development is ready and the agent passes development eligibility, its **⋯** menu offers **Develop**.
 2. Choosing it opens Agents Development in chat mode with the composer filled with `I have an agent <name> (id: <core agent id>), I would like to ` and the cursor at the end. Nothing is sent; the user finishes the sentence.
+3. If Agents Development holds a message the user typed and has not sent, Develop first asks **Replace your draft?**, showing that text. Cancel keeps it and stays on the agent page. An empty composer, or an earlier Develop message the user never added to, is replaced without asking.
 
 Eligibility requires a remote `agent` target and target ID, excludes explicit `can_build: false` and foreign installs, and excludes consumer bundles while allowing publisher working copies. These metadata checks are not independent proof of developer-role entitlement; CLI/server access controls remain authoritative. Desktop prepares no per-agent connection, workspace or sync for this: the Agents Development assistant already works on every agent of the account, which is why Develop is only a start of a message there.
 

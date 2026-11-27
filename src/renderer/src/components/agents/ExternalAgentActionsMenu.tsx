@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Code2, ExternalLink, MoreHorizontal, Power, Trash2 } from 'lucide-react'
 import { useDeleteAgent } from '../../hooks/useAgents'
@@ -56,16 +56,34 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
   // Develop opens Agents Development with a first message about this agent, rather than
   // preparing a single-agent build session: the assistant there already works on every agent.
   const canDevelop = useLocalDevStore((s) => s.state.phase === 'ready') && canDevelopAgent(agent)
-  const develop = (): void => {
+  // Text the user typed there and has not sent is theirs: replacing it needs a yes.
+  const [replacing, setReplacing] = useState<string | null>(null)
+  const startDeveloping = (): void => {
     const profileId = useAuthStore.getState().currentUser?.id
     if (!profileId) return
-    menu.setOpen(false)
-    onError(null)
+    setReplacing(null)
     const localDev = useLocalDevStore.getState()
     localDev.setDraft(profileId, developDraft(agent))
     localDev.setPageMode('chat')
     useUIStore.getState().setActiveView('local-development')
   }
+  const develop = (): void => {
+    const profileId = useAuthStore.getState().currentUser?.id
+    if (!profileId) return
+    menu.setOpen(false)
+    onError(null)
+    const draft = useLocalDevStore.getState().drafts[profileId] ?? ''
+    if (isDisposableDraft(draft)) startDeveloping()
+    else setReplacing(draft)
+  }
+  // Focus goes back to the ⋯ that opened the question, since the menu is already closed.
+  const cancelReplace = (): void => { setReplacing(null); menu.triggerRef.current?.focus() }
+  useEffect(() => {
+    if (replacing === null) return
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') { setReplacing(null); menu.triggerRef.current?.focus() } }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [replacing])
 
   const confirm = async (): Promise<void> => {
     setError(null)
@@ -124,10 +142,25 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
         </>}
       </div>, document.body
     )}
+    {replacing !== null && createPortal(
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div aria-hidden className="app-modal-scrim absolute inset-0" onClick={cancelReplace} />
+        <div role="dialog" aria-modal="true" aria-labelledby="replace-draft-title"
+          className="app-modal-panel relative w-96 space-y-4 rounded-xl border p-5">
+          <h2 id="replace-draft-title" className="text-sm font-medium">Replace your draft?</h2>
+          <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">Agents Development has a message you have not sent. Develop replaces it with a message about {agent.name}, and the current text is lost.</p>
+          <p className="app-modal-well line-clamp-3 whitespace-pre-wrap break-words rounded-md px-3 py-2 text-xs text-[var(--color-text-muted)]">{replacing}</p>
+          <div className="flex justify-end gap-2">
+            <button type="button" autoFocus onClick={cancelReplace} className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs">Cancel</button>
+            <button type="button" onClick={startDeveloping} className="rounded-md bg-[var(--color-danger)] px-3 py-1.5 text-xs text-white">Replace draft</button>
+          </div>
+        </div>
+      </div>, document.body)}
     {confirming && createPortal(
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25" onClick={() => { if (!remove.isPending) setConfirming(false) }}>
-        <div role="dialog" aria-modal="true" aria-label="Delete agent" onClick={(event) => event.stopPropagation()}
-          className="app-popover-surface w-96 space-y-4 rounded-lg border border-[var(--color-border)] p-5 shadow-xl">
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div aria-hidden className="app-modal-scrim absolute inset-0" onClick={() => { if (!remove.isPending) setConfirming(false) }} />
+        <div role="dialog" aria-modal="true" aria-label="Delete agent"
+          className="app-modal-panel relative w-96 space-y-4 rounded-xl border p-5">
           <h2 className="text-sm font-medium">Delete {agent.name}?</h2>
           <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">This removes the agent connection from Desktop. Existing chats stay, but can no longer reach this agent. The agent itself stays on its server or in its workspace.</p>
           {error && <p role="alert" className="text-xs text-[var(--color-danger)]">{error}</p>}
@@ -138,6 +171,11 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
         </div>
       </div>, document.body)}
   </>
+}
+
+/** Nothing to lose: an empty composer, or an earlier Develop message the user never added to. */
+function isDisposableDraft(draft: string): boolean {
+  return !draft.trim() || /^I have an agent .* \(id: [^)]*\), I would like to $/s.test(draft)
 }
 
 /** The prefilled first message; the cursor lands after it for the user to finish the sentence. */
