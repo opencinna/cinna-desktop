@@ -154,7 +154,7 @@ credentials:
 | Key | Rule |
 |-----|------|
 | `slot` | Required. The **service URI** of the credential that fills it — the same value as a credential's *service URI* on the platform. Letters, digits and `. _ : / @ + -`, no spaces, at most 255 characters, and unique within the block. Quote it if it would read as a number. |
-| `type` | Required. A platform credential type: `email_imap`, `email_smtp`, `odoo`, `gmail_oauth`, `gmail_oauth_readonly`, `gdrive_oauth`, `gdrive_oauth_readonly`, `gcalendar_oauth`, `gcalendar_oauth_readonly`, `gmeet_oauth`, `gmeet_oauth_readonly`, `google_service_account`, `api_token`, `ssh_key`, `agent_api`. **Not `mcp_provider`** — that kind of credential never reaches a script. |
+| `type` | Required. A platform credential type: `email_imap`, `email_smtp`, `odoo`, `gmail_oauth`, `gmail_oauth_readonly`, `gdrive_oauth`, `gdrive_oauth_readonly`, `gcalendar_oauth`, `gcalendar_oauth_readonly`, `gmeet_oauth`, `gmeet_oauth_readonly`, `gtasks_oauth`, `google_service_account`, `api_token`, `ssh_key`, `agent_api`. **Not `mcp_provider`** — that kind of credential never reaches a script. |
 | `description` | Optional, at most 1024 characters. What the account is for, in words the person setting the skill up recognises. |
 
 At most **20** entries. A slot is filled by a credential of exactly that type whose

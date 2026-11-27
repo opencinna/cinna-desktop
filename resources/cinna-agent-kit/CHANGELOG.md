@@ -3,7 +3,7 @@
 Conventions that changed between kit versions. Read this after every
 `kit.py refresh` that reports a new version. Newest entry first.
 
-Your current kit is version `d52d71ef3172e980`.
+Your current kit is version `bd078b4d7edb4bd4`.
 
 Entries are headed by the **contract version** they belong to — the number in
 `CONTRACT_VERSION`, in `kit.json`'s `contract_version`, and in every manifest
@@ -15,6 +15,16 @@ The contract version is a semantic version. **Major** bumps are breaking — a
 folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
+
+## Google Tasks credential type
+
+No contract-version change. The credential `type` values gain `gtasks_oauth`
+(`cinna-agent.schema.json`, `kit.py`, `guides/04-credentials.md`,
+`guides/08-knowledge-and-local-skills.md`). Like every OAuth type it is brokered by
+the platform: the kit never fills it locally, so a slot of that type stays a
+placeholder until the agent runs in the cloud or Cinna Desktop attaches it. Nothing in
+an existing folder moves, and a tool that does not know the value still operates the
+folder, because the majors match.
 
 ## 1.28.0 — an agent can carry its own Details page
 

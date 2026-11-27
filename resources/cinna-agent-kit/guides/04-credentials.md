@@ -80,7 +80,7 @@ cloud. These are the values `type` may take:
 | `gmail_oauth`, `gmail_oauth_readonly` | `access_token`, `token_type`, `expires_at`, `scope`, `granted_user_email`, `granted_user_name` | Cloud, and Cinna Desktop when the credential is created in Cinna Desktop (New in Attach credential) or on the platform and attached. |
 | `gdrive_oauth`, `gdrive_oauth_readonly` | `access_token`, `token_type`, `expires_at`, `scope`, `granted_user_email`, `granted_user_name` | Cloud, and Cinna Desktop when the credential is created in Cinna Desktop (New in Attach credential) or on the platform and attached. |
 | `gcalendar_oauth`, `gcalendar_oauth_readonly` | `access_token`, `token_type`, `expires_at`, `scope`, `granted_user_email`, `granted_user_name` | Cloud, and Cinna Desktop when the credential is created in Cinna Desktop (New in Attach credential) or on the platform and attached. |
-| `gmeet_oauth`, `gmeet_oauth_readonly` | `access_token`, `token_type`, `expires_at`, `scope`, `granted_user_email`, `granted_user_name` | Cloud, and Cinna Desktop when the credential is created in Cinna Desktop (New in Attach credential) or on the platform and attached. |
+| `gmeet_oauth`, `gmeet_oauth_readonly`, `gtasks_oauth` | `access_token`, `token_type`, `expires_at`, `scope`, `granted_user_email`, `granted_user_name` | Cloud, and Cinna Desktop when the credential is created in Cinna Desktop (New in Attach credential) or on the platform and attached. |
 | `agent_api` | `base_url`, `spec_url`, `token` | Another agent's REST API. Never typed in `.env`: see below. |
 
 **OAuth types need the platform.** The platform holds the Google refresh token and
