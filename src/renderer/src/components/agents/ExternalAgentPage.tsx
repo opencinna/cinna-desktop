@@ -7,6 +7,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import { useLocalDevStore } from '../../stores/localDev.store'
 import { AgentTypeIcon } from './AgentTypeIcon'
 import { ExternalAgentActionsMenu } from './ExternalAgentActionsMenu'
+import { AgentDetailsButton } from './AgentDetailsButton'
 import { AgentCard } from '../settings/AgentCard'
 import { CustomAgentModal } from './CustomAgentModal'
 import { AgentInterfaceTab } from './AgentInterfaceTab'
@@ -85,6 +86,15 @@ export function ExternalAgentPage(): React.JSX.Element {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {localDev.phase === 'ready' && canDevelopAgent(agent) && <button type="button" disabled={!!developing} onClick={() => void develop()} className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50"><Code2 size={13} />{developing === agent.id ? 'Preparing…' : 'Develop'}</button>}
+              {/* A Cinna agent's Details page on core: only a synced remote row names a target. */}
+              {agent.remoteTargetType === 'agent' && agent.remoteTargetId && (
+                <AgentDetailsButton
+                  key={`${profile?.id}:${agent.id}`}
+                  target={{ kind: 'agent', remoteAgentId: agent.remoteTargetId }}
+                  agentName={agent.name}
+                  className="ambient-button flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)]"
+                />
+              )}
               <button type="button" onClick={() => {
                 if (agent.development) { useLocalDevStore.getState().setPageMode('settings'); useUIStore.getState().setActiveView('local-development'); return }
                 setMode(settingsMode ? 'chat' : 'settings')

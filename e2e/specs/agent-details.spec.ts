@@ -10,12 +10,12 @@ import { coreCall, makeTeamTest, type PersonApp, type SharingPerson, type TeamFi
 /**
  * Agent Details (orchestrator `features/agent-details`, V9): an agent's
  * readable page, opened from **Details** — the catalog detail's header button,
- * a catalog version row's icon, or the ⋯ menu of an agent's page.
+ * a catalog tile's footer, a version row's icon, or an agent page's header.
  *
  * Two halves:
  *
  * - **Folder agents, no server** (run by every `make e2e`). A kit agent's own
- *   `docs/AGENT_DETAILS.md` / `.html`: the ⋯ menu offers Details only when a
+ *   `docs/AGENT_DETAILS.md` / `.html`: the page header offers Details (left of Settings) only when a
  *   file is there; markdown renders as a document with raw HTML off; HTML is
  *   served by the `cinna-preview://det-…/` frame server into an iframe
  *   sandboxed without `allow-scripts` / `allow-same-origin`. That is the same
@@ -47,10 +47,9 @@ function detailsModal(page: Page, name: string) {
   return page.getByRole('dialog', { name: `Details: ${name}`, exact: true })
 }
 
-/** The page's ⋯ → Details. */
-async function openDetailsFromMenu(page: Page, name: string): Promise<void> {
-  await page.getByRole('button', { name: 'More actions', exact: true }).click()
-  await page.getByRole('menu', { name: 'Agent actions', exact: true }).getByRole('menuitem', { name: 'Details', exact: true }).click()
+/** The page header's Details, left of Settings. */
+async function openDetailsFromHeader(page: Page, name: string): Promise<void> {
+  await page.getByRole('button', { name: `Details of ${name}`, exact: true }).click()
   await expect(detailsModal(page, name)).toBeVisible()
 }
 
@@ -182,10 +181,13 @@ test.describe('a folder agent’s own Details file', () => {
     })
     const page = cinna.page
 
-    await test.step('no file: main answers not_found and the ⋯ menu has no Details', async () => {
+    await test.step('no file: main answers not_found and the header has no Details', async () => {
       const answer = await page.evaluate((agentId) => window.api.agentDetails.get({ kind: 'local', agentId }), ids['Plain Desk'])
       expect(answer).toEqual({ ok: false, code: 'not_found', message: 'This agent has no Details page.' })
       await openAgentPage(page, 'Plain Desk')
+      await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Details of Plain Desk', exact: true })).toHaveCount(0)
+      // Nor in the ⋯ menu, which no longer carries Details.
       await page.getByRole('button', { name: 'More actions', exact: true }).click()
       const menu = page.getByRole('menu', { name: 'Agent actions', exact: true })
       await expect(menu).toBeVisible()
@@ -197,7 +199,7 @@ test.describe('a folder agent’s own Details file', () => {
 
     await test.step('.md: Details opens the document; raw HTML is not rendered; no summary switch', async () => {
       await openAgentPage(page, 'Markdown Desk')
-      await openDetailsFromMenu(page, 'Markdown Desk')
+      await openDetailsFromHeader(page, 'Markdown Desk')
       const modal = detailsModal(page, 'Markdown Desk')
       // The document's headings sit under the modal's own (markdown h2 → h4).
       await expect(modal.getByRole('heading', { level: 4, name: 'What it does', exact: true })).toBeVisible()
@@ -212,7 +214,7 @@ test.describe('a folder agent’s own Details file', () => {
 
     await test.step('.html: a det- frame sandboxed without scripts or same origin; the script did nothing', async () => {
       await openAgentPage(page, 'Html Desk')
-      await openDetailsFromMenu(page, 'Html Desk')
+      await openDetailsFromHeader(page, 'Html Desk')
       await expectInertPage(page, 'Html Desk', 'Html Desk')
       // A local page has no generated summary to switch to.
       await expect(detailsModal(page, 'Html Desk').getByRole('group', { name: 'Show' })).toHaveCount(0)
@@ -232,7 +234,7 @@ test.describe('a folder agent’s own Details file', () => {
     ] as const) {
       await test.step(`${name}: “${message}”`, async () => {
         await openAgentPage(page, name)
-        await openDetailsFromMenu(page, name)
+        await openDetailsFromHeader(page, name)
         const modal = detailsModal(page, name)
         await expect(modal.getByRole('alert')).toHaveText(message)
         await expect(modal.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
@@ -264,7 +266,7 @@ test.describe('a folder agent’s own Details file', () => {
     for (const name of Object.keys(targets)) {
       await test.step(`${name}: the frame keeps its det- URL and no refresh tag reaches it`, async () => {
         await openAgentPage(page, name)
-        await openDetailsFromMenu(page, name)
+        await openDetailsFromHeader(page, name)
         const frame = await expectInertPage(page, name, name)
         const url = frame.url()
         // Settled: the frame's parser has reached the <script> after the
@@ -300,7 +302,7 @@ test.describe('a folder agent’s own Details file', () => {
       await recordOpenExternal(cinna.electronApp)
       const page = cinna.page
       await openAgentPage(page, name)
-      await openDetailsFromMenu(page, name)
+      await openDetailsFromHeader(page, name)
       const frame = await expectInertPage(page, name, name)
       const url = frame.url()
       await detailsModal(page, name).frameLocator('iframe').getByRole('link', { name: 'The https site', exact: true }).click({ noWaitAfter: true })
@@ -317,7 +319,7 @@ test.describe('a folder agent’s own Details file', () => {
     await seedFolderAgents(cinna, { [name]: { 'docs/AGENT_DETAILS.html': scriptedPage(name) } })
     const page = cinna.page
     await openAgentPage(page, name)
-    await openDetailsFromMenu(page, name)
+    await openDetailsFromHeader(page, name)
     await expectInertPage(page, name, name)
     // Focus moves into the cross-origin frame, whose keys the app's document never hears.
     await detailsModal(page, name).frameLocator('iframe').locator('#static').click()
@@ -544,7 +546,7 @@ coreTest.describe('Details from the real local cinna-core', () => {
     }
   })
 
-  coreTest('V9 core: an own Cinna agent’s Details from its page’s ⋯ menu', async ({ team }) => {
+  coreTest('V9 core: an own Cinna agent’s Details from its page header', async ({ team }) => {
     coreTest.setTimeout(180_000)
     const fixture = team.fixture
     const a = await team.open('a')
@@ -567,7 +569,7 @@ coreTest.describe('Details from the real local cinna-core', () => {
     const { name, about } = chosen!
     await a.relaunch()
     await openAgentPage(a.page, name)
-    await openDetailsFromMenu(a.page, name)
+    await openDetailsFromHeader(a.page, name)
     const modal = detailsModal(a.page, name)
     await expect(modal.getByRole('heading', { level: 4, name: 'About', exact: true })).toBeVisible()
     await expect(modal.getByText(about, { exact: true })).toBeVisible()

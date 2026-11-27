@@ -72,14 +72,6 @@ vi.mock('../../../stores/auth.store', () => ({
     selector({ currentUser: { type: isCinna ? 'cinna_user' : 'local_user' } })
 }))
 
-/** Main's Details answer for the folder; none by default, so the menu offers no Details. */
-let detailsAnswer: unknown = undefined
-vi.mock('../../../hooks/useAgentDetails', () => ({ useAgentDetails: () => ({ data: detailsAnswer }) }))
-vi.mock('../AgentDetailsModal', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../AgentDetailsModal')>()),
-  AgentDetailsModal: ({ agentName }: { agentName: string }) => createElement('div', { role: 'dialog', 'aria-label': `Details: ${agentName}` })
-}))
-
 const { AgentActionsMenu } = await import('./AgentActionsMenu')
 
 function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
@@ -113,7 +105,6 @@ afterEach(() => {
   library = null
   isCinna = true
   shareWithTeamOptions = undefined
-  detailsAnswer = undefined
   delete (window as unknown as { api?: unknown }).api
 })
 
@@ -524,29 +515,5 @@ describe('AgentActionsMenu — rename', () => {
     expect(rename.previousElementSibling?.getAttribute('role')).not.toBe('menuitem')
     fireEvent.click(rename)
     expect(screen.getByRole('dialog', { name: 'Rename agent' })).toBeTruthy()
-  })
-})
-
-describe('AgentActionsMenu — Details', () => {
-  it('is offered first when the folder has a Details file, and opens it', () => {
-    detailsAnswer = { ok: true, details: {} }
-    openMenu()
-    const items = screen.getAllByRole('menuitem')
-    expect(items[0].textContent).toBe('Details')
-    fireEvent.click(items[0])
-    expect(screen.getByRole('dialog', { name: 'Details: Alpha' })).toBeTruthy()
-    expect(screen.queryByRole('menu')).toBeNull()
-  })
-
-  it('is offered on unavailable, and not on not_found or before main answers', () => {
-    detailsAnswer = { ok: false, code: 'unavailable', message: 'x' }
-    openMenu()
-    expect(screen.getByRole('menuitem', { name: 'Details' })).toBeTruthy()
-  })
-
-  it.each([undefined, { ok: false, code: 'not_found', message: 'x' }])('is not offered for %o', (answer) => {
-    detailsAnswer = answer
-    openMenu()
-    expect(screen.queryByRole('menuitem', { name: 'Details' })).toBeNull()
   })
 })

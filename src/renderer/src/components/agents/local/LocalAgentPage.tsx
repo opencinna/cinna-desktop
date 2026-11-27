@@ -22,6 +22,7 @@ import { ReadinessStrip } from './ReadinessStrip'
 import { OpenInMenu } from './OpenInMenu'
 import { AgentTypeIcon } from '../AgentTypeIcon'
 import { AgentActionsMenu } from './AgentActionsMenu'
+import { AgentDetailsButton } from '../AgentDetailsButton'
 import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
 import { BareNameCard, BareReadmeCard } from './BareAgentCards'
 import { KIT_PROMPT_CARDS, PromptDocCard } from './PromptDocCard'
@@ -390,6 +391,14 @@ export function LocalAgentPage(): React.JSX.Element {
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {!inVault && <OpenInMenu agent={agent} onError={reportError} onNote={reportNote} />}
+            {/* The folder's (or vault's) own docs/AGENT_DETAILS file, when it has one. */}
+            <AgentDetailsButton
+              key={agent.id}
+              target={{ kind: 'local', agentId: agent.id }}
+              agentName={agent.name}
+              iconSize={12}
+              className="ambient-button flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)]"
+            />
             <button
               type="button"
               onClick={() => {
