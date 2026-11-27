@@ -321,6 +321,9 @@ for (const { entry, engine } of ENGINES) test.describe(`on ${entry}`, () => {
     await tile.hover()
     await tile.getByRole('button', { name: 'Ask about Follow-ups', exact: true }).click()
     const panel = page.getByTestId('dashboard-chat-panel')
+    // The panel's slide narrows the grid, so a row measured mid-slide is wider than it ends up
+    // and a point near its right edge then lands on the grid beside it.
+    await expect(page.locator('.dashboard-panel-wrap')).not.toHaveClass(/is-collapsed|is-sliding/)
     // Low on the row and right of its text: the hover bar floats over the top of the first row.
     const box = (await row.boundingBox())!
     await row.click({ position: { x: box.width - 12, y: box.height - 4 } })
