@@ -18,6 +18,8 @@ import { canDevelopAgent, serverLabel } from '../../utils/agentNavigation'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { describeOpenExternalFailure } from '../../hooks/useSystem'
 
+type Agent = Awaited<ReturnType<typeof window.api.agents.list>>[number]
+
 const TAB_LABELS: Record<string, string> = { overview: 'Overview', connection: 'Connection', interface: 'Interface', dashboards: 'Dashboards' }
 
 /** All non-folder agents share a chat landing page and a separate settings mode. */
@@ -49,42 +51,16 @@ export function ExternalAgentPage(): React.JSX.Element {
     <div className="flex flex-1 flex-col overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
       <div data-sidebar-band-limit className="mx-auto flex w-full max-w-3xl flex-1 flex-col space-y-4 px-6 py-6">
         {agent ? <>
-          <header className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">
-              <h1 className="flex items-center gap-2 text-xl font-semibold"><AgentTypeIcon agent={agent} agentId={agent.id} size={18} /><span className="truncate">{agent.name}</span></h1>
-              {agent.description && <p className="mt-1 text-xs text-[var(--color-text-secondary)] line-clamp-2">{agent.description}</p>}
-              <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">{agent.source === 'remote' && profile?.cinnaServerUrl
-                ? <a href={profile.cinnaServerUrl} onClick={(event) => {
-                    event.preventDefault()
-                    void window.api.system.openExternal(profile.cinnaServerUrl!).then((result) => {
-                      if (!result.success) setDevelopmentError({ id: agent.id, message: describeOpenExternalFailure(result.error) })
-                    }).catch((err) => setDevelopmentError({ id: agent.id, message: unwrapIpcError(err, 'Could not open the Cinna server.') }))
-                  }}>{serverLabel(profile.cinnaServerUrl)}</a>
-                : agent.driver === 'managed' ? 'Claude workspace' : agent.protocol.toUpperCase()}</p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {/* A Cinna agent's Details page on core: only a synced remote row names a target. */}
-              {agent.remoteTargetType === 'agent' && agent.remoteTargetId && (
-                <AgentDetailsButton
-                  key={`${profile?.id}:${agent.id}`}
-                  target={{ kind: 'agent', remoteAgentId: agent.remoteTargetId }}
-                  agentName={agent.name}
-                  className="ambient-button flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)]"
-                />
-              )}
-              <button type="button" onClick={() => {
-                if (agent.development) { useLocalDevStore.getState().setPageMode('settings'); useUIStore.getState().setActiveView('local-development'); return }
-                setMode(settingsMode ? 'chat' : 'settings')
-              }} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
-                settingsMode
-                  ? 'border-transparent bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)]'
-                  : 'ambient-button border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
-              }`}>
-                {settingsMode ? <MessageSquare size={13} /> : <Settings size={13} />}{settingsMode ? 'Start chat' : 'Settings'}
-              </button>
-              <ExternalAgentActionsMenu key={`${profile?.id}:${agent.id}`} agent={agent} onError={(message) => setDevelopmentError(message ? { id: agent.id, message } : null)} />
-            </div>
-          </header>
+          {/* Keyed once here, not per child: everything in the header remounts when the agent or
+              profile changes. Two siblings sharing a key left a stale Details button per switch. */}
+          <ExternalAgentHeader
+            key={`${profile?.id}:${agent.id}`}
+            agent={agent}
+            serverUrl={agent.source === 'remote' ? profile?.cinnaServerUrl ?? null : null}
+            settingsMode={settingsMode}
+            onToggleSettings={() => setMode(settingsMode ? 'chat' : 'settings')}
+            onError={(message) => setDevelopmentError(message ? { id: agent.id, message } : null)}
+          />
           {developmentError?.id === agent.id && <p role="alert" className="text-xs text-[var(--color-danger)]">{developmentError.message}</p>}
           <div hidden={settingsMode} className={settingsMode ? undefined : 'flex flex-1 flex-col'}><ChatWorkspace key={`${profile?.id}:${agent.id}`} agentId={agent.id} embedded /></div>
           {settingsMode && <>
@@ -120,5 +96,56 @@ export function ExternalAgentPage(): React.JSX.Element {
         </> : <p className="text-sm text-[var(--color-text-muted)]">{isLoading ? 'Loading…' : error ? 'Could not load this agent.' : 'Select an agent from the sidebar.'}</p>}
       </div>
     </div>
+  )
+}
+
+/**
+ * The agent page header. The page keys it by profile and agent, so its children
+ * (the Details button's fetch and modal, the ⋯ menu's open state) start fresh
+ * per agent without keys of their own — never key a child here.
+ */
+function ExternalAgentHeader({ agent, serverUrl, settingsMode, onToggleSettings, onError }: {
+  agent: Agent
+  serverUrl: string | null
+  settingsMode: boolean
+  onToggleSettings: () => void
+  onError: (message: string | null) => void
+}): React.JSX.Element {
+  return (
+    <header className="flex items-start gap-3">
+      <div className="min-w-0 flex-1">
+        <h1 className="flex items-center gap-2 text-xl font-semibold"><AgentTypeIcon agent={agent} agentId={agent.id} size={18} /><span className="truncate">{agent.name}</span></h1>
+        {agent.description && <p className="mt-1 text-xs text-[var(--color-text-secondary)] line-clamp-2">{agent.description}</p>}
+        <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">{serverUrl
+          ? <a href={serverUrl} onClick={(event) => {
+              event.preventDefault()
+              void window.api.system.openExternal(serverUrl).then((result) => {
+                if (!result.success) onError(describeOpenExternalFailure(result.error))
+              }).catch((err) => onError(unwrapIpcError(err, 'Could not open the Cinna server.')))
+            }}>{serverLabel(serverUrl)}</a>
+          : agent.driver === 'managed' ? 'Claude workspace' : agent.protocol.toUpperCase()}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {/* A Cinna agent's Details page on core: only a synced remote row names a target. */}
+        {agent.remoteTargetType === 'agent' && agent.remoteTargetId && (
+          <AgentDetailsButton
+            target={{ kind: 'agent', remoteAgentId: agent.remoteTargetId }}
+            agentName={agent.name}
+            className="ambient-button flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)]"
+          />
+        )}
+        <button type="button" onClick={() => {
+          if (agent.development) { useLocalDevStore.getState().setPageMode('settings'); useUIStore.getState().setActiveView('local-development'); return }
+          onToggleSettings()
+        }} className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+          settingsMode
+            ? 'border-transparent bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)]'
+            : 'ambient-button border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+        }`}>
+          {settingsMode ? <MessageSquare size={13} /> : <Settings size={13} />}{settingsMode ? 'Start chat' : 'Settings'}
+        </button>
+        <ExternalAgentActionsMenu agent={agent} onError={onError} />
+      </div>
+    </header>
   )
 }
