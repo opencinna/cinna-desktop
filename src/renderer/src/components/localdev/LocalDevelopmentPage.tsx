@@ -87,12 +87,8 @@ function DevelopmentWorkspace(): React.JSX.Element {
               {/* cinna-cli's own detail above ends by telling the user to open a
                   terminal, and Retry setup looks like it might do instead. Close
                   both loops here rather than letting the buttons imply it: the
-                  terminal is not needed, and the obvious button cannot work.
-                  The third sentence is the one consequence a user would
-                  otherwise meet as a surprise — a Develop row keeps the
-                  absolute path it was saved with, and that path is about to
-                  become the archived copy. */}
-              {state.phase === 'attention' && state.reason === 'account_mismatch' && <p className="text-xs text-[var(--color-text-muted)]">No terminal needed: Reconnect renames that folder beside the new one and sets this account up here. Retry setup cannot fix this one — it asks the server for the same account again. Agents you opened with Develop keep pointing at the old folder until you Develop them again.</p>}
+                  terminal is not needed, and the obvious button cannot work. */}
+              {state.phase === 'attention' && state.reason === 'account_mismatch' && <p className="text-xs text-[var(--color-text-muted)]">No terminal needed: Reconnect renames that folder beside the new one and sets this account up here. Retry setup cannot fix this one — it asks the server for the same account again.</p>}
               {!!state.tasks?.length && state.phase !== 'ready' && <LocalDevTaskList tasks={state.tasks} />}
               <div className="flex flex-wrap gap-2">
                 {state.phase === 'attention' && <>

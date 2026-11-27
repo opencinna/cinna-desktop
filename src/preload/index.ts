@@ -2064,7 +2064,6 @@ const api = {
   localDev: {
     sessionContext: (fresh = false): Promise<DevelopmentContext> => ipcRenderer.invoke('localdev:session-context', fresh),
     prepareSession: (context: Pick<DevelopmentContext, 'profileId' | 'workspacePath' | 'serverUrl' | 'runtime' | 'complexity'>): Promise<{ agentId: string }> => ipcRenderer.invoke('localdev:prepare-session', context),
-    developAgent: (agentId: string): Promise<{ agentId: string }> => ipcRenderer.invoke('localdev:develop-agent', agentId),
     getState: (): Promise<LocalDevState> => ipcRenderer.invoke('localdev:get-state'),
     getManagedCli: (): Promise<ManagedLocalDevCli | null> => ipcRenderer.invoke('localdev:get-managed-cli'),
     checkCliUpdate: (): Promise<CinnaCliUpdate> => ipcRenderer.invoke('localdev:check-cli-update'),

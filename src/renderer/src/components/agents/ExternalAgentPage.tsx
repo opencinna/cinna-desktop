@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Code2, MessageSquare, Settings } from 'lucide-react'
-import { useQueryClient } from '@tanstack/react-query'
+import { MessageSquare, Settings } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
 import { useUIStore } from '../../stores/ui.store'
 import { useAuthStore } from '../../stores/auth.store'
@@ -27,13 +26,10 @@ export function ExternalAgentPage(): React.JSX.Element {
   const mode = useUIStore((s) => s.agentPageMode)
   const setMode = useUIStore((s) => s.setAgentPageMode)
   const profile = useAuthStore((s) => s.currentUser)
-  const localDev = useLocalDevStore((s) => s.state)
-  const queryClient = useQueryClient()
   const { data: agents, isLoading, error } = useAgents()
   const agent = agents?.find((item) => item.id === activeId && item.source !== 'folder')
   const settingsMode = mode === 'settings' && !agent?.development
   const [editing, setEditing] = useState<string | null>(null)
-  const [developing, setDeveloping] = useState<string | null>(null)
   const [developmentError, setDevelopmentError] = useState<{ id: string; message: string } | null>(null)
   // A tab another surface asked for (a tile's Open agent: Dashboards) wins at first paint, as on the folder page.
   const tabRequest = useUIStore((s) => s.agentPageTabRequest)
@@ -48,24 +44,6 @@ export function ExternalAgentPage(): React.JSX.Element {
   const tabs = agent && canDevelopAgent(agent) ? ['overview', 'connection', 'interface', 'dashboards'] : ['overview', 'connection', 'interface']
   // A tab this agent does not have (another agent's, or a folder agent's Credentials) shows Overview.
   const shownTab = tabs.includes(tab) ? tab : 'overview'
-
-  const develop = async (): Promise<void> => {
-    if (!agent || developing) return
-    const id = agent.id, profileId = profile?.id
-    setDeveloping(id)
-    setDevelopmentError(null)
-    try {
-      const result = await window.api.localDev.developAgent(id)
-      if (useAuthStore.getState().currentUser?.id !== profileId) return
-      await queryClient.invalidateQueries({ queryKey: ['agents'] })
-      if (useUIStore.getState().activeExternalAgentId !== id) return
-      const ui = useUIStore.getState()
-      ui.setActiveExternalAgentId(result.agentId)
-      ui.setAgentPageMode('chat')
-    } catch (err) {
-      setDevelopmentError({ id, message: unwrapIpcError(err, 'Could not prepare local development.') })
-    } finally { setDeveloping(null) }
-  }
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
@@ -85,7 +63,6 @@ export function ExternalAgentPage(): React.JSX.Element {
                 : agent.driver === 'managed' ? 'Claude workspace' : agent.protocol.toUpperCase()}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {localDev.phase === 'ready' && canDevelopAgent(agent) && <button type="button" disabled={!!developing} onClick={() => void develop()} className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50"><Code2 size={13} />{developing === agent.id ? 'Preparing…' : 'Develop'}</button>}
               {/* A Cinna agent's Details page on core: only a synced remote row names a target. */}
               {agent.remoteTargetType === 'agent' && agent.remoteTargetId && (
                 <AgentDetailsButton
@@ -122,11 +99,11 @@ export function ExternalAgentPage(): React.JSX.Element {
                     <p className="mt-1 text-[13px] text-[var(--color-text-muted)]">{!agent.enabled ? 'Disabled in Desktop App' : agent.readiness?.reason || (agent.readiness?.state === 'ok' ? 'Ready to chat' : 'Status not checked yet')}</p>
                   </SettingsCard>
                 </SettingsSection>
-                {!!agent.skills?.length && <SettingsSection title="Skills">
+                {!!agent.skills?.length && <SettingsSection title="Example prompts">
                   <SettingsRows>
                     {agent.skills.map((skill) => <SettingsRow key={skill.id}>
                       <h3 className="text-[13px] font-medium text-[var(--color-text)]">{skill.name}</h3>
-                      {skill.description && <p className="mt-0.5 text-[13px] text-[var(--color-text-muted)]">{skill.description}</p>}
+                      {skill.description && skill.description.trim() !== skill.name.trim() && <p className="mt-0.5 text-[13px] text-[var(--color-text-muted)]">{skill.description}</p>}
                     </SettingsRow>)}
                   </SettingsRows>
                 </SettingsSection>}

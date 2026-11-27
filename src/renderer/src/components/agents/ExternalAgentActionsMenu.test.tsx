@@ -5,6 +5,7 @@ window.api = { app: { setTheme: async () => {} } } as never
 const { ExternalAgentActionsMenu } = await import('./ExternalAgentActionsMenu')
 const { useUIStore } = await import('../../stores/ui.store')
 const { useAuthStore } = await import('../../stores/auth.store')
+const { useLocalDevStore } = await import('../../stores/localDev.store')
 
 const api = { remove: vi.fn(), uninstall: vi.fn(), setEnabled: vi.fn(), syncRemote: vi.fn(), openExternal: vi.fn() }
 const base = { id: 'agent', name: 'Research', source: 'local', enabled: true, remoteTargetType: null, remoteTargetId: null, remoteMetadata: null }
@@ -31,6 +32,19 @@ beforeEach(() => {
 })
 
 describe('agent actions', () => {
+  it('Develop opens Agents Development with a prefilled message about the agent', () => {
+    useLocalDevStore.setState({ state: { phase: 'ready' } as never, pageMode: 'settings', drafts: {} })
+    mount({ source: 'remote', remoteTargetType: 'agent', remoteTargetId: 'core-7' })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Develop' }))
+    expect(useUIStore.getState().activeView).toBe('local-development')
+    expect(useLocalDevStore.getState().pageMode).toBe('chat')
+    expect(useLocalDevStore.getState().drafts.profile).toBe('I have an agent Research (id: core-7), I would like to ')
+  })
+  it('offers no Develop before local development is ready', () => {
+    useLocalDevStore.setState({ state: { phase: 'consent' } as never })
+    mount({ source: 'remote', remoteTargetType: 'agent', remoteTargetId: 'core-7' })
+    expect(screen.queryByRole('menuitem', { name: 'Develop' })).toBeNull()
+  })
   it('offers deletion without disabling for a directly added A2A agent', () => {
     mount({ protocol: 'a2a' })
     expect(screen.getAllByRole('menuitem')).toHaveLength(1)

@@ -334,8 +334,8 @@ describe('an account workspace that needs attention', () => {
     // button that looks like the fix is not one.
     expect(screen.getByText(/No terminal needed/)).toBeTruthy()
     expect(screen.getByText(/Retry setup cannot fix this one/)).toBeTruthy()
-    // The one consequence of renaming the folder that a Develop row cannot survive.
-    expect(screen.getByText(/keep pointing at the old folder/)).toBeTruthy()
+    // Develop no longer creates per-agent connections, so there is no stale folder to warn about.
+    expect(screen.queryByText(/keep pointing at the old folder/)).toBeNull()
     fireEvent.click(reconnect)
     await waitFor(() => expect(reconnectWorkspace).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(useLocalDevStore.getState().state).toEqual(ready))

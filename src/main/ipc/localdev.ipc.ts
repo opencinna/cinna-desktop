@@ -3,7 +3,6 @@ import { developmentRuntimeBlocker } from '../agents/drivers'
 import type { DevelopmentContext } from '../../shared/developmentSession'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
-import { developAgent } from '../localdev/developAgentService'
 import { localDevService } from '../localdev/localDevService'
 import { toolchain } from '../localdev/toolchain'
 import type { LocalDevState } from '../../shared/localDevState'
@@ -33,12 +32,6 @@ export function registerLocalDevHandlers(): void {
     userActivation.requireActivated()
     if (!expected || typeof expected.profileId !== 'string' || typeof expected.workspacePath !== 'string' || typeof expected.serverUrl !== 'string' || typeof expected.runtime?.launcher !== 'string') throw new Error('Reopen Local Development before sending.')
     return prepareDevelopmentSession(expected)
-  })
-
-  ipcHandle('localdev:develop-agent', async (_event, agentId: string) => {
-    userActivation.requireActivated()
-    if (typeof agentId !== 'string' || !agentId) throw new Error('Choose an agent to develop.')
-    return developAgent(agentId)
   })
 
   /**

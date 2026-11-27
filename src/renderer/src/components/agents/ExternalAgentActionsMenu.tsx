@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, MoreHorizontal, Power, Trash2 } from 'lucide-react'
+import { Code2, ExternalLink, MoreHorizontal, Power, Trash2 } from 'lucide-react'
 import { useDeleteAgent } from '../../hooks/useAgents'
 import { useAgentDesktopVisibility } from '../../hooks/useAgentDesktopVisibility'
 import { useOpenExternal } from '../../hooks/useSystem'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUIStore } from '../../stores/ui.store'
+import { useLocalDevStore } from '../../stores/localDev.store'
+import { canDevelopAgent } from '../../utils/agentNavigation'
 import { usePopover } from '../ui/usePopover'
 import { MENU_ITEM, MENU_SURFACE } from './local/OpenInMenu'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -51,6 +53,20 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
     ? `${serverUrl.replace(/\/+$/, '')}/agent/${agent.remoteTargetId}`
     : null
 
+  // Develop opens Agents Development with a first message about this agent, rather than
+  // preparing a single-agent build session: the assistant there already works on every agent.
+  const canDevelop = useLocalDevStore((s) => s.state.phase === 'ready') && canDevelopAgent(agent)
+  const develop = (): void => {
+    const profileId = useAuthStore.getState().currentUser?.id
+    if (!profileId) return
+    menu.setOpen(false)
+    onError(null)
+    const localDev = useLocalDevStore.getState()
+    localDev.setDraft(profileId, developDraft(agent))
+    localDev.setPageMode('chat')
+    useUIStore.getState().setActiveView('local-development')
+  }
+
   const confirm = async (): Promise<void> => {
     setError(null)
     const profileId = useAuthStore.getState().currentUser?.id
@@ -85,8 +101,11 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
         {serverHref && <button type="button" role="menuitem" className={MENU_ITEM} onClick={openOnServer}>
           <ExternalLink size={12} />Open on the server
         </button>}
+        {canDevelop && <button type="button" role="menuitem" className={MENU_ITEM} onClick={develop}>
+          <Code2 size={12} />Develop
+        </button>}
         {showVisibility && <>
-          {serverHref && <div className="my-1 border-t border-[var(--color-border)]" />}
+          {(serverHref || canDevelop) && <div className="my-1 border-t border-[var(--color-border)]" />}
           <button type="button" role="menuitem" className={MENU_ITEM} disabled={enabled.isPending}
             onClick={() => {
               menu.setOpen(false)
@@ -119,4 +138,9 @@ export function ExternalAgentActionsMenu({ agent, onError }: {
         </div>
       </div>, document.body)}
   </>
+}
+
+/** The prefilled first message; the cursor lands after it for the user to finish the sentence. */
+export function developDraft(agent: Pick<Agent, 'name' | 'id' | 'remoteTargetId'>): string {
+  return `I have an agent ${agent.name} (id: ${agent.remoteTargetId ?? agent.id}), I would like to `
 }
