@@ -147,7 +147,7 @@ test('switching a credential off asks first, names the chat mode it stops, and e
 
   await test.step('a chat mode pinned to the first one', async () => {
     const page = cinna.page
-    await openSettings(cinna, 'Chats')
+    await openSettings(cinna, 'Chat Modes')
     await expect(page.getByRole('heading', { name: 'Chat Modes' })).toBeVisible()
     await page.getByRole('button', { name: 'Add Chat Mode' }).click()
 
@@ -227,7 +227,7 @@ test('switching a credential off asks first, names the chat mode it stops, and e
 
   await test.step('the chat mode is inactive, and says which kind of inactive', async () => {
     const page = cinna.page
-    await openSettings(cinna, 'Chats')
+    await openSettings(cinna, 'Chat Modes')
     await expect(page.getByText(MODE, { exact: true })).toBeVisible()
     await expect(page.getByText('Inactive', { exact: true })).toBeVisible()
     // Beside the badge, in the collapsed header — the state this tab opens in.
@@ -255,7 +255,7 @@ test('switching a credential off asks first, names the chat mode it stops, and e
     await expect(toggle(page, 'off', KEYED)).toHaveAttribute('aria-checked', 'true')
     await expect(page.getByRole('dialog')).toHaveCount(0)
 
-    await openSettings(cinna, 'Chats')
+    await openSettings(cinna, 'Chat Modes')
     await expect(page.getByText(MODE, { exact: true })).toBeVisible()
     await expect(page.getByText('Inactive', { exact: true })).toHaveCount(0)
     await expect(page.getByText('credential switched off', { exact: true })).toHaveCount(0)

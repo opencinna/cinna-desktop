@@ -32,7 +32,7 @@ async function openLocalAgentsSettings(cinna: CinnaApp): Promise<Locator> {
   const user = await page.evaluate(() => window.api.auth.getCurrent())
   await page.getByRole('button', { name: user?.displayName ?? 'User', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await page.getByRole('button', { name: 'Agents Config', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Agent Folders' })).toBeVisible()
   // A `section` with no accessible name is not a `region`, so it is found by
   // the heading it holds.

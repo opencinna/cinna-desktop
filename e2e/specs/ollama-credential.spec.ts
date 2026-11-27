@@ -221,7 +221,7 @@ test('a detected Ollama is added in one click, keeps its host across the boundar
   })
 
   await test.step('the chat-mode form offers it, with the models the server listed', async () => {
-    await openSettings(cinna, 'Chats')
+    await openSettings(cinna, 'Chat Modes')
     await expect(page.getByRole('heading', { name: 'Chat Modes' })).toBeVisible()
     await page.getByRole('button', { name: 'Add Chat Mode' }).click()
     const form = modeForm(page)
@@ -243,7 +243,7 @@ test('a detected Ollama is added in one click, keeps its host across the boundar
   })
 
   await test.step('Agents offers it as the default credential for folder agents', async () => {
-    await openSettings(cinna, 'Agents')
+    await openSettings(cinna, 'Agents Config')
     // Renamed from "Default AI credential": the label now says which *runtime*
     // spends it, because the runtime is a choice the user makes one control
     // above this one.

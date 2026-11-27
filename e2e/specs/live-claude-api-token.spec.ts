@@ -51,7 +51,7 @@ async function openLocalAgentsSettings(cinna: CinnaApp): Promise<void> {
   const user = await page.evaluate(() => window.api.auth.getCurrent())
   await page.getByRole('button', { name: user?.displayName ?? 'User', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await page.getByRole('button', { name: 'Agents Config', exact: true }).click()
   await expect(page.getByText('Default runtime', { exact: true })).toBeVisible()
 }
 

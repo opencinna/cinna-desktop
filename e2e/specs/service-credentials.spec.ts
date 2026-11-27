@@ -110,8 +110,8 @@ test('live Core owned and allowed shared credentials rotate, revoke, and isolate
   await cinna.page.getByRole('button', { name: 'Settings', exact: true }).click()
   await cinna.page.getByRole('button', { name: 'Credentials', exact: true }).last().click()
   await expect(cinna.page.getByRole('button', { name: 'Manage on Remote' })).toBeVisible()
-  await cinna.page.getByRole('button', { name: 'Sync Now', exact: true }).click()
-  await expect(cinna.page.getByRole('button', { name: 'Sync Now', exact: true })).toBeEnabled()
+  await cinna.page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(cinna.page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
   const finalStatus = await cinna.page.evaluate(async () => { const user = (await window.api.auth.getCurrent())!; return window.api.serviceCredentials.list(user.id, user.cinnaServerUrl ?? null) })
   expect(finalStatus.ok && finalStatus.value.error).toBeNull()
   await cinna.page.screenshot({ path: '/tmp/cinna-remote-credentials.png' })
@@ -165,7 +165,7 @@ test('credential UI creates a local record, attaches it, and detaches without de
   expect(remaining.ok && remaining.value.items.some(c => c.name === 'UI fixture')).toBe(true)
 })
 
-test('Sync Now after switching profiles only contacts the displayed host', async ({ cinna }) => {
+test('Refresh after switching profiles only contacts the displayed host', async ({ cinna }) => {
   const { createServer } = await import('node:http')
   const hits: string[][] = [[], []]
   const servers = [0, 1].map(index => createServer((req, res) => {
@@ -205,9 +205,9 @@ test('Sync Now after switching profiles only contacts the displayed host', async
     await expect(cinna.page.getByRole('link', { name: new URL(urls[1]).host, exact: true })).toBeVisible()
     await expect(cinna.page.getByText('This remote does not support credential sync yet. Update Cinna Core on that server.')).not.toBeVisible()
     const before = hits.map(requests => requests.length)
-    await cinna.page.getByRole('button', { name: 'Sync Now', exact: true }).click()
+    await cinna.page.getByRole('button', { name: 'Refresh', exact: true }).click()
     await expect.poll(() => hits[1].length).toBeGreaterThan(before[1])
-    await expect(cinna.page.getByRole('button', { name: 'Sync Now', exact: true })).toBeEnabled()
+    await expect(cinna.page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled()
     expect(hits[0].length).toBe(before[0])
     const stale = await cinna.page.evaluate(({ id, url }) => window.api.serviceCredentials.sync(id, url), { id: profiles[0], url: urls[0] })
     expect(stale.ok).toBe(false)

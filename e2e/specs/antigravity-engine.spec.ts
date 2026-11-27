@@ -90,7 +90,7 @@ test('Antigravity as the Default runtime: selecting installs nothing, Install wi
   // The sandbox HOME has no Antigravity login, on every machine (see the header).
   expect(await page.evaluate(() => window.api.localTools.antigravityAuth())).toEqual({ state: 'logged_out' })
 
-  await openSettings(cinna, 'Agents')
+  await openSettings(cinna, 'Agents Config')
   await expect(page.getByText('Default runtime', { exact: true })).toBeVisible()
   const choice = page.getByRole('button', { name: /^Antigravity / })
   await expect(choice).toHaveAccessibleName('Antigravity Not installed')
@@ -124,7 +124,7 @@ test('Antigravity as the Default runtime: selecting installs nothing, Install wi
   await page.evaluate((path) => window.api.settings.set('localAgentsAntigravityPath', path), fake.path)
   await expect(choice).toHaveAccessibleName('Antigravity unverified')
   await page.reload()
-  await openSettings(cinna, 'Agents')
+  await openSettings(cinna, 'Agents Config')
   await expect(choice).toHaveAccessibleName('Antigravity unverified')
   await expect(choice).toHaveAttribute('aria-pressed', 'true')
   const status = page.getByText(NOT_LOGGED_IN, { exact: true })

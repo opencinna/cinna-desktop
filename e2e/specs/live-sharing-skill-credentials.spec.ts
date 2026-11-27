@@ -515,7 +515,7 @@ async function providedThenAdded(team: Parameters<Parameters<typeof test>[2]>[0]
  * read while A still shares it — T4.7 above, not repeated here.
  *
  * B's app learns of it at its next credential sync (`syncCredentials`, what
- * Settings → Credentials → Sync Now and the five-minute poll run): until then
+ * Settings → Credentials → Refresh and the five-minute poll run): until then
  * a shared credential's cached value keeps reaching B's agent.
  */
 test('T4.8 (i) A turns sharing off on the credential A provides: B’s skill no longer reads it, and Finish setup says the publisher cannot share it', async ({ team }) => {

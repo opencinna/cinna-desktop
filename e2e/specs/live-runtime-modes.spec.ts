@@ -56,7 +56,7 @@ async function openChatsSettings(cinna: CinnaApp): Promise<void> {
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
     await expect(settingsOnly).toBeVisible()
   }
-  await page.getByRole('button', { name: 'Chats', exact: true }).click()
+  await page.getByRole('button', { name: 'Chat Modes', exact: true }).click()
   await expect(page.getByRole('heading', { level: 2, name: 'Runtimes', exact: true })).toBeVisible()
 }
 

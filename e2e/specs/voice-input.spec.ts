@@ -125,7 +125,7 @@ test.describe('voice input, speech supported', () => {
       await expect(sendButton(cinna)).toBeDisabled()
       const toast = cinna.page.getByRole('status').filter({ hasText: 'Audio input is hidden.' })
       await expect(toast.locator('p')).toHaveText(
-        'Audio input is hidden. Turn it back on in Settings → Features → Interface → Audio input.'
+        'Audio input is hidden. Turn it back on in Settings → Features → Voice and Audio → Audio input.'
       )
       await expect(toast.getByLabel('Info', { exact: true })).toBeVisible()
       await toast.getByRole('button', { name: 'Open Settings → Features', exact: true }).click()

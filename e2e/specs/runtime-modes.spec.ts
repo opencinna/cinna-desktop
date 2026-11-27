@@ -85,7 +85,7 @@ async function runtimeMode(cinna: CinnaApp, engine: string) {
 test('Settings lists every runtime with its status; Add credential readies OpenCode, the star makes it the default, and Reset asks first', async ({ cinna }) => {
   await cinna.skipOnboarding()
   const page = cinna.page
-  await openSettings(cinna, 'Chats')
+  await openSettings(cinna, 'Chat Modes')
 
   await test.step('four runtime cards, in the Agents tab order, above Saved modes', async () => {
     await expect(page.getByRole('heading', { level: 2, name: 'Runtimes', exact: true })).toBeVisible()
@@ -107,7 +107,7 @@ test('Settings lists every runtime with its status; Add credential readies OpenC
   await test.step('Add credential opens AI Credentials; once one exists, OpenCode is Ready', async () => {
     await status(cinna, 'opencode').getByRole('button', { name: 'Add credential', exact: true }).click()
     await addOllama(cinna)
-    await openSettings(cinna, 'Chats')
+    await openSettings(cinna, 'Chat Modes')
     await expect(status(cinna, 'opencode')).toHaveText('Ready')
     await expect(status(cinna, 'codex')).toHaveText('Not installedInstall')
   })
@@ -215,7 +215,7 @@ const SCRIPT: FakeAcpScript = {
 async function starOpenCode(cinna: CinnaApp, bindCredential: boolean): Promise<void> {
   await openSettings(cinna, 'AI Credentials')
   await addOllama(cinna)
-  await openSettings(cinna, 'Chats')
+  await openSettings(cinna, 'Chat Modes')
   if (bindCredential) {
     await header(cinna, 'opencode').getByText('OpenCode', { exact: true }).click()
     await cinna.page.getByLabel('AI credential', { exact: true }).selectOption({ label: 'Ollama' })

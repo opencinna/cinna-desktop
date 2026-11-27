@@ -161,7 +161,7 @@ test('C3/C8 a switched-off folder agent is amber, hides on hover, and routes to 
   await cinna.page.getByText(JOB_TITLE, { exact: true }).click()
   await expect(cinna.page.getByText('Finish setup on this device')).toBeVisible()
   await cinna.page.getByRole('button', { name: 'Set up' }).click()
-  await expect(cinna.page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible()
+  await expect(cinna.page.getByRole('heading', { name: 'Agents Config', exact: true })).toBeVisible()
   await expect(cinna.page.getByRole('heading', { name: 'Agent Folders' })).toBeVisible()
 })
 
