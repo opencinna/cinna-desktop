@@ -134,14 +134,16 @@ test('a Claude agent on a logged-out install is told to log in, and still names 
   // Straight onto the engine, so the panel opens on the Claude branch and the
   // spec never touches the select. `credential` must be null beside an engine —
   // `runtimeService` refuses to write both — and the tier is left off because
-  // the sentence under test says nothing about it.
+  // the sentence under test says nothing about it. `runsOn` records Claude as
+  // the app's own choice, which outranks the file; without it the agent would
+  // run on the Default runtime and the panel would show a conflict.
   const saved = await cinna.page.evaluate(
     (input) =>
       window.api.localAgents.updateField({
         agentId: input.agentId,
         update: {
           field: 'runtime',
-          value: { engine: 'claude', credential: null, modelId: null, complexity: null }
+          value: { engine: 'claude', credential: null, modelId: null, complexity: null, runsOn: { kind: 'engine', engine: 'claude' } }
         },
         expectedStamp: input.expectedStamp
       }),

@@ -73,7 +73,7 @@ async function claudeAgent(cinna: CinnaApp, name: string, model: string | null):
     (input) =>
       window.api.localAgents.updateField({
         agentId: input.agentId,
-        update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: input.model, complexity: null } },
+        update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: input.model, complexity: null, runsOn: { kind: 'engine', engine: 'claude' } } },
         expectedStamp: input.stamp
       }),
     { agentId: created.id, model, stamp: created.stamps[MANIFEST_FILE]! }

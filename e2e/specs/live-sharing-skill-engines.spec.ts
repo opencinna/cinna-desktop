@@ -40,6 +40,7 @@ import {
   type CatalogFixture
 } from '../fixtures/liveCatalog'
 import { PersonApp, runCommand } from '../fixtures/liveTeamSharing'
+import { withRunsOn } from '../fixtures/runsOn'
 
 /**
  * T2 — "their local agent sees the catalog skill": what each engine is handed
@@ -218,7 +219,7 @@ async function setAgentRuntime(
   if (!current.ok) throw new Error(current.message)
   const saved = await b.page.evaluate(
     (input) => window.api.localAgents.updateField({ agentId: input.id, expectedStamp: input.stamp, update: { field: 'runtime', value: input.value } }),
-    { id: agentId, stamp: current.value.stamps[MANIFEST_FILE]!, value }
+    { id: agentId, stamp: current.value.stamps[MANIFEST_FILE]!, value: withRunsOn(value) }
   )
   expect(saved.ok).toBe(true)
 }

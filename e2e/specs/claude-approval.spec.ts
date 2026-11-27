@@ -101,7 +101,7 @@ function permissionsCard(cinna: CinnaApp): ReturnType<typeof cinna.page.locator>
   const page = cinna.page
   return page
     .locator('section')
-    .filter({ has: page.getByRole('heading', { level: 2, name: 'Approvals' }) })
+    .filter({ has: page.getByRole('heading', { level: 2, name: 'Permissions' }) })
     // The innermost: the Security tab's Permissions section holds the card's section.
     .last()
 }
@@ -125,7 +125,7 @@ test('a Claude agent chooses who approves its actions, and the choice survives a
         agentId: input.agentId,
         update: {
           field: 'runtime',
-          value: { engine: 'claude', credential: null, modelId: null, complexity: null }
+          value: { engine: 'claude', credential: null, modelId: null, complexity: null, runsOn: { kind: 'engine', engine: 'claude' } }
         },
         expectedStamp: input.expectedStamp
       }),
@@ -133,8 +133,10 @@ test('a Claude agent chooses who approves its actions, and the choice survives a
   )
   expect(saved.ok, saved.ok ? '' : saved.message).toBe(true)
   expect(manifest(agent.path).runtime).toEqual({ engine: 'claude' })
-  // Nothing has been decided yet, and the scaffold writes no desktop state.
-  expect(desktopState(agent.path)).toBeNull()
+  // No approval has been decided yet: the desktop state holds only the Runs-on
+  // choice the runtime write recorded beside the manifest.
+  expect(desktopState(agent.path)?.runsOn).toEqual({ kind: 'engine', engine: 'claude' })
+  expect(desktopState(agent.path)?.claudeApproval ?? null).toBeNull()
 
   await restart(cinna)
   await openPermissions(cinna, CLAUDE_AGENT)
@@ -201,7 +203,7 @@ test('an OpenCode agent’s Permissions tab has no approvals control, and descri
   // An unconfigured agent follows Default now. Name the engine this scenario tests.
   const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
     agentId: input.agentId,
-    update: { field: 'runtime', value: { engine: 'opencode', credential: null, modelId: null, complexity: null } },
+    update: { field: 'runtime', value: { engine: 'opencode', credential: null, modelId: null, complexity: null, runsOn: { kind: 'engine', engine: 'opencode' } } },
     expectedStamp: input.expectedStamp
   }), { agentId: agent.id, expectedStamp: agent.stamps[MANIFEST_FILE]! })
   expect(saved.ok, saved.ok ? '' : saved.message).toBe(true)

@@ -9,6 +9,7 @@ import { claudeBinary, claudeLoginProblem, expectNoAgentTurn, liveEngineFor, typ
 import { approveDesktopAuth, preflight, requireLiveCinna, signIn, type LiveCinnaConfig } from '../fixtures/liveCinna'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { repoRoot } from '../playwright.config'
+import { withRunsOn } from '../fixtures/runsOn'
 
 /**
  * Artifacts against the developer's **real local cinna-core**, with **real
@@ -393,7 +394,7 @@ async function kitAgent(cinna: CinnaApp, runtime: LiveEngine['runtime'] = HAIKU_
       update: { field: 'runtime', value: runtime },
       expectedStamp: stamp
     })
-  }, { agentId: agent.id, runtime })
+  }, { agentId: agent.id, runtime: withRunsOn(runtime) })
   expect(outcome.ok, JSON.stringify(outcome)).toBe(true)
   return { agentId: agent.id, dir: agent.path }
 }

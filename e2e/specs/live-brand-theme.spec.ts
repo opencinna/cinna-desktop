@@ -13,6 +13,7 @@ import { CLAUDE_API_AUTH } from '../fixtures/claudeApiAuth'
 import { beginRealLogin, endRealLogin, makeRealLoginDirs, pinRealLoginProfile, type RealLogin } from '../fixtures/realLogin'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 import { BRAND_ROLE_MAP } from '../../src/shared/brandTheme/roleMap'
+import { withRunsOn } from '../fixtures/runsOn'
 
 /**
  * Brand themes against the **real** local cinna-core: a theme core validated,
@@ -806,7 +807,7 @@ test('5. assisted generation: A’s Claude agent turns a brandbook into a theme 
       if (!current.ok) throw new Error(current.message)
       const saved = await a.page.evaluate(
         (input) => window.api.localAgents.updateField({ agentId: input.id, expectedStamp: input.stamp, update: { field: 'runtime', value: input.value } }),
-        { id: agent.id, stamp: current.value.stamps[MANIFEST_FILE]!, value: LIVE_ENGINE.runtime! }
+        { id: agent.id, stamp: current.value.stamps[MANIFEST_FILE]!, value: withRunsOn(LIVE_ENGINE.runtime!) }
       )
       expect(saved.ok).toBe(true)
       await a.relaunch()

@@ -271,7 +271,8 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
               engine: null,
               credential: input.credential,
               modelId: null,
-              complexity: 'medium'
+              complexity: 'medium',
+              runsOn: { kind: 'credential', name: input.credential }
             }
           },
           expectedStamp: input.expectedStamp

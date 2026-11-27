@@ -171,13 +171,16 @@ test('changing the credential rewrites the manifest, says what it dropped, and d
   const created = await createFolderAgent(cinna, root, AGENT, AGENT)
   const stamp = created.stamps[MANIFEST_FILE]
   expect(stamp, `the scaffolded ${MANIFEST_FILE} has a stamp`).not.toBeNull()
+  // `runsOn` records the credential as the app's own Runs-on choice, as the
+  // panel's pick does: the app's choice outranks the file, and a file-only
+  // credential would open the panel on a conflict with its selects disabled.
   const saved = await cinna.page.evaluate(
     (input) =>
       window.api.localAgents.updateField({
         agentId: input.agentId,
         update: {
           field: 'runtime',
-          value: { engine: null, credential: input.credential, modelId: input.modelId, complexity: null }
+          value: { engine: null, credential: input.credential, modelId: input.modelId, complexity: null, runsOn: { kind: 'credential', name: input.credential } }
         },
         expectedStamp: input.expectedStamp
       }),
@@ -330,7 +333,7 @@ test('a work complexity resolves to a model, warns when it cannot, and Advanced 
           agentId: input.agentId,
           update: {
             field: 'runtime',
-            value: { engine: null, credential: input.credential, modelId: null, complexity: 'medium' }
+            value: { engine: null, credential: input.credential, modelId: null, complexity: 'medium', runsOn: { kind: 'credential', name: input.credential } }
           },
           expectedStamp: input.expectedStamp
         }),

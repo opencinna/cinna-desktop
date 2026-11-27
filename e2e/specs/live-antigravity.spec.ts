@@ -295,7 +295,7 @@ test('live Antigravity: instructions, in-folder edits and own scripts with no as
     if (!fresh.ok) throw new Error('the agent could not be read back')
     const runtime = await page.evaluate((input) => window.api.localAgents.updateField({
       agentId: input.agentId, expectedStamp: input.stamp,
-      update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: input.model, complexity: null } }
+      update: { field: 'runtime', value: { engine: 'antigravity', credential: null, modelId: input.model, complexity: null, runsOn: { kind: 'engine', engine: 'antigravity' } } }
     }), { agentId: agent.id, stamp: fresh.value.stamps['cinna-agent.json']!, model: MODEL })
     expect(runtime.ok).toBe(true)
     const approval = await page.evaluate((id) => window.api.localAgents.setAntigravityApproval(id, 'ask'), agent.id)

@@ -79,7 +79,7 @@ test('the verbose popup of a Codex turn that reported usage shows its telemetry;
   const agent = await createFolderAgent(cinna, root, AGENT, AGENT)
   const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
     agentId: input.id, expectedStamp: input.stamp,
-    update: { field: 'runtime', value: { engine: 'codex', credential: null, modelId: input.model, complexity: null } }
+    update: { field: 'runtime', value: { engine: 'codex', credential: null, modelId: input.model, complexity: null, runsOn: { kind: 'engine', engine: 'codex' } } }
   }), { id: agent.id, stamp: agent.stamps[MANIFEST_FILE]!, model: MODEL })
   expect(saved.ok).toBe(true)
   await cinna.relaunch()

@@ -132,7 +132,7 @@ test('@live a Claude agent on the API token runs one turn, and the key reaches n
   expect(stamp, `the scaffolded ${MANIFEST_FILE} has a stamp`).toBeTruthy()
   const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
     agentId: input.agentId,
-    update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: 'haiku', complexity: null } },
+    update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: 'haiku', complexity: null, runsOn: { kind: 'engine', engine: 'claude' } } },
     expectedStamp: input.stamp
   }), { agentId: created.id, stamp: stamp! })
   expect(saved.ok, saved.ok ? '' : saved.message).toBe(true)

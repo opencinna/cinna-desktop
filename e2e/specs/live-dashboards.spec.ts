@@ -5,6 +5,7 @@ import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app
 import { LIVE_REQUESTED, requireLiveKey, seedOpenAiDefaultMode } from '../fixtures/live'
 import { liveEngineFor, type LiveEngine } from '../fixtures/liveEngine'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
+import { withRunsOn } from '../fixtures/runsOn'
 
 /**
  * @live — **Dashboards D2 on a real agent**: a kit agent asked in one message
@@ -65,7 +66,7 @@ async function kitAgent(cinna: CinnaApp, runtime: LiveEngine['runtime']): Promis
       const stamp = got.value.stamps['cinna-agent.json']
       if (!stamp) return { ok: false as const, message: 'the kit agent has no manifest stamp' }
       return window.api.localAgents.updateField({ agentId, update: { field: 'runtime', value: runtime }, expectedStamp: stamp })
-    }, { agentId: agent.id, runtime })
+    }, { agentId: agent.id, runtime: withRunsOn(runtime) })
     expect(outcome.ok, JSON.stringify(outcome)).toBe(true)
   }
   return { agentId: agent.id, dir: agent.path }
@@ -289,7 +290,7 @@ for (const { entry, engine } of ENGINES) test.describe(`on ${entry}`, () => {
         const got = await window.api.localAgents.get(agentId)
         if (!got.ok) return { ok: false as const, message: got.message }
         return window.api.localAgents.updateField({ agentId, update: { field: 'runtime', value: runtime }, expectedStamp: got.value.stamps['cinna-agent.json']! })
-      }, { agentId: agent.id, runtime: engine.runtime })
+      }, { agentId: agent.id, runtime: withRunsOn(engine.runtime) })
       expect(outcome.ok, JSON.stringify(outcome)).toBe(true)
     }
     const component = join(agent.path, 'dashboards', 'follow-ups')
@@ -396,7 +397,7 @@ for (const { entry, engine } of ENGINES) test.describe(`on ${entry}`, () => {
         const got = await window.api.localAgents.get(agentId)
         if (!got.ok) return { ok: false as const, message: got.message }
         return window.api.localAgents.updateField({ agentId, update: { field: 'runtime', value: runtime }, expectedStamp: got.value.stamps['cinna-agent.json']! })
-      }, { agentId: agent.id, runtime: engine.runtime })
+      }, { agentId: agent.id, runtime: withRunsOn(engine.runtime) })
       expect(outcome.ok, JSON.stringify(outcome)).toBe(true)
     }
     mkdirSync(join(agent.path, 'app-data'), { recursive: true })

@@ -506,7 +506,7 @@ test.describe('real Claude (haiku) turn', () => {
           if (!got.ok) return got.message
           const stamp = got.value.stamps['cinna-agent.json']
           if (!stamp) return 'the kit agent has no manifest stamp'
-          const runtime = { engine: 'claude' as const, credential: null, modelId: 'haiku', complexity: null }
+          const runtime = { engine: 'claude' as const, credential: null, modelId: 'haiku', complexity: null, runsOn: { kind: 'engine' as const, engine: 'claude' as const } }
           const updated = await window.api.localAgents.updateField({ agentId: id, update: { field: 'runtime', value: runtime }, expectedStamp: stamp })
           if (!updated.ok) return updated.message
           const approval = await window.api.localAgents.setClaudeApproval(id, 'ask')

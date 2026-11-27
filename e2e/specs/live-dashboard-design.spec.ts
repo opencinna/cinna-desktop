@@ -8,6 +8,7 @@ import { LIVE_REQUESTED, requireLiveKey, seedOpenAiDefaultMode } from '../fixtur
 import { liveEngineFor, type LiveEngine } from '../fixtures/liveEngine'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import type { LocalAgentRuntimeInput } from '../../src/shared/engine'
+import { withRunsOn } from '../fixtures/runsOn'
 
 /**
  * @live — **the dashboard design pack on real agents**: a kit agent asked in
@@ -301,7 +302,7 @@ for (const { entry, engine, runtime, effort } of ENGINES) test.describe(`on ${en
           const stamp = got.value.stamps['cinna-agent.json']
           if (!stamp) return { ok: false as const, message: 'the kit agent has no manifest stamp' }
           return window.api.localAgents.updateField({ agentId, update: { field: 'runtime', value: runtime }, expectedStamp: stamp })
-        }, { agentId: agent.id, runtime })
+        }, { agentId: agent.id, runtime: withRunsOn(runtime) })
         expect(outcome.ok, JSON.stringify(outcome)).toBe(true)
       }
       await cinna.relaunch()

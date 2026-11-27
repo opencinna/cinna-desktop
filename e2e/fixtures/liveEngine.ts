@@ -9,6 +9,7 @@ import { ANTHROPIC_API_KEY, CLAUDE_API_AUTH } from './claudeApiAuth'
 import { LIVE_REQUESTED, OPENAI_API_KEY, requireLiveKey, seedOpenAiDefaultMode } from './live'
 import { NO_AGENT_TURN } from './mainLog'
 import type { RealLogin } from './realLogin'
+import { withRunsOn } from './runsOn'
 
 /**
  * **Which engine the billed live task specs run on**: `CINNA_E2E_LIVE_ENGINE`,
@@ -175,18 +176,20 @@ export async function seedLiveModel(cinna: CinnaApp): Promise<string> {
  * manifest, under its stamp) or bare (`setRuntime`, desktop state). A no-op on
  * OpenCode, which keeps every agent on the Default runtime as before. Call it
  * after the agent exists and before the relaunch that lets pickers see it.
+ * A kit agent also records the engine as the app's Runs-on choice, which
+ * outranks the file: without it the agent would run on the Default runtime.
  */
 export async function useLiveRuntime(cinna: CinnaApp, agentId: string): Promise<void> {
   const runtime = LIVE_ENGINE.runtime
   if (runtime === null) return
-  const outcome = await cinna.page.evaluate(async ({ agentId, runtime }) => {
+  const outcome = await cinna.page.evaluate(async ({ agentId, runtime, kitRuntime }) => {
     const got = await window.api.localAgents.get(agentId)
     if (!got.ok) return { ok: false as const, message: got.message }
     if (got.value.kind === 'bare') return window.api.localAgents.setRuntime(agentId, runtime)
     const stamp = got.value.stamps['cinna-agent.json']
     if (!stamp) return { ok: false as const, message: 'the kit agent has no manifest stamp' }
-    return window.api.localAgents.updateField({ agentId, update: { field: 'runtime', value: runtime }, expectedStamp: stamp })
-  }, { agentId, runtime })
+    return window.api.localAgents.updateField({ agentId, update: { field: 'runtime', value: kitRuntime }, expectedStamp: stamp })
+  }, { agentId, runtime, kitRuntime: withRunsOn(runtime) })
   expect(outcome.ok, `the ${LIVE_ENGINE.label} runtime is saved on ${agentId}: ${outcome.ok ? '' : outcome.message}`).toBe(true)
 }
 

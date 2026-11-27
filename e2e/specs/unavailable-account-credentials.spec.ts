@@ -892,7 +892,7 @@ test.describe('credentials from an unavailable Cinna account (real cinna-core)',
       const got = await page().evaluate((id) => window.api.localAgents.get(id), agent.id)
       if (!got.ok) throw new Error(got.message)
       const set = await page().evaluate(({ id, stamp }) => window.api.localAgents.updateField({
-        agentId: id, update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: null } }, expectedStamp: stamp
+        agentId: id, update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: null, runsOn: { kind: 'engine', engine: 'claude' } } }, expectedStamp: stamp
       } as never), { id: agent.id, stamp: got.value.stamps['cinna-agent.json']! })
       expect(set.ok, JSON.stringify(set)).toBe(true)
       const { userId } = await aliciaProfile(cinna, fake, person!)

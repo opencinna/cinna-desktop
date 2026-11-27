@@ -21,7 +21,7 @@ test('Codex runtime and approvals persist across an app restart', async ({ cinna
   const agent = await createFolderAgent(cinna, root, 'Codex Example', 'Codex Example')
   const saved = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
     agentId: input.agentId,
-    update: { field: 'runtime', value: { engine: 'codex', credential: null, modelId: null, complexity: 'medium' } },
+    update: { field: 'runtime', value: { engine: 'codex', credential: null, modelId: null, complexity: 'medium', runsOn: { kind: 'engine', engine: 'codex' } } },
     expectedStamp: input.stamp
   }), { agentId: agent.id, stamp: agent.stamps[MANIFEST_FILE]! })
   expect(saved.ok).toBe(true)
@@ -85,7 +85,7 @@ test('Codex chats, approves, answers questions, stops, and resumes through the p
   const agent = await createFolderAgent(cinna, root, 'Codex Runner', 'Codex Runner')
   const result = await cinna.page.evaluate((input) => window.api.localAgents.updateField({
     agentId: input.id, expectedStamp: input.stamp,
-    update: { field: 'runtime', value: { engine: 'codex', credential: null, modelId: null, complexity: 'complex' } }
+    update: { field: 'runtime', value: { engine: 'codex', credential: null, modelId: null, complexity: 'complex', runsOn: { kind: 'engine', engine: 'codex' } } }
   }), { id: agent.id, stamp: agent.stamps[MANIFEST_FILE]! })
   expect(result.ok).toBe(true)
   await cinna.relaunch()

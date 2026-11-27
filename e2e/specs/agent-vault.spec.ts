@@ -81,7 +81,7 @@ async function arrangeClaude(
     ({ id, stamp }) =>
       window.api.localAgents.updateField({
         agentId: id,
-        update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: null } },
+        update: { field: 'runtime', value: { engine: 'claude', credential: null, modelId: null, complexity: null, runsOn: { kind: 'engine', engine: 'claude' } } },
         expectedStamp: stamp
       } as never),
     { id: created.id, stamp: created.stamps['cinna-agent.json'] }
