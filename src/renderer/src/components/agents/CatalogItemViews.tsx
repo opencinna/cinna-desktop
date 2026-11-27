@@ -6,7 +6,7 @@ import type { LibraryAgentDto } from '../../../../shared/agentSharing'
 import { isUnsettledClick } from '../../hooks/useSettleGuard'
 import { useCatalogItemDetail, useCatalogServerUrl } from '../../hooks/useCatalog'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { CATALOG_SKILL_TEXT, CATALOG_TEXT, SKILL_SHARE_TEXT, catalogDateLabel, catalogVersionLabel, type CatalogItemKind } from '../../utils/catalogItems'
+import { CATALOG_SKILL_TEXT, CATALOG_TEXT, SKILL_SHARE_TEXT, catalogDateLabel, catalogShownVersion, type CatalogItemKind } from '../../utils/catalogItems'
 import { CatalogCardCredentials } from '../settings/CatalogCardCredentials'
 import { CatalogUninstallModal } from '../settings/CatalogUninstallModal'
 import { SettingsIconButton } from '../settings/SettingsLayout'
@@ -146,11 +146,11 @@ export function hasCatalogAction(view: CatalogEntryView, desktop: DesktopAgentAc
 }
 
 /**
- * The action by kind, in the catalog's words (Get / Update / Open). A cloud
- * agent: Get (the quick install), then Open once it has synced, with Update
+ * The action by kind, in the catalog's words (Install / Update / Open). A cloud
+ * agent: Install (the quick install), then Open once it has synced, with Update
  * beside it while its install is behind; *Installed* only in the moment
  * between the install and its sync, when there is nothing to Open yet. A
- * desktop agent: Get, then Open, with Update while the team has moved past
+ * desktop agent: Install, then Open, with Update while the team has moved past
  * this computer's copy. A skill: Add to agent…, with how many of the user's
  * agents already have it beside it.
  */
@@ -293,7 +293,8 @@ export function needsLine(specs: CatalogCredentialSpec[]): string | null {
  * detail. The name has its line to itself; the version sits beside the kind
  * badge, and wraps under it when the tile is too narrow for both. Who stands
  * behind the item has its own line, so a long badge and version never squeeze
- * it. A tile without an action has no footer. An error renders last in the
+ * it. An agent tile's footer leads with Details when it has a page. A tile
+ * without an action has no footer. An error renders last in the
  * tile, so it never moves the button that caused it (ux_rules rules 1 and 6).
  */
 export function CatalogItemTile({
@@ -352,7 +353,20 @@ export function CatalogItemTile({
         )}
       </button>
       {action && (
-        <div className="flex items-center justify-end gap-1.5 border-t border-[var(--color-border)] px-3 py-2">{action}</div>
+        <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-[var(--color-border)] px-3 py-2">
+          {/* First in the row: appearing once main answers moves none of the others. */}
+          {view.kind !== 'skill' && (
+            <AgentDetailsButton
+              key={view.item.uuid}
+              target={{ kind: 'catalog', itemUuid: view.item.uuid }}
+              agentName={view.name}
+              className={sizedButton(SECONDARY, type)}
+              iconSize={11}
+              overlayAttrs={{ [CATALOG_POPOVER_ATTR]: '' }}
+            />
+          )}
+          {action}
+        </div>
       )}
       {error && (
         <div role="alert" className={`px-3 pb-2 ${type.meta} text-[var(--color-danger)]`}>
@@ -745,7 +759,7 @@ function CatalogVersions({
         }
       >
         {shown.map((revision, index) => {
-          const label = catalogVersionLabel(revision.revision_number, revision.version)
+          const label = catalogShownVersion(revision.revision_number, revision.version)
           const date = catalogDateLabel(revision.published_at)
           const by = revision.published_by?.display_name
           const sub =

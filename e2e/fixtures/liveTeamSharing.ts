@@ -605,7 +605,7 @@ export async function openCatalogAgents(app: PersonApp) {
 /** The catalog's Agents → the tile's Get, landing on the new agent's page. */
 export async function getFromLibrary(app: PersonApp, name: string): Promise<void> {
   const catalog = await openCatalogAgents(app)
-  await catalog.getByRole('group', { name }).getByRole('button', { name: 'Get', exact: true }).click()
+  await catalog.getByRole('group', { name }).getByRole('button', { name: 'Install', exact: true }).click()
   await expect(catalog).toHaveCount(0, { timeout: 60_000 })
   await expect(app.page.getByRole('heading', { level: 1 })).toHaveText(name)
 }

@@ -91,7 +91,7 @@ test('§7 2, 4–6: A shares a skill from report-bot; B adds it to B’s agent w
 
   await test.step('B Gets report-bot and finishes its setup', async () => {
     const catalog = await openCatalog(b, 'Agents')
-    await catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Get', exact: true }).click()
+    await catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Install', exact: true }).click()
     await expect(catalog).toHaveCount(0, { timeout: 60_000 })
     await finishWithWeather(b, name, `weather-b-${fixture.tag}`)
   })

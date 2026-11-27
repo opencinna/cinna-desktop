@@ -247,7 +247,7 @@ describe('CatalogBrowserModal — one list', () => {
     mount()
     await loaded()
     const invoices = tile('Invoice Watcher')
-    const version = within(invoices).getByText('Version 3 (1.2.0)')
+    const version = within(invoices).getByText('v1.2.0')
     // On the badge's line, so the name has its line to itself.
     expect(version.parentElement?.textContent).toContain(CATALOG_KIND_TEXT.cloud_agent)
     expect(within(invoices).getByText('Invoice Watcher').parentElement?.textContent).toBe('Invoice Watcher')
@@ -663,7 +663,7 @@ describe('CatalogBrowserModal — detail', () => {
     // Who stands behind it is the Maintainers row, not a "by" line in the header too.
     expect(screen.getByText(CATALOG_TEXT.maintainersLabel).nextElementSibling?.textContent).toBe('Acme')
     const header = screen.getByRole('heading', { name: 'Invoice Watcher' }).parentElement!
-    expect(header.textContent).toBe(`Invoice Watcher${CATALOG_KIND_TEXT.cloud_agent}Version 3 (1.2.0)`)
+    expect(header.textContent).toBe(`Invoice Watcher${CATALOG_KIND_TEXT.cloud_agent}v1.2.0`)
     expect(screen.getByText(CATALOG_TEXT.usersLabel).nextElementSibling?.textContent).toBe('12')
     // Not installed: the install context is checked.
     expect(screen.getByTestId('credentials').textContent).toBe('test.core.acme1:Odoo+IMAP:true:compact')
@@ -694,7 +694,7 @@ describe('CatalogBrowserModal — detail', () => {
     await act(async () => answer({ success: true, value: detail }))
     const versions = screen.getByRole('region', { name: CATALOG_TEXT.versionsHeading })
     const rows = await within(versions).findAllByRole('listitem')
-    expect(within(rows[0]).getByText('Version 3 (1.2.0)')).toBeTruthy()
+    expect(within(rows[0]).getByText('v1.2.0')).toBeTruthy()
     expect(within(rows[0]).getByText('shared by Anna')).toBeTruthy()
     // The month as a word: no reader has to guess the order.
     expect(within(rows[0]).getByText('13 Sep 2026')).toBeTruthy()
@@ -704,7 +704,7 @@ describe('CatalogBrowserModal — detail', () => {
     expect(within(rows[1]).queryByRole('img')).toBeNull()
     // Notes stay behind the row's notes icon until asked for.
     expect(within(rows[0]).queryByText(/Line one/)).toBeNull()
-    const notes = within(rows[0]).getByRole('button', { name: CATALOG_TEXT.releaseNotesFor('Version 3 (1.2.0)') })
+    const notes = within(rows[0]).getByRole('button', { name: CATALOG_TEXT.releaseNotesFor('v1.2.0') })
     expect(notes.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(notes)
     expect(notes.getAttribute('aria-expanded')).toBe('true')
@@ -1022,5 +1022,47 @@ describe('CatalogBrowserModal — who can use a skill', () => {
     fireEvent.click(screen.getByRole('button', { name: 'erp-lookup' }))
     expect(screen.getByRole('heading', { name: 'erp-lookup' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Who can use erp-lookup…' })).toBeNull()
+  })
+})
+
+describe('CatalogBrowserModal — Details on a tile', () => {
+  const get = vi.fn()
+  beforeEach(() => {
+    get.mockImplementation(async (target: { itemUuid: string }) =>
+      target.itemUuid === 'u-rates'
+        ? { ok: false, code: 'not_found', message: 'This agent has no Details page.' }
+        : { ok: true, details: { source: 'generated', format: 'markdown', markdown: '## About\n\nReads invoices.', generated: null, warnings: [], revisionNumber: 1 } })
+    Object.assign(window.api, {
+      agentDetails: { get, openFrame: vi.fn(), releaseFrame: vi.fn(), onEscape: () => () => {} }
+    })
+  })
+
+  it('leads an agent tile’s footer, left of Install; a skill and an agent without a page have none', async () => {
+    mount()
+    await loaded()
+    const footer = await waitFor(() => {
+      const details = within(tile('Invoice Watcher')).getByRole('button', { name: 'Details of Invoice Watcher' })
+      return details.parentElement!
+    })
+    const buttons = within(footer).getAllByRole('button').map((b) => b.textContent)
+    expect(buttons).toEqual(['Details', CATALOG_TEXT.get])
+    expect(CATALOG_TEXT.get).toBe('Install')
+    expect(get).toHaveBeenCalledWith({ kind: 'catalog', itemUuid: 'u-invoices' })
+    await waitFor(() => expect(get).toHaveBeenCalledWith({ kind: 'catalog', itemUuid: 'u-rates' }))
+    expect(within(tile('Exchange Rates')).queryByRole('button', { name: /^Details of/ })).toBeNull()
+    expect(within(tile('erp-lookup')).queryByRole('button', { name: /^Details of/ })).toBeNull()
+    expect(get).not.toHaveBeenCalledWith({ kind: 'catalog', itemUuid: 'u-erp' })
+  })
+
+  it('opens the Details modal over the grid without opening the item, and a click inside it keeps the dialog', async () => {
+    mount()
+    await loaded()
+    fireEvent.click(await within(tile('Invoice Watcher')).findByRole('button', { name: 'Details of Invoice Watcher' }))
+    const details = await screen.findByRole('dialog', { name: 'Details: Invoice Watcher' })
+    expect(await within(details).findByText('Reads invoices.')).toBeTruthy()
+    fireEvent.mouseDown(within(details).getByText('Reads invoices.'))
+    expect(onClose).not.toHaveBeenCalled()
+    // Still on the grid: the tile's Details is not the tile's body.
+    expect(screen.queryByRole('button', { name: CATALOG_TEXT.back })).toBeNull()
   })
 })

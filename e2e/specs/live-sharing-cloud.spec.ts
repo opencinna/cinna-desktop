@@ -62,14 +62,14 @@ test('T6 a: a skill published from a cloud agent’s workspace is listed beside 
   const mine = uniqueName(fixture, 'Order desk')
   const built = await buildAgent(b, fixture, { name: mine })
 
-  await test.step('B’s catalog: the cloud agent reads Runs in Cinna, Version 1, by A; its skill reads Skill, by A', async () => {
+  await test.step('B’s catalog: the cloud agent reads Runs in Cinna, v1.0 (its bundle version), by A; its skill reads Skill, by A', async () => {
     const catalog = await openCatalog(b, 'All')
     const agentTile = catalog.getByRole('group', { name: cloud.name, exact: true })
     await expect(agentTile).toContainText('Runs in Cinna')
     await expect(agentTile).not.toContainText('Runs on your computer')
-    await expect(agentTile).toContainText('Version 1')
+    await expect(agentTile).toContainText('v1.0')
     await expect(agentTile).toContainText(`by ${personA.name}`)
-    await expect(agentTile.getByRole('button', { name: 'Get', exact: true })).toBeEnabled()
+    await expect(agentTile.getByRole('button', { name: 'Install', exact: true })).toBeEnabled()
     const skillTile = catalog.getByRole('group', { name: skill, exact: true })
     await expect(skillTile).toContainText('Skill')
     await expect(skillTile).toContainText(`by ${personA.name}`)
@@ -118,7 +118,7 @@ test('T6 b: B Gets the cloud bundle, sees Uninstall and Open in Cinna in Setting
 
   await test.step('Get on the Runs in Cinna tile lands on the installed agent; core lists B’s cloud install at Version 1', async () => {
     const catalog = await openCatalog(b, 'Agents')
-    await catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Get', exact: true }).click()
+    await catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Install', exact: true }).click()
     await expect(catalog).toHaveCount(0, { timeout: 120_000 })
     await expect(b.page.getByRole('heading', { level: 1 })).toHaveText(name)
     await expect.poll(myInstalls, { timeout: 30_000 }).toEqual(['cloud:1'])
@@ -173,6 +173,6 @@ test('T6 b: B Gets the cloud bundle, sees Uninstall and Open in Cinna in Setting
     await expect.poll(myInstalls, { timeout: 30_000 }).toEqual([])
     await expect(section.getByRole('button', { name: `Uninstall ${name}` })).toHaveCount(0, { timeout: 30_000 })
     await section.getByRole('button', { name: 'Back to catalog' }).click()
-    await expect(tile().getByRole('button', { name: 'Get', exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(tile().getByRole('button', { name: 'Install', exact: true })).toBeVisible({ timeout: 30_000 })
   })
 })

@@ -14,7 +14,7 @@ import {
   catalogItemKind,
   catalogItemName,
   catalogItemPeople,
-  catalogVersionLabel,
+  catalogShownVersion,
   cloudInstallOf,
   skillHostManifestIds
 } from '../utils/catalogItems'
@@ -116,7 +116,7 @@ export function catalogEntryViews({
       kind,
       name: catalogItemName(item),
       people: catalogItemPeople(item),
-      version: latest ? catalogVersionLabel(latest.revision_number, latest.version) : null,
+      version: latest ? catalogShownVersion(latest.revision_number, latest.version) : null,
       specs: catalogCredentialSpecs(item),
       cloud,
       desktop: kind === 'desktop_agent' ? (libraryByUuid.get(item.uuid) ?? null) : null,

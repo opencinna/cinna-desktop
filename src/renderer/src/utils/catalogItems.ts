@@ -61,8 +61,8 @@ export const CATALOG_TEXT = {
     skills: 'No skills are in the catalog for you yet.'
   } satisfies Record<CatalogFilter, string>,
   noMatch: 'Nothing matches your search.',
-  get: 'Get',
-  getting: 'Getting…',
+  get: 'Install',
+  getting: 'Installing…',
   update: 'Update',
   updating: 'Updating…',
   /** A cloud agent installed but not synced to this computer yet, so there is nothing to Open. */
@@ -221,6 +221,21 @@ export const SKILL_SHARE_TEXT = {
 export function catalogVersionLabel(revisionNumber: number, version: string | null | undefined): string {
   const label = typeof version === 'string' ? version.trim() : ''
   return label ? `Version ${revisionNumber} (${label})` : `Version ${revisionNumber}`
+}
+
+/**
+ * A version as the catalog shows it (a tile's chip, the detail's header and
+ * its Versions rows): the publisher's own label alone when it has one,
+ * `v1.6` (a label already written `v1.6` is not doubled, and one that is not
+ * a number, such as `beta`, is shown as written), else `Version N`.
+ * The label is what readers know the version by; the revision number is only
+ * the fallback every version has.
+ */
+export function catalogShownVersion(revisionNumber: number, version: string | null | undefined): string {
+  const label = typeof version === 'string' ? version.trim() : ''
+  if (!label) return `Version ${revisionNumber}`
+  if (/^v\d/i.test(label)) return `v${label.slice(1)}`
+  return /^\d/.test(label) ? `v${label}` : label
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']

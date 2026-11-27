@@ -66,7 +66,7 @@ test('§7 1–3, 10: A shares report-bot, B sees one catalog, Gets it and runs i
     await expect(tile).toContainText('Runs on your computer')
     await expect(tile).toContainText('Version 1')
     await expect(tile).toContainText(`by ${personA.name}`)
-    await expect(tile.getByRole('button', { name: 'Get', exact: true })).toBeVisible()
+    await expect(tile.getByRole('button', { name: 'Install', exact: true })).toBeVisible()
     if (fixture.cloudAgent) {
       const cloud = catalog.getByRole('group', { name: fixture.cloudAgent.display_name, exact: true })
       await expect(cloud).toContainText('Runs in Cinna')
@@ -80,7 +80,7 @@ test('§7 1–3, 10: A shares report-bot, B sees one catalog, Gets it and runs i
 
   await test.step('3 B: Get → Finish setting up (erp connected automatically) → runs with the admin’s ERP API', async () => {
     const catalog = await openCatalog(b, 'Agents')
-    await catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Get', exact: true }).click()
+    await catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Install', exact: true }).click()
     await expect(catalog).toHaveCount(0, { timeout: 60_000 })
     await expect(b.page.getByRole('heading', { level: 1 })).toHaveText(name)
     const { row } = finishDialog(b, name)

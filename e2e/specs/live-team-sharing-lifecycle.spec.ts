@@ -204,7 +204,7 @@ test('Get refuses to land on an agent already here, by folder name or by manifes
     const folders = before()
     const catalog = await openCatalogAgents(b)
     const tile = catalog.getByRole('group', { name })
-    await tile.getByRole('button', { name: 'Get', exact: true }).click()
+    await tile.getByRole('button', { name: 'Install', exact: true }).click()
     await expect(tile.getByRole('alert')).toHaveText(/this agent is already on this computer\.$/)
     await expect(catalog).toBeVisible()
     expect(before()).toEqual(folders)

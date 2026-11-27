@@ -431,7 +431,7 @@ export async function skillLocalInstalls(fixture: TeamFixtureBase, token: string
 /** The catalog's Agents → the agent's Get, landing on its page. */
 export async function getAgent(app: PersonApp, name: string): Promise<void> {
   const catalog = await openCatalog(app, 'Agents')
-  await catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Get', exact: true }).click()
+  await catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Install', exact: true }).click()
   await expect(catalog).toHaveCount(0, { timeout: 60_000 })
   await expect(app.page.getByRole('heading', { level: 1 })).toHaveText(name)
 }

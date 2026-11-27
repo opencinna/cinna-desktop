@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import { AlertTriangle, Bot, Check, Download, Loader2, Plug, Search, Sparkles, X } from 'lucide-react'
 import { CATALOG_TEXT } from '../../utils/catalogItems'
 import { CatalogKindBadge } from './CatalogKindBadge'
-import { CHIP, KindIcon, PRIMARY } from './CatalogItemViews'
+import { CHIP, KindIcon, PRIMARY, SECONDARY } from './CatalogItemViews'
+import { AgentDetailsButton } from './AgentDetailsButton'
 import { useCatalogType } from './catalogSurface'
 
 export interface AgentPickerItem {
@@ -21,7 +22,7 @@ export interface AgentPickerItem {
 /**
  * A catalog agent not on this computer yet, rendered in the dedicated
  * "Catalog" section at the bottom of the picker. Unlike {@link AgentPickerItem}
- * these carry a Get action rather than a selection toggle — getting one makes
+ * these carry an Install action rather than a selection toggle — installing one makes
  * it a normal selectable capability (see `useCatalogPicker`).
  */
 export interface CatalogPickerItem {
@@ -73,13 +74,13 @@ interface AgentPickerModalProps {
   // --- catalog section (optional, multi-select only) ---
   /**
    * Catalog agents not on this computer yet, shown in a dedicated section at
-   * the bottom of the list. Each renders with a Get button instead of a
+   * the bottom of the list. Each renders with an Install button (and Details) instead of a
    * selection toggle; the owner gets it and selects the agent it lands as.
    */
   catalogItems?: CatalogPickerItem[]
-  /** Catalog item whose Get is in flight (drives the spinner). */
+  /** Catalog item whose Install is in flight (drives the spinner). */
   installingCatalogId?: string | null
-  /** A Get is running: every Get button waits. */
+  /** An Install is running: every Install button waits. */
   catalogBusy?: boolean
   onInstallCatalog?: (id: string) => void
   /** Section label for the catalog group. */
@@ -252,7 +253,10 @@ export function AgentPickerModal({
       }
     }
     const onMouseDown = (e: MouseEvent): void => {
-      if (cardRef.current && !cardRef.current.contains(e.target as Node)) onClose()
+      const target = e.target as Node
+      // The Details modal a catalog card opens is portaled outside the card.
+      if (target instanceof Element && target.closest('[data-agent-details-modal]')) return
+      if (cardRef.current && !cardRef.current.contains(target)) onClose()
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('mousedown', onMouseDown)
@@ -465,7 +469,7 @@ export function AgentPickerModal({
               ))}
 
               {/* Catalog section — catalog agents not on this computer yet,
-                  with a Get action. Sits at the very bottom, after the user's
+                  with an Install action. Sits at the very bottom, after the user's
                   own agents/MCP. */}
               {filteredCatalog.length > 0 && (
                 <div>
@@ -529,6 +533,14 @@ export function AgentPickerModal({
                             )}
                           </div>
                           <div className="flex items-center justify-end gap-1.5 border-t border-[var(--color-border)] px-3 py-2">
+                            {/* First in the row: appearing once main answers moves Install nowhere. */}
+                            <AgentDetailsButton
+                              key={item.id}
+                              target={{ kind: 'catalog', itemUuid: item.id }}
+                              agentName={item.name}
+                              className={SECONDARY}
+                              iconSize={11}
+                            />
                             <button
                               type="button"
                               disabled={catalogBusy}

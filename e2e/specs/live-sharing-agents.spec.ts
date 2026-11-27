@@ -118,7 +118,7 @@ test('A1 named people, then everyone: B and C can Get it and D cannot; made publ
   const b = await team.open('b')
   await test.step('B: the catalog lists it with Get', async () => {
     const catalog = await openCatalog(b, 'Agents')
-    await expect(catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Get', exact: true })).toBeVisible()
+    await expect(catalog.getByRole('group', { name, exact: true }).getByRole('button', { name: 'Install', exact: true })).toBeVisible()
     await b.page.keyboard.press('Escape')
     await expect(catalog).toHaveCount(0)
   })
@@ -294,7 +294,7 @@ test('A3 the composer’s agent picker offers B a catalog agent not on B’s com
     await expect(card).toContainText('Runs on your computer')
     await expect(card).toContainText('Version 1')
     await expect(card).toContainText(`by ${personA.name}`)
-    await expect(card.getByRole('button', { name: 'Get', exact: true })).toBeVisible()
+    await expect(card.getByRole('button', { name: 'Install', exact: true })).toBeVisible()
     await expect(picker().getByRole('group', { name: skill, exact: true })).toHaveCount(0)
     await expect(picker().getByText(skill)).toHaveCount(0)
     await card.scrollIntoViewIfNeeded()
@@ -302,7 +302,7 @@ test('A3 the composer’s agent picker offers B a catalog agent not on B’s com
   })
 
   await test.step('Get: the agent is installed in B’s agents home and selected for the chat', async () => {
-    await picker().getByRole('group', { name, exact: true }).getByRole('button', { name: 'Get', exact: true }).click()
+    await picker().getByRole('group', { name, exact: true }).getByRole('button', { name: 'Install', exact: true }).click()
     await expect(picker().getByRole('group', { name, exact: true })).toHaveCount(0, { timeout: 60_000 })
     await expect.poll(async () => (await b.page.evaluate(() => window.api.localAgents.list())).agents.some((row) => row.name === name)).toBe(true)
     const local = await findAgent(b, name)
@@ -352,7 +352,7 @@ test('A4 Settings → Catalog: B Gets an agent there, takes A’s change with Up
     await expect(tile()).toContainText('Version 1')
     await tile().scrollIntoViewIfNeeded()
     await shot(b, 'settings-catalog-list.png')
-    await tile().getByRole('button', { name: 'Get', exact: true }).click()
+    await tile().getByRole('button', { name: 'Install', exact: true }).click()
     await expect(b.page.getByRole('heading', { level: 1 })).toHaveText(name, { timeout: 60_000 })
     await expect
       .poll(async () => (((await catalogEntry(fixture, personB.token, agent.slug))?.my_installs ?? []) as any[]).map((r) => `${r.where}:${r.revision_number}`))
@@ -492,7 +492,7 @@ test('A5 profiles and an unreachable core: a local profile has no catalog; A and
         await item.click()
         const picker = a.page.getByRole('dialog', { name: 'Add agents & tools' })
         await expect(picker).toBeVisible()
-        await expect(picker.getByRole('button', { name: 'Get', exact: true })).toHaveCount(0)
+        await expect(picker.getByRole('button', { name: 'Install', exact: true })).toHaveCount(0)
         await a.page.keyboard.press('Escape')
       } else {
         observe('local profile: Add to chat has no Add agents / MCP (nothing to add)')
