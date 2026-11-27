@@ -12,7 +12,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 - **Active-First Ordering** — On open, already-selected cards float to the top; they then hold position while the user toggles (a card never jumps under the cursor). The order snapshot re-sorts only on the next open or when the available capability set changes. Ported from the cinna-mobile picker.
 - **Chat-mode Sub-menu** — An in-place sub-view of the `[+]` menu (back-navigable) listing the user's chat modes, mirroring the `~` shortcut popup.
 - **Actions Sub-menu** — An in-place sub-view (back-navigable) for one-off things done *to the conversation* rather than set up for it. Its only entry is **Improvement request…**, which opens a dialog sending a cloud bundle agent's conversation to the bundle's publisher. See [Improvement Request](../improvement_requests/improvement_requests.md).
-- **Catalog Section** — A dedicated group at the bottom of the Capability Picker listing the catalog's agents not on this computer yet: ones that run in Cinna (not installed) and ones that run on this computer (no local copy), never skills. Each card is drawn like a catalog tile, kind badge included, and carries a **Get** button (not a selection toggle); the Get runs inline, the card spins meanwhile, and on success the new agent is selected automatically. Cinna-only — empty for non-Cinna profiles. See [Inline Catalog Install](../../agents/bundles_catalog/inline_install.md).
+- **Catalog Section** — A dedicated group at the bottom of the Capability Picker listing the catalog's agents not on this computer yet: ones that run in Cinna (not installed) and ones that run on this computer (no local copy), never skills. Each card is drawn like a catalog tile, kind badge included, and carries an **Install** button (not a selection toggle); the Install runs inline, the card spins meanwhile, and on success the new agent is selected automatically. Cinna-only — empty for non-Cinna profiles. See [Inline Catalog Install](../../agents/bundles_catalog/inline_install.md).
 
 ## User Stories / Flows
 
@@ -37,7 +37,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 
 ### Get from the Catalog (Cinna users)
 1. Below the user's own agents/MCP, a **Catalog** group lists the catalog's agents the user does not have on this computer yet, cloud and desktop, from the same cached listing the catalog dialog reads.
-2. User clicks **Get** on a catalog card → the card spins while the Get runs (a cloud agent: server install → remote-agent sync → local agent appears; a desktop agent: team sharing's Get into the agents home). Other Get buttons disable meanwhile.
+2. User clicks **Install** on a catalog card → the card spins while the Get runs (a cloud agent: server install → remote-agent sync → local agent appears; a desktop agent: team sharing's Get into the agents home). Other Get buttons disable meanwhile.
 3. On success the new agent drops out of the Catalog group, appears as a normal capability card, and is auto-selected — ready to start the chat. If a cloud install is missing credentials nothing extra happens here: the agent auto-replies "setup not complete" on the first message (handled by [Agents](../../agents/agents/agents.md)), so the in-chat flow stays one click.
 
 ## Business Rules

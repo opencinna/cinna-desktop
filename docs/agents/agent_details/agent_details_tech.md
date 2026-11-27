@@ -23,7 +23,8 @@ Preload: `window.api.agentDetails` (`get`, `openFrame`, `releaseFrame`).
 Renderer
 - `src/renderer/src/hooks/useAgentDetails.ts`: the query, key `['agent-details', profileId, targetKey]`, refetched on every mount.
 - `src/renderer/src/components/agents/AgentDetailsButton.tsx`, `AgentDetailsModal.tsx` (also `agentDetailsShown`, `AGENT_DETAILS_TEXT`).
-- Placement: `CatalogItemViews.tsx` (header button, version rows), `ExternalAgentActionsMenu.tsx` (Cinna agent ⋯), `local/AgentActionsMenu.tsx` (folder agent ⋯), `local/ManifestCards.tsx` and `local/VaultOverview.tsx` (vault Description card).
+- Placement: `CatalogItemViews.tsx` (`CatalogItemTile` footer, first in the row for agents and never for skills, keyed by item uuid with `overlayAttrs` marking its modal as catalog UI; detail header; version rows), `AgentPickerModal.tsx` (each catalog card's footer, left of Install), `ExternalAgentPage.tsx` (header, immediately left of Settings / Start chat, only when `remoteTargetType === 'agent'` and `remoteTargetId` is set) and `local/LocalAgentPage.tsx` (header, folder and vault agents, `local` target keyed by agent id). The ⋯ menus (`ExternalAgentActionsMenu.tsx`, `local/AgentActionsMenu.tsx`) and the vault Description card (`VaultOverview.tsx`; `DescriptionCard` has no `extraActions` any more) carry no Details.
+- Every placement mounts its own `useAgentDetails` through `AgentDetailsButton`, so each agent tile in a list is one `agent-details:get` on mount (the query is per target key and the main cache revalidates by ETag). The picker's outside-click handler ignores clicks inside `[data-agent-details-modal]`; the modal is portaled out of the picker's card.
 
 ## IPC Channels
 
@@ -69,4 +70,4 @@ Failures are data (codes `unsupported`, `not_found`, `unavailable`); a thrown er
 
 ## Tests
 
-- `agentDetailsService.test.ts`, `agentDetailsFrameServer.test.ts`, `htmlPreviewGuards.test.ts` (det- cases), `agentFileService.test.ts` and `vaultFileSource.test.ts` (reserved files), renderer `AgentDetailsModal.test.tsx`, `local/AgentActionsMenu.test.tsx`.
+- `agentDetailsService.test.ts`, `agentDetailsFrameServer.test.ts`, `htmlPreviewGuards.test.ts` (det- cases), `agentFileService.test.ts` and `vaultFileSource.test.ts` (reserved files), renderer `AgentDetailsModal.test.tsx`, `AgentPickerModal.test.tsx` (Details left of Install only for an item with a page; a click or Escape inside the modal closes only the modal), `CatalogBrowserModal.test.tsx` (tiles), `local/AgentActionsMenu.test.tsx` (the menu no longer offers it), and `utils/catalogItems.test.ts` (`catalogShownVersion`).

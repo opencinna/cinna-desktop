@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A person deciding whether to install an agent, or opening one for the first time, reads everything it can do on one page, without clicking through settings tabs. A **Details** control opens that page in a modal from the catalog and from an installed or own agent's page. The agent's `description` is untouched: it stays the short line on tiles, lists and headers.
+A person deciding whether to install an agent, or opening one for the first time, reads everything it can do on one page, without clicking through settings tabs. A **Details** button opens that page in a modal from the catalog, from the agent picker's catalog cards and from an installed or own agent's page. The agent's `description` is untouched: it stays the short line on tiles, lists and headers.
 
 ## Core Concepts
 
@@ -15,10 +15,11 @@ A person deciding whether to install an agent, or opening one for the first time
 
 ## User Stories / Flows
 
-1. Before installing, the user opens a catalog item. A **Details** button sits in the item's header, and each version row carries a Details icon for that revision. A version older than the Details feature has no page; its modal says so and offers no retry.
-2. On an installed or own cloud agent's page, **Details** is an entry of the ⋯ menu. A folder agent's page has the same entry, first in its ⋯ menu, when its folder holds a Details file. A vault agent's Description card carries the control.
+1. Before installing, the user sees a secondary **Details** button leading every agent tile's footer (Settings → Catalog and the catalog dialog), left of Install / Update / Open, and on every catalog card of the chat's agent picker. Opening the item adds one in its header, and each version row carries a Details icon for that revision. Skills never have one. A version older than the Details feature has no page; its modal says so and offers no retry.
+2. On an agent's own page, **Details** is a header button immediately left of Settings / Start chat, never an entry of the ⋯ menu. A Cinna agent shows it when it is a synced remote agent with a core target; a folder or vault agent shows it when its folder (or vault) holds a Details file. The menu entry and the vault Description card's control were retired so the control is in one place on every page, where a reader looks before choosing to chat.
 3. The modal shows markdown as a document, or the publisher's HTML in a frame. A custom page from core also shows the Publisher's page / Platform summary switch.
-4. A link in a publisher's HTML opens in the user's browser; the page itself never moves.
+4. Opened from the picker, the modal does not close the picker beneath it, and Escape closes only the modal.
+5. A link in a publisher's HTML opens in the user's browser; the page itself never moves.
 
 ## Business Rules
 
@@ -27,6 +28,7 @@ A person deciding whether to install an agent, or opening one for the first time
   - Hidden: the server does not advertise Details (the `agent_details` discovery flag is absent or below 1), the profile is not a signed-in Cinna account (for a remote target), core answers 404 (no access, unknown revision, a skill, or an agent that never had one), a local agent has no file, or the target is malformed.
   - Kept: any other failure (network, 5xx, 403, an answer in an unknown shape, a vault that is locked, a file over the cap or not UTF-8). The modal says why and offers Retry. A button that vanishes on a flaky network would read as "this agent has no page".
   - Skills never have Details: only cloud and desktop catalog agents offer the control.
+  - A tile asks for its own page, so a list of agent tiles costs one `agent-details:get` per tile on mount (cached by URL and revalidated, so a reopen is a 304). The button sits first in the footer row: when main's answer arrives later it appears to the left and moves no other button (ux_rules rule 1).
 - **Nothing closes on an error.** Loading and failures stay in the modal body.
 - **A folder agent's file follows core's rules (C1).** At most 1 MiB, strict UTF-8, whitespace-only counts as absent, HTML before markdown. An HTML file that is too large or not UTF-8 falls back to the markdown one; if neither is usable the failure names the file and why ("is over 1 MiB", "is not UTF-8 text"), so its builder learns what to fix. Warnings (`both_present`, `too_large`, `invalid_encoding`) are informational; they never pick the winner. The file is read again on every request, so an edit shows on the next open.
 - **The file must be inside the agent folder, and a file.** It is read through the agent-file gate, stricter than a file reference: an approval for a path outside the folder does not count, nothing prompts, and a credential file is never read.
@@ -47,9 +49,9 @@ publisher HTML             -> AgentDetailsModal -> agent-details:open-frame -> d
 
 ## Integration Points
 
-- [Bundles Catalog](../bundles_catalog/bundles_catalog.md): the catalog dialog and Settings → Profile → Catalog show the header button and the version-row icons.
-- [Remote Agents](../remote_agents/remote_agents.md): a synced Cinna agent's ⋯ menu offers Details.
-- [Local Agents](../local_agents/agents_tab.md) and [Vault](../vault/vault.md): a folder or vault agent's own file.
+- [Bundles Catalog](../bundles_catalog/bundles_catalog.md): the catalog dialog and Settings → Profile → Catalog show the tile button, the header button and the version-row icons; the version label the modal shows from a row is the catalog's own (`v1.6`, else `Version N`). The chat's agent picker shows the button on its catalog cards ([Inline Catalog Install](../bundles_catalog/inline_install.md)).
+- [Remote Agents](../remote_agents/remote_agents.md): a synced Cinna agent's page header carries Details.
+- [Local Agents](../local_agents/agents_tab.md) and [Vault](../vault/vault.md): a folder or vault agent's own file, with the button in the agent page's header.
 - [Kit Contract](../local_agents/kit_contract.md#agent-details-page-1280): the reserved paths and the guide that tells a builder agent when to write one (only when the user asks).
 - [File Preview](../../chat/file_preview/file_preview.md#html-pages): the same `cinna-preview:` scheme and navigation guards, with a stricter `det-` host.
 - [Technical details](agent_details_tech.md).
