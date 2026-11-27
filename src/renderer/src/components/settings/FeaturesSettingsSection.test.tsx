@@ -30,8 +30,8 @@ beforeEach(() => {
 })
 vi.mock('../../hooks/useProviders', () => ({ useProviders: () => ({ data: providers }) }))
 vi.mock('../../hooks/useModels', () => ({ useModels: () => ({ data: models }) }))
-// Its own section with its own test (FinderQuickActionSection.test.tsx).
-vi.mock('./FinderQuickActionSection', () => ({ FinderQuickActionSection: () => null }))
+// Its rows have their own test (FinderQuickActionSection.test.tsx).
+vi.mock('./FinderQuickActionSection', () => ({ FinderQuickActionRows: () => null }))
 const NO_SPEECH: SpeechStatus = { supported: false, engine: null, authorization: 'unknown', available: false, cloud: { mode: 'off', setting: '', service: 'core', usable: false, providers: [], relay: { available: false } } }
 let speech: SpeechStatus = NO_SPEECH
 vi.mock('../chat/voice/useSpeechStatus', () => ({ useSpeechStatus: () => speech }))
@@ -59,10 +59,16 @@ const { useUIStore } = await import('../../stores/ui.store')
  * label (ux_rules rule 12).
  */
 describe('FeaturesSettingsSection', () => {
-  it('is three titled sections of one-line rows, with the descriptions behind the tips', () => {
+  it('is five titled sections of one-line rows, with the descriptions behind the tips', () => {
     render(<FeaturesSettingsSection />)
 
-    expect(screen.getAllByRole('heading').map((h) => h.textContent)).toEqual(['Capabilities', 'AI Functions', 'Interface'])
+    expect(screen.getAllByRole('heading').map((h) => h.textContent)).toEqual(['Capabilities', 'AI Functions', 'Interface', 'Voice and Audio', 'OS Integration'])
+    const sectionOf = (name: string): string | null | undefined =>
+      screen.getByRole('switch', { name }).closest('section')?.querySelector('h2')?.textContent
+    expect(sectionOf('Audio input')).toBe('Voice and Audio')
+    expect(sectionOf('Enable Tray Icon')).toBe('OS Integration')
+    expect(sectionOf('Desktop notifications')).toBe('OS Integration')
+    expect(screen.getByRole('group', { name: 'Cloud transcription' }).closest('section')?.querySelector('h2')?.textContent).toBe('Voice and Audio')
     // Audio input counts even with no speech engine: it is always rendered, disabled.
     // Enable media controls does not: it shows only while Audio input is on.
     expect(screen.getAllByRole('switch')).toHaveLength(14)

@@ -26,7 +26,7 @@ Renderer
 - `src/renderer/src/components/chat/PathRefBadge.tsx`: `PathRefBadge`, `PathRefBadgeList`.
 - `src/renderer/src/components/chat/ChatInput.tsx`: renders the chips, sends them.
 - `src/renderer/src/components/chat/MessageContextMenu.tsx`: `referenceChip(ref)` (replaces `referenceDraft`).
-- `src/renderer/src/components/settings/FinderQuickActionSection.tsx`, mounted last in `FeaturesSettingsSection.tsx`.
+- `src/renderer/src/components/settings/FinderQuickActionSection.tsx` exports `FinderQuickActionRows`, rendered inside the OS Integration list of `FeaturesSettingsSection.tsx` after Desktop notifications.
 - `src/renderer/src/components/settings/SettingsLayout.tsx` and `src/renderer/src/components/ui/usePopover.ts`: see Related change.
 
 Tests: a `.test.ts(x)` beside each of the above; `e2e/bare-mac/specs/finder-mention.spec.ts` (see Testing).
@@ -57,7 +57,7 @@ Preload: `window.api.pathMention.take()`, `.onPending(handler)` (returns unsubsc
 - `usePathMentions` subscribes to `onPending` and takes once on mount. `takePathMentions`: empty take → nothing; `busyElsewhere()` (an `[aria-modal="true"]` element, or `activeView !== 'chat'`) → `addToNewChat(agentId, refs, agentMatch)` + toast with `link: null`; otherwise `startAgentChat(agentId, { pathRefs, agentMatch })`.
 - `ChatInput` reads `pathRefs` via `useComposerDraftField(draftKey, 'pathRefs')`; the chips share the attachment row with attachments and note badges (`align="right"`). `hasContent`, the Send-disabled and Stop-versus-Send conditions all count chips. `outgoing = withPathRefs(trimmed, pathRefs)` is what goes to `onNewChat` or `composer.submit`. `clearComposer` filters out sent paths rather than comparing array identity.
 - `PathRefBadge` truncates the label with `truncateFilename` (exported from `AttachmentBadge.tsx`) so an extension survives.
-- `FinderQuickActionSection` returns null unless `status.supported`; the "older Cinna" and error rows render only while true, below the switch, so nothing above moves. The status refetches on window focus because the user can delete the workflow in Finder.
+- `FinderQuickActionRows` returns null unless `status.supported`; the "older Cinna" and error rows render only while true, below the switch, so nothing above moves. The status refetches on window focus because the user can delete the workflow in Finder.
 
 ## Configuration
 

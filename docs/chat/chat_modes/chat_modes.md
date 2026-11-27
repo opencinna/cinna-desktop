@@ -8,7 +8,7 @@ Let users define named presets that bundle a runtime engine, credential/model, i
 
 - **Chat Mode** — A saved configuration preset with a name, optional engine/credential/model, instructions, tool policy and a set of MCP providers, and a color: Theme Default or one of 10 presets
 - **Default Chat Mode** — At most one mode per user can be flagged `isDefault`. The new-chat screen auto-applies it whenever the user lands there without an explicit choice — this is the only implicit fallback when routing a message; there is no longer a "default LLM provider" concept
-- **Runtime Mode** — One of four chat modes the app creates itself, one per agent runtime: Claude Agent, Codex, Antigravity, OpenCode. Each stands for a chat-owned session on that runtime with its own file and shell tools in a folder of the chat's own. They are the first group in Settings > Chats and the **Runtimes** group in the composer. Everything else is a saved mode
+- **Runtime Mode** — One of four chat modes the app creates itself, one per agent runtime: Claude Agent, Codex, Antigravity, OpenCode. Each stands for a chat-owned session on that runtime with its own file and shell tools in a folder of the chat's own. They are the first group in Settings > Chat Modes and the **Runtimes** group in the composer. Everything else is a saved mode
 - **Workspace** — The tool policy runtime modes are created with (Tools: Workspace, beside Connected tools and No tools): Cinna's tools and the chat's MCP servers *plus* the runtime's own file and shell tools, working in the chat's folder. See [Workspace tool policy](#workspace-tool-policy)
 - **Effort** — Low / Medium / High, the work tier a runtime resolves its model or reasoning level from. Every mode has it; an explicit model wins over it
 - **Theme Default** — The color `theme`: it names no hue but follows the active accent, so under a server brand the composer wears the brand's accent. Offered first in the color picker, as a labelled chip. Default modes take it; a non-default runtime mode keeps its engine's color
@@ -19,7 +19,7 @@ Let users define named presets that bundle a runtime engine, credential/model, i
 
 ### Creating a chat mode
 
-1. User navigates to Settings > Chats (first tab)
+1. User navigates to Settings > Chat Modes (first tab)
 2. User clicks "Add Chat Mode"
 3. Inline form shows Name and Runtime, plus AI Credentials for OpenCode. More options contains color, Effort, model override, Tools (Workspace, Connected tools, No tools), Instructions, and MCP providers.
 4. User clicks "Create Mode" or presses Enter in Name — mode is saved immediately
@@ -27,7 +27,7 @@ Let users define named presets that bundle a runtime engine, credential/model, i
 
 ### Editing a chat mode
 
-1. User expands a mode card in Settings > Chats
+1. User expands a mode card in Settings > Chat Modes
 2. Any change (color, provider, model, MCP toggles) saves automatically
 3. Name saves on blur or Enter key press; instructions and explicit model IDs save on blur. Rapid edits preserve each other while saves run in order.
 4. Claude, Codex and Antigravity modes allow runtime, effort, model, tool policy and instruction edits without an AI credential. Runtime installation, login and policy compatibility are checked when the chat starts; saving a mode does not start a CLI.

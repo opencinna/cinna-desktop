@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react'
-import { ExternalLink, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ExternalLink, Plus, Trash2 } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import type { LocalCredentialType, ServiceCredentialDto } from '../../../../shared/serviceCredentials'
 import { credentialResult, useServiceCredentials } from '../../hooks/useServiceCredentials'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
-import { SettingsAddButton, SettingsButton, SettingsIconButton, SettingsInfoTip, SettingsSection } from './SettingsLayout'
+import { SettingsAddButton, SettingsButton, SettingsIconButton, SettingsInfoTip, SettingsRefreshButton, SettingsSection } from './SettingsLayout'
 import { CredentialTypePicker, LocalCredentialForm, credentialTypeTitle } from './LocalCredentialForm'
 import { AccountReferenceLabel, CredentialRow, ManageCredentialButton, openExternalUrl } from './CredentialRow'
 import { credentialHealth, credentialManageUrl, credentialOwnership, profileReference } from './credentialPresentation'
@@ -55,14 +55,14 @@ export function ServiceCredentialsSection({ cloud = false }: { cloud?: boolean }
     {profile?.cinnaServerUrl && <SettingsButton disabled={pending} onClick={() => {
       // Suffix-joined like the per-credential link, so a Core under a path prefix keeps it.
       if (profile.cinnaServerUrl) void openExternalUrl(profile.cinnaServerUrl.replace(/\/+$/, '') + '/credentials', setError)
-    }}><ExternalLink size={14} />Manage on Remote</SettingsButton>}
-    <SettingsButton disabled={pending || !profile?.cinnaServerUrl} onClick={async () => {
+    }}><ExternalLink size={12} />Manage on Remote</SettingsButton>}
+    <SettingsRefreshButton busy={pending} disabled={!profile?.cinnaServerUrl} onClick={async () => {
       if (!profile?.cinnaServerUrl) return
       setPending(true); setError('')
       try { credentialResult(await window.api.serviceCredentials.sync(profile.id, profile.cinnaServerUrl)); await refetch() }
       catch (err) { setError(unwrapIpcError(err)) }
       finally { setPending(false) }
-    }}><RefreshCw size={14} className={pending ? 'animate-spin' : undefined} />{pending ? 'Syncing…' : 'Sync Now'}</SettingsButton>
+    }} />
   </div> : undefined}>
     {reference && <p className="flex text-[13px] text-[var(--color-text-muted)]"><AccountReferenceLabel reference={reference} onError={setError} /></p>}
     {items.map(c => cloud

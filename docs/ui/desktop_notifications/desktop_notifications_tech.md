@@ -73,7 +73,7 @@ Subscribes to `onOpenChat`; on a push opens the chat and then takes the pending 
 
 ## Renderer Components
 
-- `FeaturesSettingsSection` — a `SettingsToggleRow` in the Interface list, directly after **Enable Tray Icon**, before **Show sections in Agents sidebar**. Checked unless the setting is `false` (absent reads as on). Description behind the (?) tip; `title` names the state. Written through `useAppSettings`' `setSetting` like the other service-backed switches.
+- `FeaturesSettingsSection` — a `SettingsToggleRow` in the OS Integration list, directly after **Enable Tray Icon**, before the Finder Quick Action rows. Checked unless the setting is `false` (absent reads as on). Description behind the (?) tip; `title` names the state. Written through `useAppSettings`' `setSetting` like the other service-backed switches.
 
 ## Configuration
 

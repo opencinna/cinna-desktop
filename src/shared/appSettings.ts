@@ -267,8 +267,8 @@ export interface AppSettingsSchema {
    */
   dashboardsCapability: CapabilityState
   /**
-   * Voice input's cloud transcription (Settings › Features › Cloud
-   * transcription): `'off'` (the default; on-device only), `'fallback'` (Gemini
+   * Voice input's cloud transcription (Settings › Features › Voice and
+   * Audio › Cloud transcription): `'off'` (the default; on-device only), `'fallback'` (Gemini
    * Live when the on-device engine is unsupported) or `'always'`. Audio then
    * goes to Google under the user's own Gemini provider key. Read by main's
    * `speechService` when a dictation opens; a session never switches engine.

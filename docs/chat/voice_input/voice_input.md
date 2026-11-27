@@ -38,7 +38,7 @@ A microphone button in the chat composer, left of Send, turns what the user says
 6. **Silence** ends in silence: a dictation in which nothing was heard stops without a toast. Only a recording under a quarter of a second gets "Nothing was recorded."
 
 ### From the headphones (EarPods, AirPods)
-Off until the user turns on Settings → Features → Interface → **Enable media controls** (below Audio input, and shown only while Audio input is on). With it off, Cinna never registers the headphone button, so other apps keep it.
+Off until the user turns on Settings → Features → Voice and Audio → **Enable media controls** (below Audio input, and shown only while Audio input is on). With it off, Cinna never registers the headphone button, so other apps keep it.
 
 1. A single click on the headphone button does what a click on the microphone does.
 2. A double click while idle sends the draft exactly as Send would, and does nothing where Send is disabled or where Stop stands in its place. A double click never stops a turn.
@@ -51,10 +51,10 @@ Off until the user turns on Settings → Features → Interface → **Enable med
 
 ### Hiding and showing it
 1. The same right-click menu ends with an **Audio input** switch. Turning it off hides the button and shows an info toast that says where to turn it back on, with a link to Settings → Features. A recording in progress is discarded, and the toast says so.
-2. The button is hidden by default. **Settings → Features → Interface → Audio input** turns it on. The row is always rendered, above Cloud transcription, so choosing a mode never inserts a row above the control under the pointer; where voice input is unavailable it is disabled and unchecked, and its (?) says to turn on Cloud transcription below. Its (?) text says where the audio goes and follows the cloud mode: on this Mac only; on this Mac with Gemini as the fallback; or Gemini, billed to the user's key.
+2. The button is hidden by default. **Settings → Features → Voice and Audio → Audio input** turns it on. The row is always rendered, above Cloud transcription, so choosing a mode never inserts a row above the control under the pointer; where voice input is unavailable it is disabled and unchecked, and its (?) says to turn on Cloud transcription below. Its (?) text says where the audio goes and follows the cloud mode: on this Mac only; on this Mac with Gemini as the fallback; or Gemini, billed to the user's key.
 
 ### Cloud transcription
-1. **Settings → Features → Interface → Cloud transcription** is a three-button group, **Off** (default), **As a fallback** and **Always**, shaped like Theme's. Under it, a **Service** select (Cinna server / My Gemini key) shows whenever a mode is not Off, so choosing from it never makes it vanish under the pointer. With Service on My Gemini key and more than one usable Gemini provider, a **Gemini provider** picker appears; with one, it is used.
+1. **Settings → Features → Voice and Audio → Cloud transcription** is a three-button group, **Off** (default), **As a fallback** and **Always**, shaped like Theme's. Under it, a **Service** select (Cinna server / My Gemini key) shows whenever a mode is not Off, so choosing from it never makes it vanish under the pointer. With Service on My Gemini key and more than one usable Gemini provider, a **Gemini provider** picker appears; with one, it is used.
 2. Settings never read the signed-in account ([ux_rules rule 21](../../development/ui_guidelines/ux_rules.md)): Features is app-wide, the app holds several profiles on different Cinna servers, and a row that said what this server offers, or how many minutes it has left, would change on a profile switch for a value that is the same on both. So the Cinna server is always selectable, the mode pills are never locked by what a server offers, and there is no availability row, no monthly-minutes row and no server name. Whether the current account's server offers transcription is found out when a dictation starts, and said there as an error toast. The Gemini key comes only from the user's own **AI Credentials** (Default scope); an account-provisioned Gemini row is never offered or billed, because it vanishes on a profile switch. A Service of My Gemini key with no such credential shows a status row that sends the user to AI Credentials.
 3. Turning a mode on from Off with no service saved saves **Cinna server** in the same step (never the billed key), so every running mode has an explicit service. With a mode on and no service saved (never chosen), the select reads **Choose…** and nothing runs in the cloud until the user picks.
 4. The Settings text names the Cinna server as "the server of the account you are signed in to when you dictate", never a server by name.
@@ -129,7 +129,7 @@ Startup: main -> speechService.startProbe() -> cinna-speech probe -> speech:stat
 
 - [Conversation UI](../conversation_ui/conversation_ui.md) — dictation is appended to the composer draft, which outlives the composer; that is why a late transcription still lands.
 - [Pending Messages](../pending_messages/pending_messages.md) — the headphone double click uses the same Send rules, including Stop standing in for Send on an empty input during a turn.
-- [Settings](../../ui/settings/settings.md) — the Features → Interface **Audio input** and **Cloud transcription** (Mode and Service) rows.
+- [Settings](../../ui/settings/settings.md) — the Features → Voice and Audio **Audio input** and **Cloud transcription** (Mode and Service) rows.
 - Cinna server account — the relay uses the profile's server URL and access token, and its discovery document says whether the relay exists. The wire protocol (v1) is owned by cinna-core: its `docs/application/voice_transcription/voice_transcription.md`.
 - [AI Credentials](../../llm/adapters/provider_integration.md) — the Gemini provider whose key cloud transcription uses and bills.
 - [App Shell](../../ui/app_shell/app_shell.md) — the app-wide toast, whose `kind` (info, error) voice input uses.

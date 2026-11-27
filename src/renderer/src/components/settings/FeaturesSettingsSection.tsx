@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { isCredentialActive } from '../../../../shared/credentials'
@@ -10,7 +11,7 @@ import { useUIStore, type SidebarDocking, type ThemePreference } from '../../sto
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useSpeechStatus } from '../chat/voice/useSpeechStatus'
 import { isVoiceCloudService, isVoiceCloudTranscription, type SpeechStatus, type VoiceCloudService, type VoiceCloudTranscription } from '../../../../shared/speech'
-import { FinderQuickActionSection } from './FinderQuickActionSection'
+import { FinderQuickActionRows } from './FinderQuickActionSection'
 import {
   SettingsButton,
   SettingsLabel,
@@ -148,6 +149,12 @@ export function FeaturesSettingsSection(): React.JSX.Element {
 
   const disabled = isLoading || setSetting.isPending
   const saveError = setSetting.error ? unwrapIpcError(setSetting.error, 'Could not save this setting.') : null
+  // The error rows end the tab's last section, sections below most switches:
+  // bring one into view when it arrives, or a failed switch just doesn't move.
+  const errorRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (saveError || isError) errorRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [saveError, isError])
 
   const autoChatTitles = settings?.autoChatTitles === true
   const enableTrayIcon = settings?.enableTrayIcon === true
@@ -421,6 +428,59 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             onToggle={() => setShowTasksButton(!showTasksButton)}
             title={showTasksButton ? 'The Tasks button is in the top bar' : 'The Tasks button is hidden'}
           />
+          <SettingsToggleRow
+            id="feature-agent-sidebar-sections"
+            label="Show sections in Agents sidebar"
+            description="Group agents by their folder or connection. Turn off to show a flat list in the same order."
+            checked={showAgentSidebarSections}
+            disabled={disabled}
+            onToggle={() => {
+              if (!settings || disabled) return
+              setSetting.mutate({ key: 'showAgentSidebarSections', value: !showAgentSidebarSections })
+            }}
+            title={showAgentSidebarSections ? 'Agents are shown in sections' : 'Agents are shown in a flat list'}
+          />
+          <SettingsToggleRow
+            id="feature-local-data-all-profiles"
+            label="Show local agents and chats in all profiles"
+            description="On: chats made while signed out, or with local agents or chat modes, appear in every profile, so signing out keeps them. Off: each chat stays in the profile it was started in. Local agents are available in every profile either way."
+            checked={showLocalDataInAllProfiles}
+            disabled={disabled}
+            onToggle={() => {
+              if (!settings || disabled) return
+              setSetting.mutate({ key: 'showLocalDataInAllProfiles', value: !showLocalDataInAllProfiles })
+            }}
+            title={showLocalDataInAllProfiles ? 'Local chats appear in every profile' : 'Chats stay in the profile they were started in'}
+          />
+          <SettingsToggleRow
+            id="feature-show-hints"
+            label="Show hints"
+            description="Display rotating tips about shortcuts at the bottom of the new-chat screen. Tips you’ve clearly learned stop appearing on their own; turn this off once you know your way around."
+            checked={showHints}
+            disabled={disabled}
+            onToggle={toggleShowHints}
+            title={showHints ? 'Hints are shown on the new-chat screen' : 'Hints are hidden'}
+          />
+          {/* A row of its own under Show hints, in the same list: it is the one
+              verb the toggle above gives the user, and it only exists while
+              hints are on. */}
+          {showHints && (
+            <SettingsRow className="flex items-center justify-between gap-3">
+              {/* One line at 800px in both states: the longer sentence wrapped,
+                  and clicking Reset un-wrapped it and moved the button (rule 1). */}
+              <div className="min-w-0 text-[13px] text-[var(--color-text-muted)]">
+                {canResetHints ? 'Some hints are retired.' : 'No hints retired yet.'}
+              </div>
+              <SettingsButton onClick={resetHints} disabled={!canResetHints}>
+                Reset hints
+              </SettingsButton>
+            </SettingsRow>
+          )}
+        </SettingsRows>
+      </SettingsSection>
+
+      <SettingsSection title="Voice and Audio">
+        <SettingsRows insetDividers>
           {/* Always there, so a cloud mode chosen below never inserts a row
               above the pills under the pointer (ux_rules rule 1). Disabled
               while nothing can transcribe: no on-device engine and no cloud mode. */}
@@ -500,6 +560,11 @@ export function FeaturesSettingsSection(): React.JSX.Element {
               </div>
             )}
           </SettingsRow>
+        </SettingsRows>
+      </SettingsSection>
+
+      <SettingsSection title="OS Integration">
+        <SettingsRows insetDividers>
           <SettingsToggleRow
             id="feature-enable-tray-icon"
             label="Enable Tray Icon"
@@ -523,54 +588,8 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             }}
             title={desktopNotifications ? 'Desktop notifications are on' : 'Desktop notifications are off'}
           />
-          <SettingsToggleRow
-            id="feature-agent-sidebar-sections"
-            label="Show sections in Agents sidebar"
-            description="Group agents by their folder or connection. Turn off to show a flat list in the same order."
-            checked={showAgentSidebarSections}
-            disabled={disabled}
-            onToggle={() => {
-              if (!settings || disabled) return
-              setSetting.mutate({ key: 'showAgentSidebarSections', value: !showAgentSidebarSections })
-            }}
-            title={showAgentSidebarSections ? 'Agents are shown in sections' : 'Agents are shown in a flat list'}
-          />
-          <SettingsToggleRow
-            id="feature-local-data-all-profiles"
-            label="Show local agents and chats in all profiles"
-            description="On: chats made while signed out, or with local agents or chat modes, appear in every profile, so signing out keeps them. Off: each chat stays in the profile it was started in. Local agents are available in every profile either way."
-            checked={showLocalDataInAllProfiles}
-            disabled={disabled}
-            onToggle={() => {
-              if (!settings || disabled) return
-              setSetting.mutate({ key: 'showLocalDataInAllProfiles', value: !showLocalDataInAllProfiles })
-            }}
-            title={showLocalDataInAllProfiles ? 'Local chats appear in every profile' : 'Chats stay in the profile they were started in'}
-          />
-          <SettingsToggleRow
-            id="feature-show-hints"
-            label="Show hints"
-            description="Display rotating tips about shortcuts at the bottom of the new-chat screen. Tips you’ve clearly learned stop appearing on their own; turn this off once you know your way around."
-            checked={showHints}
-            disabled={disabled}
-            onToggle={toggleShowHints}
-            title={showHints ? 'Hints are shown on the new-chat screen' : 'Hints are hidden'}
-          />
-          {/* A row of its own under Show hints, in the same list: it is the one
-              verb the toggle above gives the user, and it only exists while
-              hints are on. */}
-          {showHints && (
-            <SettingsRow className="flex items-center justify-between gap-3">
-              {/* One line at 800px in both states: the longer sentence wrapped,
-                  and clicking Reset un-wrapped it and moved the button (rule 1). */}
-              <div className="min-w-0 text-[13px] text-[var(--color-text-muted)]">
-                {canResetHints ? 'Some hints are retired.' : 'No hints retired yet.'}
-              </div>
-              <SettingsButton onClick={resetHints} disabled={!canResetHints}>
-                Reset hints
-              </SettingsButton>
-            </SettingsRow>
-          )}
+          {/* macOS only; renders nothing elsewhere. */}
+          <FinderQuickActionRows />
           {/*
             One failure, said once. Every switch on this tab reads the same
             query, so the read error is one fact, and it is rendered only while
@@ -579,23 +598,22 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             (ux_rules rule 1). Being last, this row lengthens the list and moves
             nothing above it.
           */}
-          {isError && (
-            <SettingsRow className="text-[13px] text-[var(--color-danger)]">
-              Couldn’t load settings — try reopening this page.
-            </SettingsRow>
-          )}
-          {saveError && (
-            <SettingsRow className="text-[13px] text-[var(--color-danger)]">
-              <p role="alert">{saveError.startsWith('Unknown app setting:')
-                ? 'This running version does not recognize the setting. Restart Cinna Desktop to load the updated app, then try again.'
-                : `Couldn’t save the setting: ${saveError}`}</p>
-            </SettingsRow>
-          )}
+          {(isError || saveError) && <div ref={errorRef} className="divide-y divide-[var(--color-border)] [&>*]:px-0">
+            {isError && (
+              <SettingsRow className="text-[13px] text-[var(--color-danger)]">
+                Couldn’t load settings — try reopening this page.
+              </SettingsRow>
+            )}
+            {saveError && (
+              <SettingsRow className="text-[13px] text-[var(--color-danger)]">
+                <p role="alert">{saveError.startsWith('Unknown app setting:')
+                  ? 'This running version does not recognize the setting. Restart Cinna Desktop to load the updated app, then try again.'
+                  : `Couldn’t save the setting: ${saveError}`}</p>
+              </SettingsRow>
+            )}
+          </div>}
         </SettingsRows>
       </SettingsSection>
-
-      {/* macOS only; renders nothing elsewhere. */}
-      <FinderQuickActionSection />
     </div>
   )
 }

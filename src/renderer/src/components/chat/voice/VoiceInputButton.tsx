@@ -348,7 +348,7 @@ function VoiceInputControl({
     useUIStore.getState().setShowVoiceInput(false)
     composerRef?.current?.focus()
     const hidden = discarded ? 'Audio input is hidden, and the recording was discarded.' : 'Audio input is hidden.'
-    useToastStore.getState().show(`${hidden} Turn it back on in Settings → Features → Interface → Audio input.`, {
+    useToastStore.getState().show(`${hidden} Turn it back on in Settings → Features → Voice and Audio → Audio input.`, {
       kind: 'info',
       link: { label: 'Open Settings → Features', settingsMenu: 'features' }
     })

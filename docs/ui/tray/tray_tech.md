@@ -17,7 +17,7 @@
 
 ### Renderer — main window
 - `src/renderer/src/hooks/useTrayIcon.ts` — mounted once in `Shell` (`src/renderer/src/App.tsx`). Renders the menu-bar PNG to a 2× canvas (lucide `Activity` glyph path + severity dot colored via `SEVERITY_HEX` — no halo ring; glyph color chosen from `prefers-color-scheme`) and pushes it via `window.api.tray.setImage` on worst-severity / system-appearance change. A `pushRef` keeps the latest push closure so the `onRequestIcon` subscription (mounted once with no deps) always re-pushes with the current `worst`/`tooltip`. Subscribes `onFocusChat` (closes the logs + status overlays, clears `agentStatusDetailId`, `setActiveView('chat')` + `setPendingAgentId`), `onFocusStatus` (`setAgentStatusDetailId` + `setAgentStatusOpen(true)`), and `onRequestIcon` (re-pushes the canvas image after main creates the tray at runtime).
-- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — Features tab. Hosts the **Enable Tray Icon** toggle in Interface through `useSetAppSetting`; appearance controls in the same group use the renderer UI store. See [Settings](../settings/settings_tech.md) for the full section inventory.
+- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — Features tab. Hosts the **Enable Tray Icon** toggle in OS Integration through `useSetAppSetting`; appearance controls in the Interface section use the renderer UI store. See [Settings](../settings/settings_tech.md) for the full section inventory.
 - `src/renderer/src/components/agents/AgentStatusOverlay.tsx` — detail selection is backed by the ui-store `agentStatusDetailId` (so the tray can open it at a specific agent); compact "Agents [count]" header with no separator.
 - `src/renderer/src/stores/ui.store.ts` — `agentStatusDetailId: string | null` + `setAgentStatusDetailId`.
 - `src/renderer/src/constants/agentSeverity.ts` — `SEVERITY_HEX` (raw hex per severity for canvas painting).
@@ -62,7 +62,7 @@ Main → main window (`webContents.send`):
 
 ## Renderer Components
 
-- Main window: `useTrayIcon` (icon push + focus/request-icon listeners), `AgentStatusOverlay` (store-backed detail target), `FeaturesSettingsSection` (hosts the **Interface** group + **Enable Tray Icon** switch).
+- Main window: `useTrayIcon` (icon push + focus/request-icon listeners), `AgentStatusOverlay` (store-backed detail target), `FeaturesSettingsSection` (hosts the **OS Integration** section + **Enable Tray Icon** switch).
 - Popup window: `trayPanel.tsx` (root) → `TrayPanel` (list + refresh) → `TrayStatusCard` (rows); `useTrayActions` for imperative commands.
 
 ## Configuration
@@ -70,7 +70,7 @@ Main → main window (`webContents.send`):
 - `trayService.ts` constants: `POPUP_WIDTH` / `POPUP_HEIGHT`, `REOPEN_GUARD_MS`, `FADE_MS` / `FADE_TICK_MS`.
 - `TrayPanel.tsx` constants: `MIN_SPIN_MS`, `FLASH_HOLD_MS`.
 - macOS-only window options: `vibrancy: 'popover'`, `visualEffectState: 'active'`, `hasShadow`.
-- App setting: `enableTrayIcon: boolean` (Settings → Features → Interface), default `true`.
+- App setting: `enableTrayIcon: boolean` (Settings → Features → OS Integration), default `true`.
 
 ## Security
 

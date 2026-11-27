@@ -42,7 +42,7 @@ describe('profile agent settings', () => {
     expect(screen.queryByText('Custom ACP')).toBeNull()
   })
 
-  it('draws each agent as a settings card: a switch for Shown in Desktop, its settings behind an icon only while shown', () => {
+  it('draws each agent as a settings card: a switch for Shown in Desktop, the row itself opening its settings only while shown', () => {
     render(<AgentsSettingsSection />)
     const hidden = screen.getByRole('switch', { name: 'Show Cinna agent in Desktop' })
     expect(hidden.getAttribute('aria-checked')).toBe('false')
@@ -50,11 +50,12 @@ describe('profile agent settings', () => {
     expect(shown.getAttribute('aria-checked')).toBe('true')
     expect(screen.getByText('Hidden from Desktop')).toBeTruthy()
     expect(screen.getByText('Reads the ledger')).toBeTruthy()
-    // Settings only for a shown agent; the hidden one keeps the slot, so both switches line up.
+    // Only a shown agent's row opens settings; no separate settings button remains.
     expect(screen.queryByRole('button', { name: 'Open Cinna agent settings' })).toBeNull()
-    const hiddenCard = hidden.closest('[data-remote-agent]') as HTMLElement
-    expect(hiddenCard.querySelector('span[aria-hidden="true"].w-7')).not.toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Open Ledger helper settings' }))
+    const row = screen.getByRole('button', { name: 'Open Ledger helper settings' })
+    expect(row.textContent).toContain('Ledger helper')
+    expect(row.contains(shown)).toBe(false)
+    fireEvent.click(row)
     expect(ui.setActiveExternalAgentId).toHaveBeenCalledWith('shown')
     expect(ui.setAgentPageMode).toHaveBeenCalledWith('settings')
     expect(ui.setActiveView).toHaveBeenCalledWith('external-agent')
@@ -62,10 +63,10 @@ describe('profile agent settings', () => {
     expect(setVisible).toHaveBeenCalledWith(expect.objectContaining({ id: 'remote' }), true, expect.any(Function))
   })
 
-  it('puts Sync beside the section title and the explanation behind its (?)', () => {
+  it('puts Refresh beside the section title and the explanation behind its (?)', () => {
     render(<AgentsSettingsSection />)
     const section = screen.getByRole('heading', { name: 'core.example.com' }).closest('section') as HTMLElement
-    fireEvent.click(within(section).getByRole('button', { name: 'Sync' }))
+    fireEvent.click(within(section).getByRole('button', { name: 'Refresh' }))
     expect(sync).toHaveBeenCalledTimes(1)
     expect(within(section).getByRole('button', { name: 'About core.example.com' })).toBeTruthy()
     expect(section.textContent).not.toContain('Choose which agents')

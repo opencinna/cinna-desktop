@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 }))
 ;(window as unknown as { api: unknown }).api = { finderQuickAction: api }
 
-const { FinderQuickActionSection } = await import('./FinderQuickActionSection')
+const { FinderQuickActionRows } = await import('./FinderQuickActionSection')
 
 const OFF: FinderQuickActionStatus = { supported: true, installed: false, outdated: false }
 const ON: FinderQuickActionStatus = { supported: true, installed: true, outdated: false }
@@ -20,7 +20,7 @@ function mount(): QueryClient {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
     createElement(QueryClientProvider, { client }, children)
-  render(createElement(FinderQuickActionSection), { wrapper })
+  render(createElement(FinderQuickActionRows), { wrapper })
   return client
 }
 
@@ -39,16 +39,15 @@ describe('Features → OS Integration', () => {
     api.status.mockResolvedValue({ supported: false, installed: false, outdated: false })
     const client = mount()
     await waitFor(() => expect(client.getQueryState(['finder-quick-action', 'status'])?.status).toBe('success'))
-    expect(screen.queryByRole('heading', { name: 'OS Integration' })).toBeNull()
     expect(screen.queryByRole('switch')).toBeNull()
   })
 
-  it('is a titled section whose switch installs, and then removes, the Quick Action', async () => {
+  it('is a row whose switch installs, and then removes, the Quick Action', async () => {
     api.status.mockResolvedValue(OFF)
     api.install.mockResolvedValue({ success: true, status: ON } satisfies FinderQuickActionResult)
     api.uninstall.mockResolvedValue({ success: true, status: OFF } satisfies FinderQuickActionResult)
     mount()
-    expect(await screen.findByRole('heading', { name: 'OS Integration' })).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('switch')).toBeTruthy())
     expect(toggle().getAttribute('aria-checked')).toBe('false')
     // The how-to is behind the (?), not on the surface.
     expect(screen.queryByText(/Quick Actions or Services/)).toBeNull()

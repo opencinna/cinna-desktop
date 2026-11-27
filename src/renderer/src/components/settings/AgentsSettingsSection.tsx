@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { AlertTriangle, RefreshCw, Settings2 } from 'lucide-react'
+import { AlertTriangle, ChevronRight, RefreshCw } from 'lucide-react'
 import { AgentTypeIcon } from '../agents/AgentTypeIcon'
 import { useAgentDesktopVisibility } from '../../hooks/useAgentDesktopVisibility'
 import { useUIStore } from '../../stores/ui.store'
@@ -8,36 +8,39 @@ import { unwrapIpcError } from '../../utils/ipcError'
 import { useAgents, useRemoteSyncStatus, useSyncRemoteAgents } from '../../hooks/useAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { useAuthStore } from '../../stores/auth.store'
-import { SettingsButton, SettingsIconButton, SettingsInfoTip, SettingsSection, SettingsSwitch } from './SettingsLayout'
+import { SettingsInfoTip, SettingsRefreshButton, SettingsSection, SettingsSwitch } from './SettingsLayout'
 
 type RemoteAgent = NonNullable<ReturnType<typeof useAgents>['data']>[number]
 
 /**
  * One Cinna server agent as a settings card (the Expandable Card Pattern's
- * shell, with nothing to expand): its type, name and what it is, a way to
- * its settings page while it is shown, and the switch that shows or hides it
- * in Desktop. The settings slot is held while it is hidden, so the switch
- * never moves under the pointer (ux_rules rule 1).
+ * shell, with nothing to expand): its type, name and what it is, and the
+ * switch that shows or hides it in Desktop. While it is shown, the whole row
+ * apart from the switch is a button to its settings page; hidden, it is not
+ * in Desktop to open. The switch keeps its place in both states (ux_rules
+ * rule 1).
  */
 function AgentVisibilityRow({ agent }: { agent: RemoteAgent }): React.JSX.Element {
   const visibility = useAgentDesktopVisibility()
   const [error, setError] = useState<string | null>(null)
-  const openSettings = `Open ${agent.name} settings`
   const switchId = useId()
+  const summary = <>
+    <AgentTypeIcon agent={agent} agentId={agent.id} size={16} />
+    {/* The description gives way first, then the name: neither runs under the switch. */}
+    <span className="min-w-0 truncate text-[14px] font-medium text-[var(--color-text)]" title={agent.name}>{agent.name}</span>
+    <span className="min-w-0 shrink-[1000] truncate text-[13px] text-[var(--color-text-muted)]">
+      {agent.enabled ? agent.description || 'Shown in Desktop' : 'Hidden from Desktop'}
+    </span>
+  </>
+  const summaryClass = 'mr-2 flex min-w-0 flex-1 items-center gap-2 self-stretch py-2.5 pl-4 pr-2'
   return <div data-remote-agent={agent.id} className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-    <div className="flex items-center gap-2 px-4 py-2.5">
-      <div className={`flex min-w-0 flex-1 items-center gap-2 ${agent.enabled ? '' : 'opacity-50'}`}>
-        <AgentTypeIcon agent={agent} agentId={agent.id} size={16} />
-        {/* The description gives way first, then the name: neither runs under the controls. */}
-        <span className="min-w-0 truncate text-[14px] font-medium text-[var(--color-text)]" title={agent.name}>{agent.name}</span>
-        <span className="min-w-0 shrink-[1000] truncate text-[13px] text-[var(--color-text-muted)]">
-          {agent.enabled ? agent.description || 'Shown in Desktop' : 'Hidden from Desktop'}
-        </span>
-      </div>
+    <div className="flex items-center pr-4">
       {agent.enabled ? (
-        <SettingsIconButton
-          title={openSettings}
-          aria-label={openSettings}
+        <button
+          type="button"
+          aria-label={`Open ${agent.name} settings`}
+          className={`${summaryClass} cursor-pointer text-left transition-colors hover:bg-[var(--color-bg-hover)]
+            focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)]`}
           onClick={() => {
             const ui = useUIStore.getState()
             ui.setActiveExternalAgentId(agent.id)
@@ -46,10 +49,12 @@ function AgentVisibilityRow({ agent }: { agent: RemoteAgent }): React.JSX.Elemen
             ui.setActiveView('external-agent')
           }}
         >
-          <Settings2 size={14} aria-hidden="true" />
-        </SettingsIconButton>
+          {summary}
+          {/* What says the row opens something before the pointer finds it. */}
+          <ChevronRight size={14} aria-hidden="true" className="ml-auto shrink-0 text-[var(--color-text-muted)]" />
+        </button>
       ) : (
-        <span aria-hidden="true" className="h-7 w-7 shrink-0" />
+        <div className={`${summaryClass} opacity-50`}>{summary}</div>
       )}
       {/* Named for what it sets, the same on or off; its state is the switch's own. */}
       <label htmlFor={switchId} className="sr-only">{`Show ${agent.name} in Desktop`}</label>
@@ -111,14 +116,11 @@ export function AgentsSettingsSection(): React.JSX.Element {
             </SettingsInfoTip>
           }
           action={
-            <SettingsButton onClick={() => syncRemote.mutate()} disabled={syncRemote.isPending} aria-busy={syncRemote.isPending}>
-              <RefreshCw size={13} className={syncRemote.isPending ? 'animate-spin' : ''} aria-hidden="true" />
-              Sync
-            </SettingsButton>
+            <SettingsRefreshButton onClick={() => syncRemote.mutate()} busy={syncRemote.isPending} />
           }
         >
           {group.agents.length === 0 ? (
-            <p className="text-[13px] text-[var(--color-text-muted)]">No agents found on this Cinna server. Click Sync to refresh.</p>
+            <p className="text-[13px] text-[var(--color-text-muted)]">No agents found on this Cinna server. Click Refresh to check again.</p>
           ) : (
             <div className="space-y-2">
               {group.agents.map((agent) => <AgentVisibilityRow key={agent.id} agent={agent} />)}

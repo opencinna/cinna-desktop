@@ -58,12 +58,16 @@ it('does not duplicate the header agent-status control in the sidebar', () => {
 })
 
 describe('agent settings scope', () => {
-  it('keeps the second Agents menu under Profile for a Cinna account', () => {
+  it('keeps Agents Config in Settings and Agents under Profile for a Cinna account', () => {
     signInAs('cinna_user')
     useUIStore.setState({ activeView: 'settings', settingsTab: 'local-agents' })
     render(createElement(Sidebar), { wrapper })
-    const agents = screen.getAllByRole('button', { name: 'Agents' })
-    expect(agents).toHaveLength(2)
+    const agents = [
+      screen.getByRole('button', { name: 'Agents Config' }),
+      screen.getByRole('button', { name: 'Agents' })
+    ]
+    // Both scopes name their chat modes menu Chat Modes.
+    expect(screen.getAllByRole('button', { name: 'Chat Modes' })).toHaveLength(2)
     const profile = screen.getByRole('heading', { name: 'Profile U' })
     expect(agents[0].compareDocumentPosition(profile) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(profile.compareDocumentPosition(agents[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -75,7 +79,8 @@ describe('agent settings scope', () => {
     signInAs('local_user')
     useUIStore.setState({ activeView: 'settings', settingsTab: 'profile-agents' })
     render(createElement(Sidebar), { wrapper })
-    expect(screen.getAllByRole('button', { name: 'Agents' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Agents Config' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Agents' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Remote agents' })).toBeNull()
     expect(useUIStore.getState().settingsTab).toBe('chats')
   })

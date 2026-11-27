@@ -22,7 +22,7 @@ const sectionTitles = {
   llm: 'AI Credentials',
   credentials: 'Credentials',
   'profile-credentials': 'Credentials',
-  'local-agents': 'Agents',
+  'local-agents': 'Agents Config',
   'local-dev': 'Local Development',
   mcp: 'MCP Providers',
   accounts: 'User Accounts',

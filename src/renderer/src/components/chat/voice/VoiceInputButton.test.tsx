@@ -433,7 +433,7 @@ describe('VoiceInputButton', () => {
       expect(useUIStore.getState().showVoiceInput).toBe(false)
       expect(screen.queryByRole('button', { name: 'Stop recording' })).toBeNull()
       expect(useToastStore.getState().toast?.message).toBe(
-        'Audio input is hidden, and the recording was discarded. Turn it back on in Settings → Features → Interface → Audio input.'
+        'Audio input is hidden, and the recording was discarded. Turn it back on in Settings → Features → Voice and Audio → Audio input.'
       )
       expect(document.activeElement).toBe(composer)
       composer.remove()
@@ -445,7 +445,7 @@ describe('VoiceInputButton', () => {
       await screen.findByRole('button', { name: 'Audio input' })
       hideFromMenu('Audio input')
       expect(useToastStore.getState().toast?.message).toBe(
-        'Audio input is hidden. Turn it back on in Settings → Features → Interface → Audio input.'
+        'Audio input is hidden. Turn it back on in Settings → Features → Voice and Audio → Audio input.'
       )
       expect(useToastStore.getState().toast?.link).toEqual({ label: 'Open Settings → Features', settingsMenu: 'features' })
     })

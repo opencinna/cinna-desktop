@@ -189,8 +189,9 @@ All handlers call `userActivation.requireActivated()` first.
 ## Renderer Components
 
 - `ProfileLLMSection` / `ProfileChatModesSection` — Profile-group Settings panels;
-  filter `useProviders`/`useChatModes` to `managed` rows; empty states; LLM panel has
-  a Sync button (`useSyncAccountConfig`).
+  filter `useProviders`/`useChatModes` to `managed` rows; empty states; LLM panel is a
+  `SettingsSection` "Remote AI credentials" with a `SettingsRefreshButton` (a failed refresh shows an error line at the end of the section)
+  (`useSyncAccountConfig`).
 - `ManagedProviderCard` — read-only (no toggle); shield/cloud badge by
   `adminManaged`; a red "Not supported" badge + muted status dot when
   `unsupported` (anthropic `sk-ant-oat` token).

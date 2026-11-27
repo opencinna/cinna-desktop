@@ -38,7 +38,7 @@ A macOS menu-bar (status-bar) icon with a small popover window that surfaces age
 
 ## Business Rules
 
-- **Tray lifetime = main-window lifetime ∧ Enable Tray Icon setting.** The tray is created when the main window opens *and* the `enableTrayIcon` app setting (Settings → Features → Interface) is on, and destroyed when either condition flips. On macOS the app stays alive with no window, in which case there is no tray icon; reactivating the app rebuilds both. Toggling the setting at runtime creates or destroys the tray live without restart; after a fresh create the main process pings the renderer with `tray:request-icon` so the canvas-rendered glyph replaces the placeholder image immediately.
+- **Tray lifetime = main-window lifetime ∧ Enable Tray Icon setting.** The tray is created when the main window opens *and* the `enableTrayIcon` app setting (Settings → Features → OS Integration) is on, and destroyed when either condition flips. On macOS the app stays alive with no window, in which case there is no tray icon; reactivating the app rebuilds both. Toggling the setting at runtime creates or destroys the tray live without restart; after a fresh create the main process pings the renderer with `tray:request-icon` so the canvas-rendered glyph replaces the placeholder image immediately.
 - **No main-process polling.** Severity is pushed from the main window's existing agent-status poll. With no main window there is no tray, so this is sufficient.
 - **Not Cinna-gated.** Since Phase 7b of Local Agents a **folder agent** reports a status from its own `app-data/storage/STATUS.md`, with no Cinna server involved. Folder agents are default-scope shared resources — available regardless of which profile is currently active — so the popup and the dot have something to show whether or not the active profile is Cinna-linked; the gate is scope, never the account's type. (This rule previously said the opposite, and the renderer matched it: `useAgentStatus` ran only for `cinna_user`, which kept the whole tray empty for exactly the local-only user folder agents exist for.) A user with no reporting agents still sees the base icon with no dot and an empty popup.
 - **A failed poll no longer blanks the popup.** When the Cinna leg fails but folder rows survive, the popup shows the rows with a red strip above them instead of an error in place of the list; with nothing left to show, the error is still the whole panel. `reauth_required` gets its own wording here, since the popup cannot run OAuth — the user is told to open the app.
@@ -50,7 +50,7 @@ A macOS menu-bar (status-bar) icon with a small popover window that surfaces age
 ## Architecture Overview
 
 ```
-Settings → Features → Interface → Enable Tray Icon
+Settings → Features → OS Integration → Enable Tray Icon
    [settings:set] → Main writes setting → syncTrayFromSettings()
        enabled  → trayService.create() → [tray:request-icon] → Renderer re-pushes icon
        disabled → trayService.destroy()
@@ -69,5 +69,5 @@ Menu-bar Tray click → trayService.toggle() → Tray Popup window (trayPanel.ht
 - [Agent Status](../../agents/agent_status/agent_status.md) — Data source and the in-app overlay the popup redirects into; the card/detail views are shared components.
 - [App Shell](../app_shell/app_shell.md) — The top-bar status button is the in-app sibling surface; the main-window lifecycle owns tray creation/destruction.
 - [Appearance](../appearance/appearance.md) — Shared theme preference/resolution; the popup keeps its own renderer root.
-- [Settings](../settings/settings.md) — The Features tab's "Interface" group hosts the `enableTrayIcon` toggle; the settings IPC handler calls `syncTrayFromSettings` to create or destroy the tray live on write.
+- [Settings](../settings/settings.md) — The Features tab's "OS Integration" section hosts the `enableTrayIcon` toggle; the settings IPC handler calls `syncTrayFromSettings` to create or destroy the tray live on write.
 - [Logger](../../development/logger/logger.md) — The `tray` scoped logger traces tray create/destroy and icon-set failures.

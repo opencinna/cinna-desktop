@@ -43,7 +43,7 @@ Automatically discovers and syncs agents from a connected Cinna backend so users
 ### Manual Sync
 
 1. User navigates to **Settings → Profile → Agents**
-2. Clicks **Sync** beside "Synced from your Cinna account"
+2. Clicks **Refresh** beside "Synced from your Cinna account"
 3. App fetches the latest agent list from the backend
 4. New agents appear, removed agents disappear, updated agents reflect new metadata
 

@@ -34,8 +34,8 @@ import { AmbientGrid } from '../ui/AmbientGrid'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
-  { id: 'chats', label: 'Chats', icon: MessageSquare },
-  { id: 'local-agents', label: 'Agents', icon: FolderCog },
+  { id: 'chats', label: 'Chat Modes', icon: MessageSquare },
+  { id: 'local-agents', label: 'Agents Config', icon: FolderCog },
   { id: 'local-dev', label: 'Local Development', icon: TerminalSquare },
   { id: 'credentials', label: 'Credentials', icon: KeyRound },
   { id: 'llm', label: 'AI Credentials', icon: Sparkles },
@@ -46,7 +46,7 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
 ]
 
 const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
-  { id: 'profile-chats', label: 'Chats', icon: MessageSquare },
+  { id: 'profile-chats', label: 'Chat Modes', icon: MessageSquare },
   { id: 'profile-agents', label: 'Agents', icon: Waypoints },
   { id: 'profile-local-dev', label: 'Local Development', icon: TerminalSquare },
   { id: 'profile-credentials', label: 'Credentials', icon: KeyRound },

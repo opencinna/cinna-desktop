@@ -11,7 +11,6 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { RefreshCw } from 'lucide-react'
 import { useRefreshCatalogState } from '../../hooks/useCatalog'
 import { useCatalogActions } from '../../hooks/useCatalogActions'
 import { useCatalogEntries } from '../../hooks/useCatalogEntries'
@@ -30,7 +29,7 @@ import {
   useFilteredCatalog
 } from '../agents/CatalogBrowserParts'
 import { CatalogSurfaceProvider } from '../agents/catalogSurface'
-import { SettingsButton, SettingsSection } from './SettingsLayout'
+import { SettingsRefreshButton, SettingsSection } from './SettingsLayout'
 
 export function CatalogSettingsSection(): React.JSX.Element {
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
@@ -107,17 +106,13 @@ function CatalogSettingsList(): React.JSX.Element {
       action={
         <div className="flex min-w-0 items-center gap-2">
           <CatalogRefreshFailure catalog={catalog} reauth={reauth} />
-          <SettingsButton
+          <SettingsRefreshButton
             onClick={() => {
               refresh()
               void teamLibrary.refetch()
             }}
-            disabled={catalog.isFetching}
-            aria-busy={catalog.isFetching}
-          >
-            <RefreshCw size={12} className={catalog.isFetching ? 'animate-spin' : ''} aria-hidden="true" />
-            {CATALOG_TEXT.refresh}
-          </SettingsButton>
+            busy={catalog.isFetching}
+          />
         </div>
       }
     >

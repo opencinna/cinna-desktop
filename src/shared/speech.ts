@@ -25,7 +25,7 @@ export function isCloudBackend(backend: SpeechBackend | null | undefined): boole
 }
 
 /**
- * Settings › Features › Cloud transcription (`voiceCloudTranscription`): never
+ * Settings › Features › Voice and Audio › Cloud transcription (`voiceCloudTranscription`): never
  * (`off`, the default), only when the on-device engine is unsupported
  * (`fallback`; a denied permission is the user's answer, not an outage), or
  * always. Chosen once per dictation, never switched mid-session.
@@ -39,7 +39,7 @@ export function isVoiceCloudTranscription(value: unknown): value is VoiceCloudTr
 }
 
 /**
- * Settings › Features › Cloud transcription › Service (`voiceCloudService`):
+ * Settings › Features › Voice and Audio › Cloud transcription › Service (`voiceCloudService`):
  * which cloud the mode above sends audio to; `core` and `gemini` are that
  * service only, never swapped for the other. `''` (the default) means none was
  * chosen yet: Settings saves the service it shows when a mode is turned on,

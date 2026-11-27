@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, CheckCircle2, Circle, HelpCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Circle, HelpCircle, RefreshCw } from 'lucide-react'
 import { usePopover } from '../ui/usePopover'
 import { switchThumbClass, switchTrackClass } from '../ui/SwitchTrack'
 
@@ -359,6 +359,33 @@ export function SettingsButton({
     >
       {children}
     </button>
+  )
+}
+
+/**
+ * The one "fetch this again from the server" button of a settings section's
+ * header (Catalog, profile Agents, AI Credentials, Credentials): the same
+ * label, icon and busy spin everywhere, and its width never changes while it
+ * runs (ux_rules rule 1).
+ */
+export function SettingsRefreshButton({
+  onClick,
+  busy,
+  disabled,
+  title
+}: {
+  onClick: () => void
+  busy: boolean
+  disabled?: boolean
+  title?: string
+}): React.JSX.Element {
+  return (
+    // aria-disabled while busy, not disabled: the button keeps keyboard focus
+    // through the run instead of dropping it to the page.
+    <SettingsButton onClick={onClick} disabled={disabled} aria-disabled={busy || undefined} aria-busy={busy} title={title}>
+      <RefreshCw size={12} className={busy ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden="true" />
+      Refresh
+    </SettingsButton>
   )
 }
 

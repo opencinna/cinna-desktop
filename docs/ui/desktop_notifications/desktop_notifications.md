@@ -34,7 +34,7 @@ Tell the user, through the operating system's notification centre, that a conver
 
 ### Turning it off
 
-1. Settings → Features → Interface → **Desktop notifications**, right after **Enable Tray Icon** (on by default). What it does is behind the row's (?) tip.
+1. Settings → Features → OS Integration → **Desktop notifications**, right after **Enable Tray Icon** (on by default). What it does is behind the row's (?) tip.
 2. Off stops new notifications at once; nothing needs a restart.
 
 ## Business Rules
@@ -94,7 +94,7 @@ Profile switch / sign-out -> userActivation.onProfileClosing -> every notificati
 - [The Task Dispatcher](../../jobs/tasks/task_dispatcher.md) and [Tasks](../../jobs/tasks/tasks.md) — Run next and Start mark a task as started by the user; the queue's own runs do not.
 - [A Chat's First Ask Creates Its Task](../../jobs/tasks/chat_tasks.md) — why a hand-opened chat with a task stays the user's.
 - [Handover Bus](../../jobs/tasks/handover_bus.md), [File Handovers](../../jobs/tasks/file_handovers.md), [Jobs](../../jobs/jobs/jobs.md) — work whose chats never notify.
-- [Settings](../settings/settings.md) — the Features → Interface switch.
+- [Settings](../settings/settings.md) — the Features → OS Integration switch.
 - [Menu-Bar Tray](../tray/tray.md) — a focused tray popover counts as Cinna being in front.
 - [User Accounts](../../auth/user_accounts/user_accounts.md) — profile switches and sign-out close every notification.
 - [Hub Core Ownership](../../development/hub_core/hub_core_llm.md) — the decision is core's; showing it is the desktop host's.
